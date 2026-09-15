@@ -75,6 +75,16 @@ Now: before asking the user what they were working on, read the newest handoff w
 Standing rule: the user relies on this plugin to /clear at any moment without losing the thread. Keep a living handoff document: …
 ```
 
+You also see one line yourself right after `/clear` or startup, so it is obvious the mechanism
+fired and the session is waiting for you:
+
+```
+seamless: previous session found, 1 handoff directory listed. Send any message to resume.
+```
+
+A fresh session cannot start talking on its own: a turn begins with a message from you. Any word
+will do; the injected context already tells the session to run `/seamless:restore` first.
+
 The hook reads only the current project's own transcript directory under `~/.claude/projects/`,
 so context from another project never leaks into this one. A directory that has never had a
 session gets no previous-session lines, only the standing rule.

@@ -249,4 +249,19 @@ fi
 ctx="$ctx
 Standing rule: the user relies on this plugin to /clear at any moment without losing the thread. Keep a living handoff document: as soon as a non-trivial task has a clear scope, invoke the seamless:save skill to create it, and update it after each finished block of work, decision or blocker — not after every command. Before a long unattended step, note how to resume it."
 
-jq -n --arg ctx "$ctx" '{hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $ctx}}'
+# One visible line for the user (additionalContext goes to the model only), so it is obvious that
+# the mechanism fired and that the session is waiting for a message.
+handoff_count=$(printf '%s' "$handoff_lines" | grep -c '^  ' 2>/dev/null | tr -d ' ')
+if [ -n "$prev" ]; then
+  prev_summary="previous session found"
+else
+  prev_summary="no previous session"
+fi
+if [ "${handoff_count:-0}" -gt 0 ]; then
+  msg="seamless: $prev_summary, $handoff_count handoff director$([ "$handoff_count" -eq 1 ] && printf 'y' || printf 'ies') listed. Send any message to resume."
+else
+  msg="seamless: $prev_summary, no handoff documents. Send any message to continue."
+fi
+
+jq -n --arg ctx "$ctx" --arg msg "$msg" \
+  '{hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $ctx, systemMessage: $msg}}'
