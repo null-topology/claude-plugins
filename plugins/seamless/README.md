@@ -71,6 +71,15 @@ claude plugin install seamless@null-topology
 Claude Code has no install-time hook for plugins, so this check happens at the first session
 start after installation rather than during `claude plugin install`.
 
+### Update
+
+```
+claude plugin marketplace update null-topology
+claude plugin update seamless@null-topology
+```
+
+Then `/reload-plugins` in a running session, or restart `claude`.
+
 ## What the hook injects
 
 ```
@@ -108,9 +117,7 @@ handoff was last updated, and verify it rather than redo it.
 You also see one line yourself right after `/clear` or startup, so it is obvious the mechanism
 fired and the session is waiting for you:
 
-```
-seamless: previous session found, 1 handoff directory listed. Send any message to resume.
-```
+![Right after /clear: the hook reports a previous session and a handoff directory](docs/after-clear.png)
 
 A fresh session cannot start talking on its own: a turn begins with a message from you. Any word
 will do; the injected context already tells the session to run `/seamless:restore` first.
