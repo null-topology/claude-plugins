@@ -90,10 +90,10 @@ Last prompt of the previous session: add the lock to the sentry stack …
 Last message of the previous session (its turn was completed):
 Lock added and applied; the plan is clean. Left for you: decide whether the dormant stack …
 Recently edited in the previous session (most recent first):
-  .claude/handoffs/2026-09-15-handoff-plugin.md
-  services/analytics/.infrastructure/locals.tf
-Handoff documents (newest per directory):
-  .claude/handoffs/2026-09-15-handoff-plugin.md (modified 2026-09-15 17:18; 3 file(s) in this directory)
+  /path/to/project/.claude/handoffs/2026-09-15-handoff-plugin.md
+  /path/to/project/services/analytics/.infrastructure/locals.tf
+Handoff documents (newest per directory, absolute paths):
+  /path/to/project/.claude/handoffs/2026-09-15-handoff-plugin.md (modified 2026-09-15 17:18; 3 file(s) in this directory)
 Now: before asking the user what they were working on, read the newest handoff with the seamless:restore skill. …
 Standing rule: the user relies on this plugin to /clear at any moment without losing the thread. Keep a living handoff document: …
 ```
@@ -106,7 +106,7 @@ with times:
 
 ```
 The previous session was cleared while a turn was still running, so there is no closing summary. Its last actions before that (oldest first):
-  19:04 called Edit: services/analytics/.infrastructure/locals.tf
+  19:04 called Edit: /path/to/project/services/analytics/.infrastructure/locals.tf
   19:05 said: "Lock file updated, running the plan for the analytics stack now."
   19:05 called Bash: Run terraform plan for the analytics stack
 ```

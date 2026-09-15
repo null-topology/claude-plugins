@@ -63,20 +63,13 @@ date_epoch() {
   date -j -f '%Y-%m-%d' "$1" '+%s' 2>/dev/null || date -d "$1" '+%s' 2>/dev/null
 }
 
-relative_to_start() {
-  case "$1" in
-    "$start_dir"/*) printf '%s' "${1#"$start_dir"/}" ;;
-    *) printf '%s' "$1" ;;
-  esac
-}
-
 describe_handoff_dir() {
   # One line per handoff directory: newest file, its mtime, the file count and a date-mismatch
   # warning when the date in the filename and the mtime disagree by more than a day.
   dh_newest=$(ls -t "$1"/*.md 2>/dev/null | head -1)
   [ -n "$dh_newest" ] || return 0
   dh_count=$(ls "$1"/*.md 2>/dev/null | wc -l | tr -d ' ')
-  dh_line="  $(relative_to_start "$dh_newest") (modified $(mtime_human "$dh_newest"); $dh_count file(s) in this directory)"
+  dh_line="  $dh_newest (modified $(mtime_human "$dh_newest"); $dh_count file(s) in this directory)"
   dh_date=$(basename "$dh_newest" | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}' | head -1)
   if [ -n "$dh_date" ]; then
     dh_fepoch=$(date_epoch "$dh_date")
@@ -283,7 +276,7 @@ EOF_ACTIONS
 Recently edited in the previous session (most recent first):"
     while IFS= read -r p; do
       ctx="$ctx
-  $(relative_to_start "$p")"
+  $p"
     done <<EOF_EDITED
 $edited
 EOF_EDITED
@@ -304,7 +297,7 @@ EOF_DIRS
 
 if [ -n "$(printf '%s' "$handoff_lines" | tr -d '[:space:]')" ]; then
   ctx="$ctx
-Handoff documents (newest per directory):
+Handoff documents (newest per directory, absolute paths):
 $(printf '%s' "$handoff_lines")
 Now: before asking the user what they were working on, read the newest handoff with the seamless:restore skill. If more than one directory is listed, ask the user which one applies instead of guessing."
 else
