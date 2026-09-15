@@ -2,11 +2,40 @@
 
 `/clear` at any time. The next session carries on.
 
-A long session accumulates hundreds of thousands of tokens. Once its prompt cache has gone cold,
-every further message replays that whole context at full price. The rational move is to `/clear`
-and start fresh, but a fresh session knows nothing and opens with "what were we working on?".
+## Why, when there is `/compact`
 
-This plugin closes that gap from both sides:
+Picture a real afternoon. You are deep in a task, the session has grown to several hundred
+thousand tokens of context, and you step away for a couple of hours. When you come back, the
+prompt cache for that conversation has expired. Now every option is bad:
+
+- **Send the next message** and the whole context is re-read as uncached input, at full price,
+  for every message from now on until the cache is warm again.
+- **Run `/compact`** and it is worse than it looks. Compaction is a separate request that sends
+  the same system prompt, the same tools and the *entire* history back to the model with a
+  "summarise this" instruction. With a warm cache that is cheap: the prefix is read from cache
+  and you pay mostly for generating the summary. With a cold cache there is nothing to read
+  from, so the summarisation processes the full history as uncached input. `/compact` is at its
+  most expensive exactly when you are most tempted to use it: on resuming an old session.
+- **Run `/clear`** and it costs nothing. But the fresh session knows nothing and opens with
+  "what were we working on?", and you retype the state from memory.
+
+This plugin makes the third option the obvious one. Because a handoff document is kept alive
+while you work, and because the fresh session gets the previous one's context injected before
+your first message, `/clear` stops being a loss. Two things follow:
+
+1. **Big sessions on a cold cache are no longer a trap.** Come back after a break, `/clear`,
+   say "go on", and the work continues from the handoff. No compaction over cold tokens.
+2. **You never have to wait for `/compact`.** You do not need the context window to fill up
+   before starting fresh. Finished a block? Cache went cold over lunch? `/clear` and keep going.
+   Each new session starts small, cheap and warm.
+
+Whether the cache is warm right now is shown by `/usage` in recent versions of Claude Code
+(the prompt-cache line for the main conversation); the cache lifetime depends on your plan and
+settings.
+
+## What it does
+
+This plugin closes the gap from both sides:
 
 - **`/seamless:save`** keeps a living handoff document in the project (`.claude/handoffs/`),
   created as soon as a task has a scope and updated after each finished block of work.
