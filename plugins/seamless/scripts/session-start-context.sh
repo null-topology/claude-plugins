@@ -181,7 +181,23 @@ if [ -n "$prev" ]; then
   ctx="$ctx
 Previous session: $prev_id — $prev_how (last activity $prev_when$prev_note)"
 
-  last_prompt=$(jq -c 'select(.type=="last-prompt") | .lastPrompt' "$prev" 2>/dev/null | tail -1 \
+  # The user's last prompt is the last "user" entry carrying prompt text. Slash commands are
+  # recorded as user entries too (content starts with "<command-name>"), and tool results are
+  # user entries whose content is an array of tool_result blocks; both are skipped. The
+  # "last-prompt" entry is only a fallback: it is written when a turn ends, so a /clear issued
+  # while a turn is still running leaves it one prompt behind.
+  last_prompt=$(jq -c 'select(.type=="user" and (.isMeta // false | not))
+      | .message.content
+      | if type == "string" then .
+        elif type == "array" then ([.[] | select(.type == "text") | .text] | join(" "))
+        else "" end
+      | select(length > 0)
+      | select(startswith("<command-name>") | not)
+      | select(startswith("<local-command") | not)' "$prev" 2>/dev/null | tail -1)
+  if [ -z "$last_prompt" ]; then
+    last_prompt=$(jq -c 'select(.type=="last-prompt") | .lastPrompt' "$prev" 2>/dev/null | tail -1)
+  fi
+  last_prompt=$(printf '%s' "$last_prompt" \
     | jq -r 'gsub("\\s+"; " ") | if length > 300 then .[0:300] + "…" else . end' 2>/dev/null)
   if [ -n "$last_prompt" ]; then
     ctx="$ctx
