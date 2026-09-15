@@ -46,6 +46,12 @@ the older `handoff-<slug>-<YYYY-MM-DD>.md` form, rename it to the current form a
 
 ## When to write
 
+- **Invoked right after `seamless:restore`, at the start of a session:** the session-start
+  context asks for this so that the rules above and below are in this session's context before
+  it ever edits the document. If nothing has changed since the document was last updated, write
+  nothing: confirm the path of the document you will keep updating and carry on with the work.
+  Update it only if the restore already revealed something the document does not hold (a step
+  the previous session finished after its last update, a fact the code contradicts).
 - **Create** the document as soon as the scope of a non-trivial task is clear: perimeter and
   access (accounts, profiles, contexts, hosts, ids), the user's decisions so far, the plan.
 - **Update** it once per finished block of work, not after every command: a change applied, a

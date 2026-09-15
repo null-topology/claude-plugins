@@ -47,7 +47,10 @@ This plugin closes the gap from both sides:
   written, and it means nothing has to be added to `CLAUDE.md`.
 
 Both skills are model-invocable: their descriptions and the hook's context tell Claude when to use
-them, so in practice the handoff gets written and read without being asked for.
+them, so in practice the handoff gets written and read without being asked for. After a restore
+the hook also asks for one invocation of `/seamless:save` with nothing to write: a fresh session
+has not read the skill, and the rules on where the document lives, how it is named and what goes
+into it exist only there. Loading them once keeps later updates from being done by guesswork.
 
 ## Install
 
@@ -94,8 +97,8 @@ Recently edited in the previous session (most recent first):
   /path/to/project/services/analytics/.infrastructure/locals.tf
 Handoff documents (newest per directory, absolute paths):
   /path/to/project/.claude/handoffs/2026-09-15-handoff-plugin.md (modified 2026-09-15 17:18; 3 file(s) in this directory)
-Now: before asking the user what they were working on, read the newest handoff with the seamless:restore skill. …
-Standing rule: the user relies on this plugin to /clear at any moment without losing the thread. Keep a living handoff document: …
+Now: before asking the user what they were working on, read the newest handoff with the seamless:restore skill. … Right after that, invoke the seamless:save skill once, even though there is nothing to write yet: that loads its rules …
+Standing rule: the user relies on this plugin to /clear at any moment without losing the thread. Keep a living handoff document: … Never create or edit a handoff document in a session that has not invoked the seamless:save skill …
 ```
 
 The previous session's last message is quoted only when that message actually ended a turn

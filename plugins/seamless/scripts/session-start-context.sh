@@ -299,7 +299,7 @@ if [ -n "$(printf '%s' "$handoff_lines" | tr -d '[:space:]')" ]; then
   ctx="$ctx
 Handoff documents (newest per directory, absolute paths):
 $(printf '%s' "$handoff_lines")
-Now: before asking the user what they were working on, read the newest handoff with the seamless:restore skill. If more than one directory is listed, ask the user which one applies instead of guessing."
+Now: before asking the user what they were working on, read the newest handoff with the seamless:restore skill. If more than one directory is listed, ask the user which one applies instead of guessing. Right after that, invoke the seamless:save skill once, even though there is nothing to write yet: that loads its rules (where the document lives, how it is named, when and what to write) into this session, which has not read them. Without that step the document gets edited by guesswork."
 else
   ctx="$ctx
 Handoff documents: none found under the startup directory or its ancestors.
@@ -307,7 +307,7 @@ Now: if the user continues earlier work, use the lines above to form a hypothesi
 fi
 
 ctx="$ctx
-Standing rule: the user relies on this plugin to /clear at any moment without losing the thread. Keep a living handoff document: as soon as a non-trivial task has a clear scope, invoke the seamless:save skill to create it, and update it after each finished block of work, decision or blocker — not after every command. Before a long unattended step, note how to resume it."
+Standing rule: the user relies on this plugin to /clear at any moment without losing the thread. Keep a living handoff document: as soon as a non-trivial task has a clear scope, invoke the seamless:save skill to create it, and update it after each finished block of work, decision or blocker — not after every command. Before a long unattended step, note how to resume it. Never create or edit a handoff document in a session that has not invoked the seamless:save skill: the skill holds the rules, and this block does not repeat them."
 
 # One visible line for the user (additionalContext goes to the model only), so it is obvious that
 # the mechanism fired and that the session is waiting for a message. systemMessage is a top-level
