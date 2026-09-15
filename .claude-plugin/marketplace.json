@@ -1,0 +1,22 @@
+{
+  "name": "null-topology",
+  "owner": {
+    "name": "null-topology"
+  },
+  "metadata": {
+    "description": "Claude Code plugins by null-topology.",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "seamless",
+      "description": "Seamless sessions: /clear at any time and the next session carries on. A living handoff document, a skill that restores it, and a SessionStart hook that hands the fresh session the previous one's context.",
+      "version": "0.1.0",
+      "author": {
+        "name": "null-topology"
+      },
+      "category": "productivity",
+      "source": "./plugins/seamless"
+    }
+  ]
+}
