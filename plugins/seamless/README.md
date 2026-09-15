@@ -122,6 +122,23 @@ fired and the session is waiting for you:
 A fresh session cannot start talking on its own: a turn begins with a message from you. Any word
 will do; the injected context already tells the session to run `/seamless:restore` first.
 
+### Seeing what the model received
+
+The status line is for you; the model gets only the context block, and you normally do not see
+it. Two ways to look at it:
+
+- **Verbose mode.** Set `SEAMLESS_VERBOSE=1` in the environment Claude Code runs in (for example
+  in the `env` block of `~/.claude/settings.json`) and the status line after each startup or
+  `/clear` becomes the whole block, exactly as the model receives it. Off by default. Claude Code
+  cuts a status line at 4000 characters, so a very long block loses its tail.
+- **The transcript.** Every session records what its hooks injected. This prints the block the
+  newest session of the current project received:
+
+  ```
+  jq -r 'select(.type=="attachment") | .attachment | select(.type=="hook_additional_context") | .content[]' \
+    "$(ls -t ~/.claude/projects/$(pwd | sed 's#[/._]#-#g')/*.jsonl | head -1)"
+  ```
+
 The hook reads only the current project's own transcript directory under `~/.claude/projects/`,
 so context from another project never leaks into this one. A directory that has never had a
 session gets no previous-session lines, only the standing rule.

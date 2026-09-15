@@ -328,6 +328,13 @@ if [ "$have_jq" -eq 0 ]; then
   msg="$msg jq is not installed: previous-session details unavailable (brew install jq / apt install jq)."
 fi
 
+# SEAMLESS_VERBOSE=1 shows the user the whole block the model receives, for debugging. The UI
+# truncates systemMessage at 4000 characters, so the standing rule at the end may be cut off.
+case "${SEAMLESS_VERBOSE:-}" in
+  1|true|yes) msg="$msg
+$ctx" ;;
+esac
+
 if [ "$have_jq" -eq 1 ]; then
   jq -n --arg ctx "$ctx" --arg msg "$msg" \
     '{systemMessage: $msg, hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $ctx}}'
