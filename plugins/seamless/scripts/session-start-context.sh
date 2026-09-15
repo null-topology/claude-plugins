@@ -250,7 +250,8 @@ ctx="$ctx
 Standing rule: the user relies on this plugin to /clear at any moment without losing the thread. Keep a living handoff document: as soon as a non-trivial task has a clear scope, invoke the seamless:save skill to create it, and update it after each finished block of work, decision or blocker — not after every command. Before a long unattended step, note how to resume it."
 
 # One visible line for the user (additionalContext goes to the model only), so it is obvious that
-# the mechanism fired and that the session is waiting for a message.
+# the mechanism fired and that the session is waiting for a message. systemMessage is a top-level
+# field of the hook output, not part of hookSpecificOutput; Claude Code ignores it elsewhere.
 handoff_count=$(printf '%s' "$handoff_lines" | grep -c '^  ' 2>/dev/null | tr -d ' ')
 if [ -n "$prev" ]; then
   prev_summary="previous session found"
@@ -264,4 +265,4 @@ else
 fi
 
 jq -n --arg ctx "$ctx" --arg msg "$msg" \
-  '{hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $ctx, systemMessage: $msg}}'
+  '{systemMessage: $msg, hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $ctx}}'
