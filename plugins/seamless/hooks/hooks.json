@@ -1,5 +1,5 @@
 {
-  "description": "On startup and after /clear, hands the new session the previous one's context (startup directory, last prompt, handoff documents, recently edited files) and the standing rule to keep a living handoff. On /clear the ending session leaves a marker so the new one reads exactly the cleared transcript.",
+  "description": "On startup and after /clear, hands the new session the previous one's context (startup directory, last prompt, last message or actions, handoff documents, recently edited files) and the standing rule to keep a living handoff. On /clear the ending session leaves a marker so the new one reads exactly the cleared transcript.",
   "hooks": {
     "SessionEnd": [
       {
@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/session-end-mark.sh\" \"${CLAUDE_PLUGIN_DATA}\"",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/session-end-mark.sh\" \"${CLAUDE_PLUGIN_DATA}\"",
             "timeout": 5
           }
         ]
@@ -19,7 +19,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/session-start-context.sh\" \"${CLAUDE_PLUGIN_DATA}\"",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/session-start-context.sh\" \"${CLAUDE_PLUGIN_DATA}\"",
             "timeout": 10
           }
         ]

@@ -56,8 +56,20 @@ claude plugin marketplace add null-topology/claude-plugins
 claude plugin install seamless@null-topology
 ```
 
-Requires `jq` for the hooks (the skills work without it). The hooks are plain `bash` and run on
-macOS and Linux.
+### Requirements
+
+- **A POSIX shell.** The hooks are plain `sh` scripts and run under dash, ash, bash and zsh, on
+  macOS and Linux. Your login shell does not matter.
+- **`jq`, recommended but optional.** It is the only tool the hooks use that is not part of a
+  base system. Without it the hook still finds the previous session and the handoff documents,
+  but it cannot read the transcript, so the previous session's last prompt, last message and
+  edited files are missing. In that case the hook says so twice: one line to you after each
+  startup or `/clear`, and one line to the agent asking it to tell you once at the start of its
+  first reply that installing `jq` would complete the picture. `brew install jq` on macOS,
+  `apt install jq` or your distribution's equivalent on Linux, or https://jqlang.github.io/jq/.
+
+Claude Code has no install-time hook for plugins, so this check happens at the first session
+start after installation rather than during `claude plugin install`.
 
 ## What the hook injects
 
@@ -66,6 +78,8 @@ macOS and Linux.
 Startup directory: /path/to/project
 Previous session: 6cdafa28-… — the session that was just cleared (last activity 2026-09-15 17:22)
 Last prompt of the previous session: add the lock to the sentry stack …
+Last message of the previous session (its turn was completed):
+Lock added and applied; the plan is clean. Left for you: decide whether the dormant stack …
 Recently edited in the previous session (most recent first):
   .claude/handoffs/2026-09-15-handoff-plugin.md
   services/analytics/.infrastructure/locals.tf
@@ -74,6 +88,22 @@ Handoff documents (newest per directory):
 Now: before asking the user what they were working on, read the newest handoff with the seamless:restore skill. …
 Standing rule: the user relies on this plugin to /clear at any moment without losing the thread. Keep a living handoff document: …
 ```
+
+The previous session's last message is quoted only when that message actually ended a turn
+(`stop_reason: end_turn`): then it is the agent's own closing summary of where things stand. If
+the session was cleared while a turn was still running, an older summary would misdescribe the
+state, so instead the hook lists the agent's last three actions before the cut, oldest first,
+with times:
+
+```
+The previous session was cleared while a turn was still running, so there is no closing summary. Its last actions before that (oldest first):
+  19:04 called Edit: services/analytics/.infrastructure/locals.tf
+  19:05 said: "Lock file updated, running the plan for the analytics stack now."
+  19:05 called Bash: Run terraform plan for the analytics stack
+```
+
+Together with the handoff document this lets the new session work out what was done after the
+handoff was last updated, and verify it rather than redo it.
 
 You also see one line yourself right after `/clear` or startup, so it is obvious the mechanism
 fired and the session is waiting for you:

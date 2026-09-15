@@ -1,11 +1,11 @@
-#!/usr/bin/env bash
-# SessionStart hook for the seamless plugin.
+#!/bin/sh
+# SessionStart hook for the seamless plugin. POSIX sh: runs under dash, ash, bash and zsh.
 #
 # On a fresh session (source "startup" or "clear") it looks at the previous session's transcript
 # in the current project's own directory under ~/.claude/projects/ and hands the new session a few
-# facts: the startup directory, the last prompt of the previous session, the handoff documents that
-# exist for this project, the files edited most recently, and the standing rule to keep a living
-# handoff so the user can /clear at any time.
+# facts: the startup directory, what the previous session was asked and what it last did, the
+# handoff documents that exist for this project, the files edited most recently, and the standing
+# rule to keep a living handoff so the user can /clear at any time.
 #
 # Which transcript is "the previous session":
 #   - after /clear: the one the SessionEnd hook marked as cleared, if the marker is fresh; otherwise
@@ -14,9 +14,12 @@
 #     is simply the last time Claude Code ran in this directory. A directory that has never had a
 #     session yields no previous-session lines.
 #
+# jq is optional. Without it the transcript cannot be parsed, so the previous session's prompt,
+# message and edited files are replaced by a note asking the user to install jq; everything that
+# comes from the filesystem (previous session id, handoff documents, standing rule) still works.
+#
 # It reads only the current project's transcript directory, so context from other projects never
-# surfaces. The only thing it writes is the removal of the marker it consumed. Requires jq;
-# without jq it exits silently.
+# surfaces. The only thing it writes is the removal of the marker it consumed.
 #
 # Usage: session-start-context.sh <plugin data dir>
 
@@ -24,34 +27,27 @@ set -u
 
 input=$(cat)
 
-command -v jq >/dev/null 2>&1 || exit 0
-
-source=$(printf '%s' "$input" | jq -r '.source // ""')
-case "$source" in
-  startup|clear) ;;
-  *) exit 0 ;;
-esac
-
-transcript=$(printf '%s' "$input" | jq -r '.transcript_path // ""')
-hook_cwd=$(printf '%s' "$input" | jq -r '.cwd // ""')
-
-start_dir="${CLAUDE_PROJECT_DIR:-$hook_cwd}"
-[ -n "$start_dir" ] || start_dir="$PWD"
-
-config_dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
-if [ -n "$transcript" ]; then
-  project_dir=$(dirname "$transcript")
-else
-  project_dir="$config_dir/projects/$(printf '%s' "$start_dir" | sed 's#[/._]#-#g')"
-fi
-
-data_dir="${1:-}"
-case "$data_dir" in
-  ""|*'${CLAUDE_PLUGIN_DATA}'*) data_dir="$config_dir/plugins/data/seamless" ;;
-esac
-marker="$data_dir/cleared/$(basename "$project_dir").json"
+have_jq=0
+command -v jq >/dev/null 2>&1 && have_jq=1
 
 # --- helpers -------------------------------------------------------------------------------------
+
+json_str() {
+  # Top-level field "$1" of the JSON on stdin, as a string. Without jq a sed fallback that is good
+  # enough for the flat hook input and the marker file (plain strings and numbers).
+  if [ "$have_jq" -eq 1 ]; then
+    jq -r --arg k "$1" '.[$k] // "" | tostring'
+  else
+    tr -d '\n' | sed -n "s/.*\"$1\":[[:space:]]*\"\{0,1\}\([^\",}]*\)\"\{0,1\}.*/\1/p" | head -1
+  fi
+}
+
+json_escape() {
+  # stdin -> the body of a JSON string (no surrounding quotes). Used only when jq is missing.
+  tab=$(printf '\t')
+  sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e "s/$tab/\\\\t/g" \
+    | awk 'BEGIN { ORS = "" } { if (NR > 1) printf "\\n"; printf "%s", $0 }'
+}
 
 mtime_human() {
   # "YYYY-MM-DD HH:MM" for a file, on both BSD and GNU userlands.
@@ -74,34 +70,54 @@ relative_to_start() {
   esac
 }
 
-newest_md_in() {
-  # Newest *.md file in a directory by mtime, or nothing.
-  ls -t "$1"/*.md 2>/dev/null | head -1
-}
-
 describe_handoff_dir() {
   # One line per handoff directory: newest file, its mtime, the file count and a date-mismatch
   # warning when the date in the filename and the mtime disagree by more than a day.
-  local dir="$1" newest count line fname fdate fepoch mepoch diff
-  newest=$(newest_md_in "$dir")
-  [ -n "$newest" ] || return 0
-  count=$(ls "$dir"/*.md 2>/dev/null | wc -l | tr -d ' ')
-  line="  $(relative_to_start "$newest") (modified $(mtime_human "$newest"); $count file(s) in this directory)"
-  fname=$(basename "$newest")
-  fdate=$(printf '%s' "$fname" | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}' | head -1)
-  if [ -n "$fdate" ]; then
-    fepoch=$(date_epoch "$fdate")
-    mepoch=$(mtime_epoch "$newest")
-    if [ -n "$fepoch" ] && [ -n "$mepoch" ]; then
-      diff=$(( mepoch - fepoch ))
-      [ "$diff" -lt 0 ] && diff=$(( -diff ))
-      if [ "$diff" -gt 172800 ]; then
-        line="$line — filename date $fdate and mtime disagree; mtime may have been reset by git or rsync"
+  dh_newest=$(ls -t "$1"/*.md 2>/dev/null | head -1)
+  [ -n "$dh_newest" ] || return 0
+  dh_count=$(ls "$1"/*.md 2>/dev/null | wc -l | tr -d ' ')
+  dh_line="  $(relative_to_start "$dh_newest") (modified $(mtime_human "$dh_newest"); $dh_count file(s) in this directory)"
+  dh_date=$(basename "$dh_newest" | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}' | head -1)
+  if [ -n "$dh_date" ]; then
+    dh_fepoch=$(date_epoch "$dh_date")
+    dh_mepoch=$(mtime_epoch "$dh_newest")
+    if [ -n "$dh_fepoch" ] && [ -n "$dh_mepoch" ]; then
+      dh_diff=$(( dh_mepoch - dh_fepoch ))
+      [ "$dh_diff" -lt 0 ] && dh_diff=$(( -dh_diff ))
+      if [ "$dh_diff" -gt 172800 ]; then
+        dh_line="$dh_line — filename date $dh_date and mtime disagree; mtime may have been reset by git or rsync"
       fi
     fi
   fi
-  printf '%s\n' "$line"
+  printf '%s\n' "$dh_line"
 }
+
+# --- input ---------------------------------------------------------------------------------------
+
+source=$(printf '%s' "$input" | json_str source)
+case "$source" in
+  startup|clear) ;;
+  *) exit 0 ;;
+esac
+
+transcript=$(printf '%s' "$input" | json_str transcript_path)
+hook_cwd=$(printf '%s' "$input" | json_str cwd)
+
+start_dir="${CLAUDE_PROJECT_DIR:-$hook_cwd}"
+[ -n "$start_dir" ] || start_dir="$PWD"
+
+config_dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+if [ -n "$transcript" ]; then
+  project_dir=$(dirname "$transcript")
+else
+  project_dir="$config_dir/projects/$(printf '%s' "$start_dir" | sed 's#[/._]#-#g')"
+fi
+
+data_dir="${1:-}"
+case "$data_dir" in
+  ""|*'${CLAUDE_PLUGIN_DATA}'*) data_dir="$config_dir/plugins/data/seamless" ;;
+esac
+marker="$data_dir/cleared/$(basename "$project_dir").json"
 
 # --- previous session ----------------------------------------------------------------------------
 
@@ -111,11 +127,11 @@ prev_how=""
 # After /clear, prefer the transcript the SessionEnd hook marked as cleared, if the marker is
 # recent (a stale marker would belong to an earlier clear whose successor never started).
 if [ "$source" = "clear" ] && [ -f "$marker" ]; then
-  marked=$(jq -r '.transcript_path // ""' "$marker" 2>/dev/null)
-  marked_at=$(jq -r '.cleared_at // 0' "$marker" 2>/dev/null)
+  marked=$(json_str transcript_path < "$marker")
+  marked_at=$(json_str cleared_at < "$marker")
   now=$(date +%s)
   if [ -n "$marked" ] && [ -f "$marked" ] && [ "$marked" != "$transcript" ] \
-     && [ $(( now - marked_at )) -lt 600 ]; then
+     && [ $(( now - ${marked_at:-0} )) -lt 600 ]; then
     prev="$marked"
     prev_how="the session that was just cleared"
   fi
@@ -123,12 +139,15 @@ if [ "$source" = "clear" ] && [ -f "$marker" ]; then
 fi
 
 if [ -z "$prev" ] && [ -d "$project_dir" ]; then
+  prev_list=$(ls -t "$project_dir"/*.jsonl 2>/dev/null)
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     [ "$f" = "$transcript" ] && continue
     prev="$f"
     break
-  done < <(ls -t "$project_dir"/*.jsonl 2>/dev/null)
+  done <<EOF_PREV
+$prev_list
+EOF_PREV
   if [ "$source" = "clear" ]; then
     prev_how="the newest transcript in this project, presumably the session that was just cleared"
   else
@@ -148,14 +167,17 @@ $parent/.claude/handoffs"
   parent=$(dirname "$parent")
 done
 
+found_dirs=$(find "$start_dir" -maxdepth 7 \
+  \( -name .git -o -name node_modules -o -name worktrees -o -name .terraform -o -name vendor \) -prune \
+  -o -type d -path '*/.claude/handoffs' -print 2>/dev/null | sort)
 while IFS= read -r d; do
   [ -n "$d" ] || continue
   [ "$d" = "$start_dir/.claude/handoffs" ] && continue
   handoff_dirs="$handoff_dirs
 $d"
-done < <(find "$start_dir" -maxdepth 7 \
-  \( -name .git -o -name node_modules -o -name worktrees -o -name .terraform -o -name vendor \) -prune \
-  -o -type d -path '*/.claude/handoffs' -print 2>/dev/null | sort)
+done <<EOF_FOUND
+$found_dirs
+EOF_FOUND
 
 # --- assemble ------------------------------------------------------------------------------------
 
@@ -180,7 +202,12 @@ if [ -n "$prev" ]; then
   fi
   ctx="$ctx
 Previous session: $prev_id — $prev_how (last activity $prev_when$prev_note)"
+else
+  ctx="$ctx
+Previous session: none found for this project."
+fi
 
+if [ -n "$prev" ] && [ "$have_jq" -eq 1 ]; then
   # The user's last prompt is the last "user" entry carrying prompt text. Slash commands are
   # recorded as user entries too (content starts with "<command-name>"), and tool results are
   # user entries whose content is an array of tool_result blocks; both are skipped. The
@@ -204,6 +231,46 @@ Previous session: $prev_id — $prev_how (last activity $prev_when$prev_note)"
 Last prompt of the previous session: $last_prompt"
   fi
 
+  # What the agent last did. If its last message ended the turn (stop_reason "end_turn"), that
+  # message is the closing summary and is quoted whole. Otherwise the session was cleared while a
+  # turn was still running: an older summary would misdescribe the state, so instead the last few
+  # actions (tool calls and messages, oldest first, with times) are listed, so the new session can
+  # work out how far the previous one got after the handoff was last updated.
+  last_stop=$(jq -r 'select(.type=="assistant") | .message.stop_reason // "unknown"' "$prev" 2>/dev/null | tail -1)
+  if [ "$last_stop" = "end_turn" ]; then
+    last_message=$(jq -c 'select(.type=="assistant" and .message.stop_reason=="end_turn")
+        | [.message.content[]? | select(.type=="text") | .text] | join("\n") | select(length > 0)' "$prev" 2>/dev/null \
+      | tail -1 | jq -r 'if length > 1500 then .[0:1500] + " […cut]" else . end' 2>/dev/null)
+    if [ -n "$last_message" ]; then
+      ctx="$ctx
+Last message of the previous session (its turn was completed):
+$last_message"
+    fi
+  elif [ -n "$last_stop" ]; then
+    actions=$(jq -r 'select(.type=="assistant") | .timestamp as $t | .message.content[]?
+        | select(.type=="text" or .type=="tool_use")
+        | ($t | if . then ((sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601 | localtime | strftime("%H:%M")) + " ") else "" end) as $when
+        | if .type == "text" then
+            (.text | gsub("\\s+"; " ") | select(length > 0)
+             | $when + "said: \"" + (if length > 300 then .[0:300] + "…" else . end) + "\"")
+          else
+            (.name as $n | .input as $i
+             | ($i.description // $i.file_path // $i.notebook_path // $i.skill // $i.pattern // $i.command // $i.prompt // $i.url
+                // ($i | tojson)) | tostring | gsub("\\s+"; " ")
+             | $when + "called " + $n + ": " + (if length > 160 then .[0:160] + "…" else . end))
+          end' "$prev" 2>/dev/null | tail -3)
+    if [ -n "$actions" ]; then
+      ctx="$ctx
+The previous session was cleared while a turn was still running, so there is no closing summary. Its last actions before that (oldest first):"
+      while IFS= read -r a; do
+        ctx="$ctx
+  $a"
+      done <<EOF_ACTIONS
+$actions
+EOF_ACTIONS
+    fi
+  fi
+
   tmp_prefix="${TMPDIR:-/tmp}"
   edited=$(jq -r 'select(.type=="assistant") | .message.content[]? | select(.type=="tool_use")
       | select(.name=="Write" or .name=="Edit" or .name=="MultiEdit" or .name=="NotebookEdit")
@@ -221,9 +288,9 @@ Recently edited in the previous session (most recent first):"
 $edited
 EOF_EDITED
   fi
-else
+elif [ -n "$prev" ]; then
   ctx="$ctx
-Previous session: none found for this project."
+Details of that session (its last prompt, its last message or actions, the files it edited) are unavailable: jq is not installed on this machine, and the transcript cannot be read without it. Everything else about this plugin works. Tell the user once, at the start of your first reply: seamless is working, but installing jq (for example \"brew install jq\" or \"apt install jq\"; see https://jqlang.github.io/jq/) would also let it show what the previous session was doing."
 fi
 
 handoff_lines=""
@@ -259,10 +326,19 @@ else
   prev_summary="no previous session"
 fi
 if [ "${handoff_count:-0}" -gt 0 ]; then
-  msg="seamless: $prev_summary, $handoff_count handoff director$([ "$handoff_count" -eq 1 ] && printf 'y' || printf 'ies') listed. Send any message to resume."
+  if [ "$handoff_count" -eq 1 ]; then dirs_word="directory"; else dirs_word="directories"; fi
+  msg="seamless: $prev_summary, $handoff_count handoff $dirs_word listed. Send any message to resume."
 else
   msg="seamless: $prev_summary, no handoff documents. Send any message to continue."
 fi
+if [ "$have_jq" -eq 0 ]; then
+  msg="$msg jq is not installed: previous-session details unavailable (brew install jq / apt install jq)."
+fi
 
-jq -n --arg ctx "$ctx" --arg msg "$msg" \
-  '{systemMessage: $msg, hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $ctx}}'
+if [ "$have_jq" -eq 1 ]; then
+  jq -n --arg ctx "$ctx" --arg msg "$msg" \
+    '{systemMessage: $msg, hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $ctx}}'
+else
+  printf '{"systemMessage":"%s","hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%s"}}\n' \
+    "$(printf '%s' "$msg" | json_escape)" "$(printf '%s' "$ctx" | json_escape)"
+fi

@@ -11,7 +11,7 @@
     {
       "name": "seamless",
       "description": "Seamless sessions: /clear at any time and the next session carries on. A living handoff document, a skill that restores it, and a SessionStart hook that hands the fresh session the previous one's context.",
-      "version": "0.1.3",
+      "version": "0.1.4",
       "author": {
         "name": "null-topology"
       },

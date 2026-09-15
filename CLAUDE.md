@@ -30,10 +30,16 @@ installed by strangers, so the rules below are about shipping something others c
 
 ## Hooks
 
-- Plain `bash` plus `jq`. Portable across BSD and GNU userlands: no `mapfile`, no `tac`, no
-  `date -d` without a BSD fallback, no bash 4 features (macOS ships bash 3.2).
-- Exit `0` silently when a dependency is missing or there is nothing to say. A hook must never
-  break a session.
+- POSIX `sh`, invoked as `sh "${CLAUDE_PLUGIN_ROOT}/scripts/<name>.sh"` so the user's login shell
+  is irrelevant. No bashisms: no `[[`, `local`, arrays, `mapfile`, process substitution `<( )`.
+  Portable across BSD and GNU userlands: no `tac`, no `date -d` without a BSD fallback. Test under
+  `/bin/sh`, `dash`, `bash` and `zsh` before committing.
+- Only tools present on a base system (`sed`, `awk`, `grep`, `find`, `stat`, `date`, coreutils or
+  busybox). Anything else, `jq` included, is optional: detect it, degrade to what still works
+  without it, and say so both to the user (`systemMessage`) and to the model
+  (`additionalContext`) so the gap is reported, not silently swallowed. There is no install-time
+  hook for plugins; the first session start is where a missing tool gets noticed.
+- Exit `0` silently when there is nothing to say. A hook must never break a session.
 - Address scripts through `${CLAUDE_PLUGIN_ROOT}`; persistent state goes under
   `${CLAUDE_PLUGIN_DATA}` with a fallback when the placeholder is not expanded.
 - Set a `timeout` on every hook entry and stay well below it.
