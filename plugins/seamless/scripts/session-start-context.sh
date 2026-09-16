@@ -1,6 +1,13 @@
 #!/bin/sh
 # SessionStart hook for the seamless plugin. POSIX sh: runs under dash, ash, bash and zsh.
 #
+# On "resume" and "compact" it says one sentence: load the save skill before working on. The
+# resumed or compacted session has its context already; the sentence only makes sure the rules
+# of the save skill get loaded, since a summary may have dropped them or the session may predate
+# the plugin. Whatever the source, it leaves an empty marker file named after the session id in
+# the plugin data directory; the UserPromptSubmit hook uses it to spot a session that never got
+# any SessionStart from this plugin (installed while the session was running).
+#
 # On a fresh session (source "startup" or "clear") it looks at the previous session's transcript
 # in the current project's own directory under ~/.claude/projects/ and hands the new session a few
 # facts: the startup directory, what the previous session was asked and what it last did, the
@@ -89,12 +96,13 @@ describe_handoff_dir() {
 
 source=$(printf '%s' "$input" | json_str source)
 case "$source" in
-  startup|clear) ;;
+  startup|clear|resume|compact) ;;
   *) exit 0 ;;
 esac
 
 transcript=$(printf '%s' "$input" | json_str transcript_path)
 hook_cwd=$(printf '%s' "$input" | json_str cwd)
+session_id=$(printf '%s' "$input" | json_str session_id)
 
 start_dir="${CLAUDE_PROJECT_DIR:-$hook_cwd}"
 [ -n "$start_dir" ] || start_dir="$PWD"
@@ -111,6 +119,32 @@ case "$data_dir" in
   ""|*'${CLAUDE_PLUGIN_DATA}'*) data_dir="$config_dir/plugins/data/seamless" ;;
 esac
 marker="$data_dir/cleared/$(basename "$project_dir").json"
+
+# --- onboarding marker ---------------------------------------------------------------------------
+
+emit() {
+  # $1 = context for the model, $2 = status line for the user. Also leaves the per-session marker
+  # that tells the UserPromptSubmit hook this session has heard from the plugin, and drops markers
+  # older than a month so the directory does not grow without bound.
+  if [ "$have_jq" -eq 1 ]; then
+    jq -n --arg ctx "$1" --arg msg "$2" \
+      '{systemMessage: $msg, hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $ctx}}'
+  else
+    printf '{"systemMessage":"%s","hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%s"}}\n' \
+      "$(printf '%s' "$2" | json_escape)" "$(printf '%s' "$1" | json_escape)"
+  fi
+  case "$session_id" in
+    ""|*/*|.*) ;;
+    *) mkdir -p "$data_dir/onboarded" 2>/dev/null && : > "$data_dir/onboarded/$session_id" 2>/dev/null ;;
+  esac
+  find "$data_dir/onboarded" -type f -mtime +30 -delete 2>/dev/null
+}
+
+if [ "$source" = "resume" ] || [ "$source" = "compact" ]; then
+  emit "[seamless] seamless is installed: before any further work, invoke the seamless:save skill once to load its rules, and keep the handoff living." \
+       "seamless: $source; the session is asked to load the save skill before working on."
+  exit 0
+fi
 
 # --- previous session ----------------------------------------------------------------------------
 
@@ -335,10 +369,4 @@ case "${SEAMLESS_VERBOSE:-}" in
 $ctx" ;;
 esac
 
-if [ "$have_jq" -eq 1 ]; then
-  jq -n --arg ctx "$ctx" --arg msg "$msg" \
-    '{systemMessage: $msg, hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $ctx}}'
-else
-  printf '{"systemMessage":"%s","hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%s"}}\n' \
-    "$(printf '%s' "$msg" | json_escape)" "$(printf '%s' "$ctx" | json_escape)"
-fi
+emit "$ctx" "$msg"

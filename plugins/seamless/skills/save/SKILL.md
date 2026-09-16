@@ -1,6 +1,6 @@
 ---
 name: save
-description: Write or update the handoff document that lets a fresh session continue this work after /clear, a compaction or a restart. Use it as soon as a non-trivial task has a clear scope, again after each finished block of work, when a decision is taken or a blocker appears, and whenever the user says they are about to clear, stop, pause or hand the work over.
+description: Write or update the handoff document that lets a fresh session continue this work after /clear, a compaction or a restart. Invoke it once before starting, continuing or resuming any work in a session that has not invoked it yet, so its rules are loaded. Then use it as soon as a non-trivial task has a clear scope, again after each finished block of work, when a decision is taken or a blocker appears, and whenever the user says they are about to clear, stop, pause or hand the work over.
 argument-hint: "[what the next session should focus on]"
 ---
 
@@ -46,12 +46,13 @@ the older `handoff-<slug>-<YYYY-MM-DD>.md` form, rename it to the current form a
 
 ## When to write
 
-- **Invoked right after `seamless:restore`, at the start of a session:** the session-start
-  context asks for this so that the rules above and below are in this session's context before
-  it ever edits the document. If nothing has changed since the document was last updated, write
-  nothing: confirm the path of the document you will keep updating and carry on with the work.
-  Update it only if the restore already revealed something the document does not hold (a step
-  the previous session finished after its last update, a fact the code contradicts).
+- **Invoked before any work, at the start of a session or right after `seamless:restore`:** the
+  plugin's hooks ask for this so that the rules above and below are in this session's context
+  before it ever edits the document. If nothing has changed since the document was last updated,
+  or no task has a scope yet, write nothing: say which document you will keep updating, or that
+  none exists yet, and carry on with the work. Update it only if the restore already revealed
+  something the document does not hold (a step the previous session finished after its last
+  update, a fact the code contradicts).
 - **Create** the document as soon as the scope of a non-trivial task is clear: perimeter and
   access (accounts, profiles, contexts, hosts, ids), the user's decisions so far, the plan.
 - **Update** it once per finished block of work, not after every command: a change applied, a

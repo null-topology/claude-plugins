@@ -44,7 +44,11 @@ This plugin closes the gap from both sides:
   first message: the startup directory, the previous session's last prompt, the handoff documents
   that exist for the project, the files edited most recently, and the standing rule to keep the
   handoff living. That is usually enough to resume without a question, even when no handoff was
-  written, and it means nothing has to be added to `CLAUDE.md`.
+  written, and it means nothing has to be added to `CLAUDE.md`. On `resume` and `compact` the
+  same hook says one sentence: load the save skill before working on.
+- A **`UserPromptSubmit` hook** covers the one case no session event can: the plugin was
+  installed or reloaded while the session was already running. It costs one file check per
+  prompt and speaks once, if ever (see "Sessions that predate the plugin" below).
 
 Both skills are model-invocable: their descriptions and the hook's context tell Claude when to use
 them, so in practice the handoff gets written and read without being asked for. After a restore
@@ -146,8 +150,26 @@ The hook reads only the current project's own transcript directory under `~/.cla
 so context from another project never leaks into this one. A directory that has never had a
 session gets no previous-session lines, only the standing rule.
 
-It runs on `startup` and `clear` only. `resume` brings the context back by itself, `compact` keeps
-the same session with a summary, and `fork` inherits the parent's context.
+The full block is built on `startup` and `clear` only. `resume` brings the context back by itself
+and `compact` keeps the same session with a summary, so on those two the hook says one sentence:
+
+```
+[seamless] seamless is installed: before any further work, invoke the seamless:save skill once to load its rules, and keep the handoff living.
+```
+
+A summary may have dropped the rule, and a resumed session may predate the plugin; the sentence
+costs a few dozen tokens per resume. `fork` inherits the parent's context and gets nothing.
+
+### Sessions that predate the plugin
+
+Install the plugin from inside a running session, `/reload-plugins`, and keep typing: no session
+event fires, so the hooks above never speak. For that case the `SessionStart` hook leaves an
+empty marker file named after the session id under the plugin's data directory whenever it has
+spoken, and a `UserPromptSubmit` hook checks for that file on every prompt. Marker present: it
+exits at once, one `stat` and no output. Marker absent: the session started before the plugin
+was loaded, so the hook injects the sentence above with that prompt, shows you one status line
+saying so, and leaves the marker. The transcript is never read, whatever its size. Markers older
+than a month are deleted at the next session start.
 
 How it knows which session was the previous one:
 
@@ -192,10 +214,11 @@ not touch `.gitignore`.
 ```
 plugins/seamless/
 ├── .claude-plugin/plugin.json
-├── hooks/hooks.json                  SessionEnd "clear", SessionStart "startup|clear"
+├── hooks/hooks.json                  SessionEnd "clear", SessionStart "startup|clear|resume|compact", UserPromptSubmit
 ├── scripts/
 │   ├── session-end-mark.sh           marks the transcript that /clear just closed
-│   └── session-start-context.sh      builds the context for the new session
+│   ├── session-start-context.sh      builds the context for the new session; one sentence on resume/compact
+│   └── user-prompt-onboard.sh        once per session that predates the plugin: the same sentence
 └── skills/
     ├── save/SKILL.md                 /seamless:save
     └── restore/SKILL.md              /seamless:restore
