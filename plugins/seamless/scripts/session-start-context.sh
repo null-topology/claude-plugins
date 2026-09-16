@@ -120,6 +120,12 @@ case "$data_dir" in
 esac
 marker="$data_dir/cleared/$(basename "$project_dir").json"
 
+# SEAMLESS_DEBUG=1 appends one line per hook run to <plugin data>/debug.log, for troubleshooting.
+case "${SEAMLESS_DEBUG:-}" in
+  1|true|yes) mkdir -p "$data_dir" 2>/dev/null && printf '%s SessionStart source=%s session_id=%s transcript=%s cwd=%s\n' \
+    "$(date '+%Y-%m-%d %H:%M:%S')" "$source" "$session_id" "$transcript" "$hook_cwd" >> "$data_dir/debug.log" 2>/dev/null ;;
+esac
+
 # --- onboarding marker ---------------------------------------------------------------------------
 
 emit() {

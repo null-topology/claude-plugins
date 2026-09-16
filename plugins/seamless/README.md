@@ -146,6 +146,11 @@ it. Two ways to look at it:
     "$(ls -t ~/.claude/projects/$(pwd | sed 's#[/._]#-#g')/*.jsonl | head -1)"
   ```
 
+- **Debug log.** Set `SEAMLESS_DEBUG=1` the same way and every hook run appends one line to
+  `debug.log` in the plugin's data directory (`~/.claude/plugins/data/seamless-<marketplace>/`):
+  time, event, source, session id, transcript path, and for the prompt hook whether the marker
+  was present. Off by default; nothing is logged otherwise.
+
 The hook reads only the current project's own transcript directory under `~/.claude/projects/`,
 so context from another project never leaks into this one. A directory that has never had a
 session gets no previous-session lines, only the standing rule.

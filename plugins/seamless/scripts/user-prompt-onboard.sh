@@ -43,6 +43,13 @@ case "$data_dir" in
 esac
 marker="$data_dir/onboarded/$session_id"
 
+# SEAMLESS_DEBUG=1 appends one line per hook run to <plugin data>/debug.log, for troubleshooting.
+case "${SEAMLESS_DEBUG:-}" in
+  1|true|yes) mkdir -p "$data_dir" 2>/dev/null && printf '%s UserPromptSubmit session_id=%s transcript=%s marker=%s\n' \
+    "$(date '+%Y-%m-%d %H:%M:%S')" "$session_id" "$(printf '%s' "$input" | json_str transcript_path)" \
+    "$([ -f "$marker" ] && echo present || echo absent)" >> "$data_dir/debug.log" 2>/dev/null ;;
+esac
+
 [ -f "$marker" ] && exit 0
 
 ctx="[seamless] seamless is installed: before any further work, invoke the seamless:save skill once to load its rules, and keep the handoff living."
