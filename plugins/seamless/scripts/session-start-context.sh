@@ -43,7 +43,7 @@ json_str() {
   # Top-level field "$1" of the JSON on stdin, as a string. Without jq a sed fallback that is good
   # enough for the flat hook input and the marker file (plain strings and numbers).
   if [ "$have_jq" -eq 1 ]; then
-    jq -r --arg k "$1" '.[$k] // "" | tostring'
+    jq -r --arg k "$1" 'if has($k) and .[$k] != null then (.[$k] | tostring) else "" end'
   else
     tr -d '\n' | sed -n "s/.*\"$1\":[[:space:]]*\"\{0,1\}\([^\",}]*\)\"\{0,1\}.*/\1/p" | head -1
   fi
@@ -92,6 +92,46 @@ describe_handoff_dir() {
   printf '%s\n' "$dh_line"
 }
 
+cache_status() {
+  # One clause about the prompt cache, from the fields Claude Code adds to the hook input on
+  # "resume" (2.1.25x and later): seconds_since_last_response, context_tokens,
+  # prompt_cache_likely_expired, estimated_cache_write_usd. Prints nothing when they are missing.
+  cs_expired=$(printf '%s' "$input" | json_str prompt_cache_likely_expired)
+  case "$cs_expired" in true|false) ;; *) return 0 ;; esac
+  cs_idle=$(printf '%s' "$input" | json_str seconds_since_last_response)
+  cs_tokens=$(printf '%s' "$input" | json_str context_tokens)
+  cs_usd=$(printf '%s' "$input" | json_str estimated_cache_write_usd)
+  cs_idle=${cs_idle%%.*}
+  cs_tokens=${cs_tokens%%.*}
+  cs_when=""
+  case "$cs_idle" in
+    ''|*[!0-9]*) ;;
+    *) if [ "$cs_idle" -ge 3600 ]; then
+         cs_when="$(( cs_idle / 3600 ))h $(( (cs_idle % 3600) / 60 ))m"
+       else
+         cs_when="$(( cs_idle / 60 ))m"
+       fi ;;
+  esac
+  cs_size=""
+  case "$cs_tokens" in
+    ''|*[!0-9]*) ;;
+    *) if [ "$cs_tokens" -ge 1000 ]; then cs_size="$(( cs_tokens / 1000 ))k tokens"; else cs_size="$cs_tokens tokens"; fi ;;
+  esac
+  cs_cost=""
+  case "$cs_usd" in
+    ''|*[!0-9.]*|.|*.*.*) ;;
+    *) cs_cost=$(awk -v v="$cs_usd" 'BEGIN { printf "about $%.2f", v }') ;;
+  esac
+  if [ "$cs_expired" = true ]; then
+    printf 'prompt cache is COLD%s: the first request re-caches %s%s. /clear costs nothing and a fresh session resumes from the handoff.' \
+      "${cs_when:+ after $cs_when idle}" "${cs_size:-the whole context}" "${cs_cost:+ ($cs_cost)}"
+  else
+    cs_detail="${cs_when:+idle $cs_when}"
+    [ -n "$cs_size" ] && cs_detail="${cs_detail:+$cs_detail, }$cs_size cached"
+    printf 'prompt cache still warm%s.' "${cs_detail:+ ($cs_detail)}"
+  fi
+}
+
 # --- input ---------------------------------------------------------------------------------------
 
 source=$(printf '%s' "$input" | json_str source)
@@ -122,8 +162,11 @@ marker="$data_dir/cleared/$(basename "$project_dir").json"
 
 # SEAMLESS_DEBUG=1 appends one line per hook run to <plugin data>/debug.log, for troubleshooting.
 case "${SEAMLESS_DEBUG:-}" in
-  1|true|yes) mkdir -p "$data_dir" 2>/dev/null && printf '%s SessionStart source=%s session_id=%s transcript=%s cwd=%s\n' \
-    "$(date '+%Y-%m-%d %H:%M:%S')" "$source" "$session_id" "$transcript" "$hook_cwd" >> "$data_dir/debug.log" 2>/dev/null ;;
+  1|true|yes) mkdir -p "$data_dir" 2>/dev/null && printf '%s SessionStart source=%s session_id=%s transcript=%s cwd=%s cache_expired=%s idle_s=%s context_tokens=%s\n' \
+    "$(date '+%Y-%m-%d %H:%M:%S')" "$source" "$session_id" "$transcript" "$hook_cwd" \
+    "$(printf '%s' "$input" | json_str prompt_cache_likely_expired)" \
+    "$(printf '%s' "$input" | json_str seconds_since_last_response)" \
+    "$(printf '%s' "$input" | json_str context_tokens)" >> "$data_dir/debug.log" 2>/dev/null ;;
 esac
 
 # --- onboarding marker ---------------------------------------------------------------------------
@@ -147,8 +190,16 @@ emit() {
 }
 
 if [ "$source" = "resume" ] || [ "$source" = "compact" ]; then
+  msg="seamless: $source; the session is asked to load the save skill before working on."
+  # On resume Claude Code also reports how stale the prompt cache is. Once it has gone cold the
+  # first request re-sends the whole context, so the price of continuing is shown next to the
+  # alternative this plugin exists for: /clear costs nothing when the handoff is in place.
+  if [ "$source" = "resume" ]; then
+    cache_note=$(cache_status)
+    [ -n "$cache_note" ] && msg="seamless: resume; $cache_note The session is asked to load the save skill before working on."
+  fi
   emit "[seamless] seamless is installed: before any further work, invoke the seamless:save skill once to load its rules, and keep the handoff living." \
-       "seamless: $source; the session is asked to load the save skill before working on."
+       "$msg"
   exit 0
 fi
 

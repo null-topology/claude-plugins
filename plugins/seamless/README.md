@@ -165,6 +165,20 @@ and `compact` keeps the same session with a summary, so on those two the hook sa
 A summary may have dropped the rule, and a resumed session may predate the plugin; the sentence
 costs a few dozen tokens per resume. `fork` inherits the parent's context and gets nothing.
 
+On `resume` the status line also tells you what continuing will cost. Claude Code hands the hook
+how long the resumed transcript has been idle, how many tokens its context holds and whether the
+prompt cache has outlived its TTL, and the line reads either
+
+```
+seamless: resume; prompt cache still warm (idle 12m, 182k tokens cached). The session is asked to load the save skill before working on.
+seamless: resume; prompt cache is COLD after 1h 30m idle: the first request re-caches 182k tokens (about $1.14). /clear costs nothing and a fresh session resumes from the handoff. The session is asked to load the save skill before working on.
+```
+
+so the choice between continuing and clearing is made with the price in view. Claude Code shows
+its own "new task? /clear to save N tokens" hint only after 75 minutes of idling inside a running
+session; a hook's status line takes that slot, which is why the hook carries the numbers itself.
+A Claude Code without these fields (before 2.1.251) gets the plain sentence.
+
 ### Sessions that predate the plugin
 
 Install the plugin from inside a running session, `/reload-plugins`, and keep typing: no session
