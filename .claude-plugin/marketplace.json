@@ -17,6 +17,16 @@
       },
       "category": "productivity",
       "source": "./plugins/seamless"
+    },
+    {
+      "name": "fleet",
+      "description": "A fleet of executor subagents, one per model and reasoning effort, governed by a single rules file: which model may spawn which model at which effort, which skills and commands a subagent may not use. The main session keeps full power; the rules bind only the fleet.",
+      "version": "0.1.0",
+      "author": {
+        "name": "null-topology"
+      },
+      "category": "productivity",
+      "source": "./plugins/fleet"
     }
   ]
 }

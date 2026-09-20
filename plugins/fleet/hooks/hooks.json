@@ -1,0 +1,29 @@
+{
+  "description": "On startup, seeds the working rules file from the shipped default unless it already exists. Before every Agent, Skill, Workflow and Bash call, identifies the caller: the main session's Agent calls are checked against the main section and its other calls pass; a fleet subagent's Agent calls are checked against its row in rules, its Skill and Bash calls against the disallowed lists, and its Workflow calls are refused; built-in subagents pass.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/seed-rules.sh\" \"${CLAUDE_PLUGIN_ROOT}\" \"${CLAUDE_PLUGIN_DATA}\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Agent|Bash|Skill|Workflow",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/subagent-guard.sh\" \"${CLAUDE_PLUGIN_ROOT}\" \"${CLAUDE_PLUGIN_DATA}\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

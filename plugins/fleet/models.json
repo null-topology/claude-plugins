@@ -1,0 +1,100 @@
+{
+  "snapshot": {
+    "benchmark": "Artificial Analysis Intelligence Index v4.3",
+    "date": "2026-09-12"
+  },
+  "models": [
+    {
+      "id": "claude-fable-5-1",
+      "name": "Claude Fable 5.1",
+      "vendor": "Anthropic",
+      "efforts": {
+        "low":    { "index": 47, "usd": 2.37, "tps": 46.6 },
+        "medium": { "index": 49, "usd": 2.98, "tps": 56.2 },
+        "high":   { "index": 51, "usd": 3.91, "tps": 49 },
+        "xhigh":  { "index": 53, "usd": 5.98, "tps": 60 },
+        "max":    { "index": 53, "usd": 7.63, "tps": 65.4 }
+      }
+    },
+    {
+      "id": "claude-opus-5",
+      "name": "Claude Opus 5",
+      "vendor": "Anthropic",
+      "efforts": {
+        "low":    { "index": 40, "usd": 1.10, "tps": 48 },
+        "medium": { "index": 45, "usd": 2.19, "tps": 49 },
+        "high":   { "index": 48, "usd": 3.61, "tps": 50 },
+        "xhigh":  { "index": 50, "usd": 4.88, "tps": 52 },
+        "max":    { "index": 51, "usd": 5.86, "tps": 50 }
+      }
+    },
+    {
+      "id": "claude-sonnet-5",
+      "name": "Claude Sonnet 5",
+      "vendor": "Anthropic",
+      "efforts": {
+        "low":    { "index": 25, "usd": 0.51, "tps": 72 },
+        "medium": { "index": 28, "usd": 1.00, "tps": 62 },
+        "high":   { "index": 32, "usd": 1.79, "tps": 58.2 },
+        "xhigh":  { "index": 35, "usd": 2.87, "tps": 65 },
+        "max":    { "index": 38, "usd": 5.09, "tps": 77 }
+      }
+    },
+    {
+      "id": "claude-haiku-4-5",
+      "name": "Claude Haiku 4.5",
+      "vendor": "Anthropic",
+      "efforts": {
+        "default": { "index": 18, "usd": 0.21, "tps": 84.7 }
+      }
+    },
+    {
+      "id": "gpt-6-astra",
+      "name": "GPT-6 Astra",
+      "vendor": "OpenAI",
+      "efforts": {
+        "low":    { "index": 46, "usd": 0.82, "tps": 51.2 },
+        "medium": { "index": 50, "usd": 1.54, "tps": 49.9 },
+        "high":   { "index": 51, "usd": 1.72, "tps": 48.5 },
+        "xhigh":  { "index": 53, "usd": 2.31, "tps": 53.4 },
+        "max":    { "index": 53, "usd": 3.26, "tps": 53.9 }
+      }
+    },
+    {
+      "id": "gpt-5.6-sol",
+      "name": "GPT-5.6 Sol",
+      "vendor": "OpenAI",
+      "efforts": {
+        "low":    { "index": 34, "usd": 0.26, "tps": 55 },
+        "medium": { "index": 39, "usd": 0.50, "tps": 57.5 },
+        "high":   { "index": 42, "usd": 0.81, "tps": 60 },
+        "xhigh":  { "index": 44, "usd": 1.18, "tps": 61 },
+        "max":    { "index": 47, "usd": 1.99, "tps": 59.6 }
+      }
+    },
+    {
+      "id": "gpt-5.6-terra",
+      "name": "GPT-5.6 Terra",
+      "vendor": "OpenAI",
+      "efforts": {
+        "low":    { "index": 28, "usd": 0.09, "tps": 79, "usd_estimated": true },
+        "medium": { "index": 33, "usd": 0.17, "tps": 79, "usd_estimated": true },
+        "high":   { "index": 34, "usd": 0.34, "tps": 86.7 },
+        "xhigh":  { "index": 38, "usd": 0.63, "tps": 124.5 },
+        "max":    { "index": 42, "usd": 1.40, "tps": 87.6 }
+      }
+    },
+    {
+      "id": "gpt-5.6-luna",
+      "name": "GPT-5.6 Luna",
+      "vendor": "OpenAI",
+      "efforts": {
+        "low":    { "index": 22, "usd": 0.01, "tps": 105 },
+        "medium": { "index": 25, "usd": 0.02, "tps": 104 },
+        "high":   { "index": 32, "usd": 0.04, "tps": 102 },
+        "xhigh":  { "index": 35, "usd": 0.09, "tps": 116 },
+        "max":    { "index": 38, "usd": 0.18, "tps": 116 }
+      }
+    }
+  ]
+}
