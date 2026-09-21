@@ -1,5 +1,5 @@
 {
-  "description": "On startup, seeds the working rules file from the shipped default unless it already exists. Before every Agent, Skill, Workflow and Bash call, identifies the caller: the main session's Agent calls are checked against the main section and its other calls pass; a fleet subagent's Agent calls are checked against its row in rules, its Skill and Bash calls against the disallowed lists, and its Workflow calls are refused; built-in subagents pass.",
+  "description": "On startup, seeds the working rules file from the shipped default unless it already exists. Before every Agent, Skill, Workflow and Bash call, identifies the caller: the main session's Agent calls are checked against the main section and its other calls pass; a fleet subagent's Agent calls are checked against its row in rules, its Skill and Bash calls against the disallowed lists, and its Workflow calls are refused; built-in subagents pass. Separately, an Agent call that targets a fleet agent is refused unless its prompt is a structured brief with the required sections; calls to other agent types are not inspected.",
   "hooks": {
     "SessionStart": [
       {
@@ -20,6 +20,16 @@
           {
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/subagent-guard.sh\" \"${CLAUDE_PLUGIN_ROOT}\" \"${CLAUDE_PLUGIN_DATA}\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "^Agent$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/delegation-contract.sh\" \"${CLAUDE_PLUGIN_ROOT}\"",
             "timeout": 5
           }
         ]

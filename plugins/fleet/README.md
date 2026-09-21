@@ -25,6 +25,11 @@ inside a policy written in one place.
   passes. Needs `jq`.
 - `scripts/seed-rules.sh` — the one-time copy of the default rules.
 - `skills/selecting-subagent-model` — how to pick a model and effort for a task.
+- `skills/delegating-task` — how to write the prompt for the agent that was picked, with worked
+  examples under `examples/`.
+- `scripts/delegation-contract.sh` — a second `PreToolUse` hook, on `Agent` only, that checks the
+  shape of that prompt when the call targets a fleet agent. Needs `jq` and `awk`.
+- `tests/delegation/` — fixture tests for the hook alone and next to the guard and the generator.
 
 ## Why one file per model and effort
 
@@ -112,8 +117,41 @@ do instead, read from the rules file.
 To read the rules from somewhere else, set `FLEET_RULES` to the file's path. It must exist: when
 it does not, the guard refuses every call it matches rather than falling back to another file.
 
+## The delegation brief
+
+A spawned agent sees none of the caller's conversation, so the prompt has to carry the target,
+the limits and the finish line. `fleet:delegating-task` tells the caller how to write it, and the
+hook refuses an `Agent` call to a fleet agent whose prompt lacks the shape. A fleet agent is a
+`subagent_type` with a definition under `agents/`, prefixed or bare; calls to any other agent
+type, and calls without a type, are not inspected.
+
+Required `##` sections, each once and nonempty: `Objective`, `Context and Evidence`,
+`Scope Boundary`, `Acceptance Criteria`, `Return and Stop`. Optional, but unique and nonempty when
+present: `Epistemic Boundary`, `Constraints`, `Additional Context`. Spelling is exact, order is
+free, other headings are allowed. Headings inside code fences or HTML comments do not count, so a
+brief wrapped in a fence is refused; a section holding only a rule, a subheading, an empty fence or
+a comment is empty.
+
+The hook is silent on success and never grants a permission: every other check still runs. A
+refusal starts with `FLEET_DELEGATION_INVALID` and lists what is missing, empty or duplicated; the
+caller fixes the brief from what it already knows and repeats the call, and this is the only
+refusal an agent may act on that way. `FLEET_DELEGATION_ERROR` marks a malformed payload or a
+missing dependency and is to be reported. The hook reads the prompt and nothing else: it opens no
+file the brief names, runs nothing, rewrites nothing and keeps no state.
+
+```sh
+uv run tests/delegation/test_contract.py --shell /bin/sh
+uv run tests/delegation/test_integration.py --fleet-root . --shell /bin/sh
+```
+
+The tests use the Python standard library only and any Python 3.9+ runs them; the hook itself
+never calls Python.
+
 ## Limits
 
+- The brief check looks at shape, not meaning: a brief naming the wrong account, or filled with
+  `TODO`, passes. It covers the `Agent` tool only, not messages sent to an agent already running.
+  It parses a small Markdown subset, not CommonMark.
 - Agent definitions load at session start; the rules file is read on every call, but a new or
   changed agent file needs a new session.
 - Plugin updates leave `fleet.json` alone, but `claude plugin uninstall` removes the plugin's
