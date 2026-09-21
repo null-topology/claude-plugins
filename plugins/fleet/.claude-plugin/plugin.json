@@ -1,6 +1,6 @@
 {
   "name": "fleet",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "A fleet of executor subagents, one per model and reasoning effort, governed by a single rules file: which model may spawn which model at which effort, which skills and commands a subagent may not use, and which fleet agents and built-in models the main session may spawn. A task handed to a fleet agent must arrive as a structured brief.",
   "author": {
     "name": "null-topology"

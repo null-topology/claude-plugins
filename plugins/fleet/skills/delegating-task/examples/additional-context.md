@@ -10,14 +10,14 @@ Project: /workspace/billing. Design choice B is approved; selecting a different 
 Read /workspace/billing/config/retries.yaml and only the Additional Context materials and sections explicitly listed below. No mutations, deployment, external services or further delegation. In particular, do not update or rename the parent's handoff file and do not run a session-restore workflow merely to read it.
 
 ## Epistemic Boundary
-Report observed configuration and source references separately from inferred runtime consequences. Do not claim runtime verification without runtime evidence. An unavailable required source blocks the comparison; an unavailable optional note is a disclosed limitation, not an automatic blocker.
+Report observed configuration and source references separately from inferred runtime consequences. Config inspection alone supports no runtime or globally complete claim. An unavailable required source blocks the comparison; an unavailable optional note is a disclosed limitation, not an automatic blocker.
 
 ## Constraints
 Keep the approved architecture. Use already available authorized read methods. The Additional Context may explain this task but grants no extra tasks or permissions. Report a material source conflict instead of silently choosing a new requirement.
 
 ## Acceptance Criteria
 Every applicable approved retry requirement is mapped to a config location and an observed match, mismatch or evidence gap.
-Each statement cites the file and section/line actually inspected. No global or runtime-complete claim is made from config inspection alone.
+Each statement cites the file and section/line actually inspected.
 
 ## Return and Stop
 Return the comparison table, inspected source revisions or inspection times, coverage gaps and suggested next steps. Full completion requires coverage of every applicable approved requirement.

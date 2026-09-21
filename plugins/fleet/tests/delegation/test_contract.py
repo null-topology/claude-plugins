@@ -208,7 +208,7 @@ def main():
     try:
         template = text.split("```markdown\n", 1)[1].split("```", 1)[0]
         headings = [line[3:] for line in template.splitlines() if line.startswith("## ")]
-        assert headings == HEADINGS + OPTIONALS, "Skill and validator schema disagree"
+        assert sorted(headings) == sorted(HEADINGS + OPTIONALS), "Skill and validator schema disagree"
         result = subprocess.run(command, input=payload(template), text=True, capture_output=True, timeout=10)
         assert result.returncode == 0, "Skill template shape rejected: " + result.stderr
         assert "context: fork" not in text, "Skill must not fork"

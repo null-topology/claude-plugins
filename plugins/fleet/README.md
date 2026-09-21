@@ -127,8 +127,10 @@ type, and calls without a type, are not inspected.
 
 Required `##` sections, each once and nonempty: `Objective`, `Context and Evidence`,
 `Scope Boundary`, `Acceptance Criteria`, `Return and Stop`. Optional, but unique and nonempty when
-present: `Epistemic Boundary`, `Constraints`, `Additional Context`. Spelling is exact, order is
-free, other headings are allowed. Headings inside code fences or HTML comments do not count, so a
+present: `Epistemic Boundary`, `Constraints`, `Additional Context`. The skill still expects
+`Epistemic Boundary` unless every claim in the result is checked directly by the acceptance
+criteria and all the data is in the brief; the hook leaves that judgment to the caller.
+Spelling is exact, order is free, other headings are allowed. Headings inside code fences or HTML comments do not count, so a
 brief wrapped in a fence is refused; a section holding only a rule, a subheading, an empty fence or
 a comment is empty.
 
