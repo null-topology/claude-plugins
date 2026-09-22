@@ -12,7 +12,7 @@ The fleet this skill selects from: GPT-6 Astra, Claude Fable 5.1 (top tier); Cla
 ## Selection policy
 
 - **Max is allowed only for GPT-6 Luna.** For every other model, consider an appropriate lower effort or another eligible model. Luna max is an option when the task needs it, not a default.
-- **Low is allowed only for GPT-6 Astra, Claude Opus 5.5, and Claude Fable 5.1.** Sol is explicitly excluded. Permission to use low does not override a stricter requirement attached to the assigned work.
+- **Low is allowed only for GPT-6 Astra, GPT-6 Sol, Claude Opus 5.5, and Claude Fable 5.1.** Luna is excluded. Sol low stays within Sol's work limits under Fleet constraints. Permission to use low does not override a stricter requirement attached to the assigned work.
 - **Luna medium requires caution.** Prefer high unless the work is simple, fully specified, reversible, and independently checkable for correctness and completeness. Explain why medium is sufficient in the existing declaration. Format validation alone is not enough. Unclear requirements or weak verification are reasons to avoid medium.
 - Keep the existing task constraints: complex development requires at least Opus high; architecture requires Astra/Fable medium or above. These are capability requirements for the assigned work, not a taxonomy of agent roles. Do not infer cross-model developer equivalence from equal AA scores alone.
 - Use the model and effort options exposed by the actual invocation tool. This document supplies selection judgment rather than duplicating parameter validation.
@@ -26,7 +26,7 @@ These come from observed experience with this fleet. No benchmark exposes them, 
 - **Claude Fable 5.1 draws on a separate capacity pool.** Prefer GPT-6 Astra when it is available, then Claude Opus 5.5 at high when that is enough, and take Fable when the work needs the top tier on an Anthropic model. This is a capacity constraint, not a price argument.
 - **On the top tier (Astra, Fable), effort tracks complexity, not size.** Both hold volume at every effort, so a large but straightforward task is a legitimate low. Raise effort for interacting parts, real decision points, and easy-to-miss details, not for file count or prompt length.
 - **Either vendor may be unavailable, and each ladder is complete on its own.** When one side is down, route within the other side without lowering the task's floors; a cross-vendor substitution below is a routing candidate for a live task, never a reason to treat a rung as redundant.
-- **Code review runs below the implementation rung.** Review of code written by a subagent goes to Claude Opus 5.5 one effort rung below the effort the code was written at (floor: low), or to GPT-6 Sol at that Opus review rung plus one (floor: medium, since Sol low is prohibited). The rule keys on the implementation effort alone, whichever model wrote the code (Opus, Astra, or Fable). Never review at the implementation rung or above, and never on Astra or Fable.
+- **Code review runs below the implementation rung.** Review of code written by a subagent goes to Claude Opus 5.5 one effort rung below the effort the code was written at (floor: low), or to GPT-6 Sol at that Opus review rung plus one (floor: medium, one rung above the Opus floor). The rule keys on the implementation effort alone, whichever model wrote the code (Opus, Astra, or Fable). Never review at the implementation rung or above, and never on Astra or Fable.
 
   | Code written at (any model) | Review on Opus | Review on Sol |
   |---|---|---|
@@ -87,7 +87,7 @@ The historical measured frontier includes Luna low through max, Sol medium throu
 
 | Pair to replace | Preferred substitute to evaluate | Snapshot basis |
 |---|---|---|
-| Sol low | Luna max **or** Luna xhigh | 37/.07 or 34/.035 est. instead of 34/.14 est.; Sol low is prohibited anyway |
+| Sol low | Luna max **or** Luna xhigh | 37/.07 or 34/.035 est. instead of 34/.14 est.; all three costs are estimated, so the dominance is provisional |
 | Opus low | Sol high | 43/.43 est. instead of 42/.55; only for work Sol is allowed to do (review, research, tests), and the cost is estimated |
 | Sol max | Opus medium **or** Astra medium | Preserves or raises Index at a higher benchmark cost: 51/1.34 or 50/1.54 instead of 48/1.06; Sol max is prohibited anyway |
 | Sol max | Astra low **or** Sol xhigh | 46/.82 or 44/.63 est. loses 2 or 4 Index; allowed only if the floor still holds |
@@ -112,7 +112,7 @@ Do not choose a model merely from tokens/s or reject a suitable model merely bec
 | Assigned situation | Selection judgment |
 |---|---|
 | Simple extraction with a complete independent content check | Luna medium may be justified; otherwise prefer Luna high. Schema validity alone is insufficient |
-| Sol low proposed for an easy task | Exclude low; Sol is outside the low allowlist |
+| Sol low proposed for an easy research or test task | Allowed; Sol's work limits still apply, and a code review on Sol keeps its medium floor |
 | Sol proposed for a feature that has to be designed around a bottleneck | Exclude Sol regardless of its Index; route to Astra or Fable, or Opus at high or above |
 | A review of a large change | Sol at high or above curating, findings fanned out to Luna xhigh/max micro-agents; not a single large reviewer |
 | Review of code a subagent wrote at Opus high (or Astra/Fable high) | Opus medium or Sol high; not Opus high, not the model that wrote it at the same effort, never Fable |
