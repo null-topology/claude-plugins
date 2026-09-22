@@ -61,15 +61,15 @@
       }
     },
     {
-      "id": "gpt-5.6-sol",
-      "name": "GPT-5.6 Sol",
+      "id": "gpt-6-sol",
+      "name": "GPT-6 Sol",
       "vendor": "OpenAI",
       "efforts": {
-        "low":    { "index": 33, "usd": 0.26, "tps": 58 },
-        "medium": { "index": 39, "usd": 0.50, "tps": 58 },
-        "high":   { "index": 42, "usd": 0.81, "tps": 64 },
-        "xhigh":  { "index": 44, "usd": 1.18, "tps": 69 },
-        "max":    { "index": 47, "usd": 1.99, "tps": 73 }
+        "low":    { "index": 34, "usd": 0.14, "tps": 124, "usd_estimated": true },
+        "medium": { "index": 40, "usd": 0.27, "tps": 114, "usd_estimated": true },
+        "high":   { "index": 43, "usd": 0.43, "tps": 138, "usd_estimated": true },
+        "xhigh":  { "index": 44, "usd": 0.63, "tps": 136, "usd_estimated": true },
+        "max":    { "index": 48, "usd": 1.06, "tps": 104 }
       }
     },
     {
@@ -85,15 +85,15 @@
       }
     },
     {
-      "id": "gpt-5.6-luna",
-      "name": "GPT-5.6 Luna",
+      "id": "gpt-6-luna",
+      "name": "GPT-6 Luna",
       "vendor": "OpenAI",
       "efforts": {
-        "low":    { "index": 21, "usd": 0.01, "tps": 131 },
-        "medium": { "index": 25, "usd": 0.02, "tps": 129 },
-        "high":   { "index": 32, "usd": 0.04, "tps": 130 },
-        "xhigh":  { "index": 35, "usd": 0.09, "tps": 136 },
-        "max":    { "index": 37, "usd": 0.18, "tps": 144 }
+        "low":    { "index": 21, "usd": 0.004, "tps": 152, "usd_estimated": true },
+        "medium": { "index": 29, "usd": 0.008, "tps": 143, "usd_estimated": true },
+        "high":   { "index": 32, "usd": 0.016, "tps": 127, "usd_estimated": true },
+        "xhigh":  { "index": 34, "usd": 0.035, "tps": 153, "usd_estimated": true },
+        "max":    { "index": 37, "usd": 0.07, "tps": 157 }
       }
     }
   ]

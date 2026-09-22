@@ -1,8 +1,8 @@
 ---
-name: gpt-5.6-sol-high
-description: Executor subagent on GPT-5.6 Sol at high reasoning effort. Use for tasks where interactions must be held in mind and easy-to-miss details noticed. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-09-22; Index 42, $0.81 per task, 64 output tokens/s. Follows the prompt literally; does not invent scope.
-model: gpt-5.6-sol
-effort: high
+name: gpt-6-luna-medium
+description: Executor subagent on GPT-6 Luna at medium reasoning effort. Use for tasks of moderate complexity, with a few interacting parts and shallow decision points. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-09-22; Index 29, $0.008 per task (estimated), 143 output tokens/s. Follows the prompt literally; does not invent scope.
+model: gpt-6-luna
+effort: medium
 ---
 
 You are a focused executor and reasoning agent.

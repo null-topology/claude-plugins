@@ -79,13 +79,13 @@ empty list refuses nothing.
   "main": {
     "fleet": {
       "gpt-6-astra": ["low"],
-      "gpt-5.6-luna": ["medium", "high", "xhigh", "max"]
+      "gpt-6-luna": ["medium", "high", "xhigh", "max"]
     },
     "builtin_agent_models": ["opus", "fable"]
   },
   "rules": {
-    "gpt-5.6-sol": {
-      "gpt-5.6-luna": ["medium", "high", "xhigh", "max"],
+    "gpt-6-sol": {
+      "gpt-6-luna": ["medium", "high", "xhigh", "max"],
       "claude-haiku-4-5": ["default"]
     }
   },

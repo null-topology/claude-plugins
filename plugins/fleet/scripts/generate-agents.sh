@@ -52,7 +52,8 @@ rm -f "$agents"/*.md
 jq -r '.models[] | .id as $id | .name as $name | .efforts | to_entries[]
        | [$id, $name, .key, .value.index, .value.usd, (.value.tps // "none"), (.value.usd_estimated // false)] | @tsv' "$models" |
 while IFS="$(printf '\t')" read -r id name effort index usd tps estimated; do
-  cost=$(printf '$%.2f per task' "$usd")
+  # Sub-dime costs keep a third decimal so they do not collapse to $0.00.
+  cost=$(awk -v u="$usd" 'BEGIN { s = sprintf(u < 0.1 ? "%.3f" : "%.2f", u); if (u < 0.1) sub(/0$/, "", s); printf "$%s per task", s }')
   [ "$estimated" = true ] && cost="$cost (estimated)"
   speed="$tps output tokens/s"
   [ "$tps" = none ] && speed="output speed not published"

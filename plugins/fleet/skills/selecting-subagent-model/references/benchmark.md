@@ -26,18 +26,18 @@ benchmark task; est. marks a cost the benchmark did not publish. Generated from 
 | GPT-6 Astra | high | 51 | 1.73 | 29.5 | 49 |
 | GPT-6 Astra | xhigh | 52 | 2.31 | 22.5 | 54 |
 | GPT-6 Astra | max | 53 | 3.26 | 16.3 | 58 |
-| GPT-5.6 Sol | low | 33 | 0.26 | 126.9 | 58 |
-| GPT-5.6 Sol | medium | 39 | 0.50 | 78 | 58 |
-| GPT-5.6 Sol | high | 42 | 0.81 | 51.9 | 64 |
-| GPT-5.6 Sol | xhigh | 44 | 1.18 | 37.3 | 69 |
-| GPT-5.6 Sol | max | 47 | 1.99 | 23.6 | 73 |
+| GPT-6 Sol | low | 34 | 0.14 est. | 242.9 | 124 |
+| GPT-6 Sol | medium | 40 | 0.27 est. | 148.1 | 114 |
+| GPT-6 Sol | high | 43 | 0.43 est. | 100 | 138 |
+| GPT-6 Sol | xhigh | 44 | 0.63 est. | 69.8 | 136 |
+| GPT-6 Sol | max | 48 | 1.06 | 45.3 | 104 |
 | GPT-5.6 Terra | low | 27 | 0.14 | 192.9 | 75 |
 | GPT-5.6 Terra | medium | 30 | 0.18 | 166.7 | 77 |
 | GPT-5.6 Terra | high | 34 | 0.34 | 100 | 77 |
 | GPT-5.6 Terra | xhigh | 38 | 0.63 | 60.3 | 84 |
 | GPT-5.6 Terra | max | 42 | 1.40 | 30 | 82 |
-| GPT-5.6 Luna | low | 21 | 0.01 | 2100 | 131 |
-| GPT-5.6 Luna | medium | 25 | 0.02 | 1250 | 129 |
-| GPT-5.6 Luna | high | 32 | 0.04 | 800 | 130 |
-| GPT-5.6 Luna | xhigh | 35 | 0.09 | 388.9 | 136 |
-| GPT-5.6 Luna | max | 37 | 0.18 | 205.6 | 144 |
+| GPT-6 Luna | low | 21 | 0.004 est. | 5250 | 152 |
+| GPT-6 Luna | medium | 29 | 0.008 est. | 3625 | 143 |
+| GPT-6 Luna | high | 32 | 0.016 est. | 2000 | 127 |
+| GPT-6 Luna | xhigh | 34 | 0.035 est. | 971.4 | 153 |
+| GPT-6 Luna | max | 37 | 0.07 | 528.6 | 157 |

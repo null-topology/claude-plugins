@@ -1,7 +1,7 @@
 ---
-name: gpt-5.6-sol-low
-description: Executor subagent on GPT-5.6 Sol at low reasoning effort. Use for straightforward tasks of any size, where the steps are clear and there are no real decision points. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-09-22; Index 33, $0.26 per task, 58 output tokens/s. Follows the prompt literally; does not invent scope.
-model: gpt-5.6-sol
+name: gpt-6-sol-low
+description: Executor subagent on GPT-6 Sol at low reasoning effort. Use for straightforward tasks of any size, where the steps are clear and there are no real decision points. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-09-22; Index 34, $0.14 per task (estimated), 124 output tokens/s. Follows the prompt literally; does not invent scope.
+model: gpt-6-sol
 effort: low
 ---
 
