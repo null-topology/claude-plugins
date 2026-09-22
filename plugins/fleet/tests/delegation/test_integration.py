@@ -53,7 +53,11 @@ def main():
               and not handlers[0].get("async", False))
     check("configuration/existing guard retained", any(g.get("matcher") == "Agent|Bash|Skill|Workflow"
           and any("subagent-guard.sh" in h.get("command", "") for h in g.get("hooks", [])) for g in groups))
-    check("configuration/no additional SubagentStart hook", "SubagentStart" not in hooks)
+    start_groups = hooks.get("SubagentStart", [])
+    check("configuration/SubagentStart runs the guard for every agent type",
+          len(start_groups) == 1 and "matcher" not in start_groups[0]
+          and [h.get("command") for h in start_groups[0].get("hooks", [])] ==
+          ['sh "${CLAUDE_PLUGIN_ROOT}/scripts/subagent-guard.sh" "${CLAUDE_PLUGIN_ROOT}" "${CLAUDE_PLUGIN_DATA}"'])
 
     with tempfile.TemporaryDirectory(prefix="fleet-integration-test-") as temporary:
         fixture = Path(temporary) / "fleet"
@@ -122,6 +126,42 @@ def main():
             check(name, actual == expected and not any(r.stdout for r in results),
                   "expected %r, got %r; stderr=%r" % (expected, actual, [r.stderr for r in results]))
 
+        def run_guard(data, rules_file=None):
+            guard_env = dict(env, FLEET_RULES=str(rules_file)) if rules_file else env
+            return subprocess.run(commands[0], input=json.dumps(data), text=True,
+                                  capture_output=True, timeout=10, env=guard_env)
+
+        def start(agent_type):
+            return {"hook_event_name": "SubagentStart", "agent_id": "fixture-child", "agent_type": agent_type}
+
+        result = run_guard(start("fleet:worker-low"))
+        try:
+            output = json.loads(result.stdout)["hookSpecificOutput"]
+        except (ValueError, KeyError, TypeError):
+            output = {}
+        context = output.get("additionalContext", "") if output.get("hookEventName") == "SubagentStart" else ""
+        check("start/fleet agent gets its limits",
+              result.returncode == 0 and "Skills you cannot load: forbidden-skill." in context
+              and "not a reason to stop" in context and "Commands you cannot run: sudo, doas, claude." in context,
+              "rc=%r stdout=%r stderr=%r" % (result.returncode, result.stdout, result.stderr))
+        result = run_guard(start("Explore"))
+        check("start/built-in agent gets nothing", result.returncode == 0 and not result.stdout, result.stderr)
+        result = run_guard(invocation(tool="Skill", caller="chief-high", skill="forbidden-skill"))
+        check("nested/skill refusal says to carry on",
+              result.returncode == 2 and "not a reason to stop" in result.stderr, result.stderr)
+
+        broken = Path(temporary) / "broken.json"
+        broken.write_text('{"disallowed_skills": ["forbidden-skill"] "disallowed_commands": []}')
+        for name, data, code in [
+                ("broken/start reports to the user", start("fleet:worker-low"), 2),
+                ("broken/nested skill refused", invocation(tool="Skill", caller="chief-high", skill="any-skill"), 2),
+                ("broken/nested command refused", invocation(tool="Bash", caller="chief-high", command="printf ok"), 2),
+                ("broken/main dispatch refused", invocation(), 2),
+                ("broken/main non-Agent call passes", invocation(tool="Bash", command="printf ok"), 0)]:
+            result = run_guard(data, broken)
+            check(name, result.returncode == code and not result.stdout
+                  and (code == 0 or "not valid JSON" in result.stderr), result.stderr)
+
         generation = Path(temporary) / "generation"
         (generation / "scripts").mkdir(parents=True)
         (generation / "templates").mkdir()
@@ -141,6 +181,7 @@ def main():
                 check("generator/" + filename + "/new directives",
                       "fleet:delegating-task" in text and "FLEET_DELEGATION_INVALID" in text
                       and "already permitted equivalent" in text and "FLEET_DELEGATION_ERROR" in text
+                      and "closes that skill, not the task" in text
                       and "{{" not in text)
                 check("generator/" + filename + "/model and effort preserved",
                       "model: fixture-model\n" in text and

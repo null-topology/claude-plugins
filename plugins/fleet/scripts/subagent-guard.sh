@@ -1,5 +1,7 @@
 #!/bin/sh
-# Fleet guard: the plugin's PreToolUse hook for Agent, Skill, Workflow and Bash.
+# Fleet guard: the plugin's PreToolUse hook for Agent, Skill, Workflow and Bash,
+# and its SubagentStart hook, which hands a starting fleet agent the skills and
+# commands it cannot use, so that it does not try them.
 #
 # Usage: subagent-guard.sh <plugin-root> <data-dir>        (hook payload on stdin)
 #
@@ -73,6 +75,14 @@ refuse() {
   exit 2
 }
 
+# A rules file that does not parse would read as empty rules: nothing could be
+# spawned and no skill or command refused. Called only where rules are read, so
+# a broken file does not stop the main session's own calls.
+require_rules() {
+  jq empty "$rules" 2>/dev/null ||
+    refuse "fleet rules file is not valid JSON ($rules); fleet checks refuse everything until it is fixed."
+}
+
 if [ ! -f "$rules" ]; then
   refuse "fleet rules file not found ($rules); nothing is allowed until it exists."
 fi
@@ -80,14 +90,41 @@ if ! command -v jq >/dev/null 2>&1; then
   refuse "the fleet guard needs jq on PATH."
 fi
 
+event=$(field '.hook_event_name')
 tool=$(field '.tool_name')
 agent_type=$(field '.agent_type')
 agent_id=$(field '.agent_id')
+
+# ---- a subagent starting ----------------------------------------------------
+
+# Here agent_type is the agent being started, not a caller. Only fleet agents
+# get the limits; the text goes to the new agent. Exit 2 at this event shows the
+# message to the user and does not stop the agent.
+if [ "$event" = SubagentStart ]; then
+  agent_file "$agent_type" >/dev/null || exit 0
+  require_rules
+  skills=$(rule '.disallowed_skills | join(", ")')
+  commands=$(rule '.disallowed_commands | join(", ")')
+  [ -n "$skills$commands" ] || exit 0
+  context='Fleet limits for this agent (from the fleet rules in force now):'
+  if [ -n "$skills" ]; then
+    context="$context
+- Skills you cannot load: $skills. Do not call them. Their absence is not a reason to stop: carry on with the tools and the other skills you have, within the brief."
+  fi
+  if [ -n "$commands" ]; then
+    context="$context
+- Commands you cannot run: $commands. A step that needs one of them is a blocker: report what needs it."
+  fi
+  jq -n --arg context "$context" \
+    '{hookSpecificOutput: {hookEventName: "SubagentStart", additionalContext: $context}}'
+  exit 0
+fi
 
 # ---- main session ---------------------------------------------------------
 
 if ! caller_file=$(agent_file "$agent_type") && [ -z "$agent_id" ]; then
   [ "$tool" = Agent ] || exit 0
+  require_rules
 
   requested=$(field '.tool_input.subagent_type')
   model=$(field '.tool_input.model')
@@ -114,6 +151,7 @@ fi
 
 # Built-in agents are outside the fleet and outside these rules.
 [ -n "$caller_file" ] || exit 0
+require_rules
 caller=$(frontmatter "$caller_file" model)
 
 case "$tool" in
@@ -148,7 +186,7 @@ $row"
   Skill)
     skill=$(field '.tool_input.skill')
     if rule '.disallowed_skills[]' | grep -qx "$skill"; then
-      refuse "skill '$skill' is not available from a fleet agent. Do the work within your own limits and report what you found."
+      refuse "skill '$skill' is not available from a fleet agent. This is not a reason to stop: carry on with the tools and the other skills you have, within the brief."
     fi
     ;;
 

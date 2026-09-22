@@ -22,7 +22,8 @@ inside a policy written in one place.
   `agent_type` resolves to its definition, whose model is the row the rules are keyed by;
   otherwise an empty `agent_id` means the main session (which may still carry an `agent_type`
   when the session runs as `claude --agent <name>`); anything else is a built-in subagent and
-  passes. Needs `jq`.
+  passes. The same script is the `SubagentStart` hook that hands a starting fleet agent its
+  denylists. Needs `jq`.
 - `scripts/seed-rules.sh` — the one-time copy of the default rules.
 - `skills/selecting-subagent-model` — how to pick a model and effort for a task.
 - `skills/delegating-task` — how to write the prompt for the agent that was picked, with worked
@@ -114,8 +115,17 @@ Regardless of the sections, a fleet subagent may never pass `model` to the Agent
 belongs to the agent definition) and may not use `Workflow`. A refusal names what the caller may
 do instead, read from the rules file.
 
+A fleet agent learns both denylists when it starts: the `SubagentStart` hook adds them to its
+context, read from the rules file in force at that moment, so the agent does not try what would be
+refused. A refused skill closes only that skill: the agent carries on with its other tools and
+skills. A step that needs a refused command is a blocker the agent reports. Built-in agents get
+nothing.
+
 To read the rules from somewhere else, set `FLEET_RULES` to the file's path. It must exist: when
-it does not, the guard refuses every call it matches rather than falling back to another file.
+it does not, the guard refuses every call it matches rather than falling back to another file. A
+file that is not valid JSON is refused the same way wherever the guard reads the rules, and a
+fleet agent that starts meanwhile gets the error shown to the user instead of its limits; the main
+session's calls other than `Agent` still pass.
 
 ## The delegation brief
 
