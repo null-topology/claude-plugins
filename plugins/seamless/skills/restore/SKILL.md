@@ -8,8 +8,14 @@ the user to explain what was going on.
 
 ## 1. Find the candidates
 
-If the session-start context injected by this plugin's hook lists `Handoff documents`, start from
-that list — it was built at startup from the real filesystem and names the newest file in every
+If the session-start context injected by this plugin's hook lists `Handoff documents kept by the
+previous session(s)`, the first file in that list is the document: the hook followed the chain of
+sessions this one continues (the one just cleared, the one before it, up to five steps) and took
+the handoffs they wrote or edited, nearest session first. Other sessions may be running in the
+same directory, so a newer file in the per-directory list below it is not necessarily yours.
+
+Otherwise, if the context lists `Handoff documents (newest per directory)`, start from that
+list — it was built at startup from the real filesystem and names the newest file in every
 handoff directory that belongs to this project.
 
 Otherwise resolve the startup directory (the `Startup directory:` line of that context, else the
@@ -28,6 +34,7 @@ document can look fresh.
 
 ## 2. Choose one
 
+- **The chain names a document** — read it; the questions below do not arise.
 - **One directory has handoffs** — read its newest document.
 - **Several directories do** — do not pick by mtime or by depth; any heuristic eventually picks
   wrong silently. Show the candidates (path, filename date, mtime, first heading) and ask the user

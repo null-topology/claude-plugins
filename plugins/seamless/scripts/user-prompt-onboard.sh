@@ -6,7 +6,8 @@
 # SessionStart hook leaves a marker file per session id after it has spoken; this hook checks for
 # that marker on every prompt. Marker present: exit at once (one stat, no output). Marker absent:
 # this session started before the plugin was loaded, so hand it the onboarding text once and
-# leave the marker. The transcript is never read, whatever its size.
+# leave the marker, with the pid of this process inside. The transcript is never read, whatever
+# its size.
 #
 # Usage: user-prompt-onboard.sh <plugin data dir>
 
@@ -54,7 +55,9 @@ esac
 
 ctx="[seamless] seamless is installed: before any further work, invoke the seamless:save skill once to load its rules, and keep the handoff living."
 
-mkdir -p "$data_dir/onboarded" 2>/dev/null && : > "$marker" 2>/dev/null
+# The marker holds the pid of the Claude Code process, like the one the SessionStart hook writes,
+# so a later start can tell that this session is still running.
+mkdir -p "$data_dir/onboarded" 2>/dev/null && printf '%s\n' "${CLAUDE_PID:-$PPID}" > "$marker" 2>/dev/null
 
 msg="seamless: this session started before the plugin was loaded; its rules are injected with this prompt."
 

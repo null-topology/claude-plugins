@@ -4,9 +4,10 @@
 # On "resume" and "compact" it says one sentence: load the save skill before working on. The
 # resumed or compacted session has its context already; the sentence only makes sure the rules
 # of the save skill get loaded, since a summary may have dropped them or the session may predate
-# the plugin. Whatever the source, it leaves an empty marker file named after the session id in
-# the plugin data directory; the UserPromptSubmit hook uses it to spot a session that never got
-# any SessionStart from this plugin (installed while the session was running).
+# the plugin. Whatever the source, it records the session in onboarded/<session id> under the
+# plugin data directory (content: the pid of the Claude Code process); the UserPromptSubmit hook
+# uses the file to spot a session that never got any SessionStart from this plugin (installed
+# while the session was running), and later starts use the pid to skip sessions still running.
 #
 # On a fresh session (source "startup" or "clear") it looks at the previous session's transcript
 # in the current project's own directory under ~/.claude/projects/ and hands the new session a few
@@ -14,19 +15,26 @@
 # handoff documents that exist for this project, the files edited most recently, and the standing
 # rule to keep a living handoff so the user can /clear at any time.
 #
-# Which transcript is "the previous session":
-#   - after /clear: the one the SessionEnd hook marked as cleared, if the marker is fresh; otherwise
-#     the newest transcript in the project directory other than the current one;
-#   - at startup: the newest transcript in the project directory other than the current one, which
-#     is simply the last time Claude Code ran in this directory. A directory that has never had a
-#     session yields no previous-session lines.
+# Which session is "the previous session" is resolved the same way on every source:
+#   1. the chain: <plugin data>/chain/<old id>=<this id> exists when this session already consumed
+#      its bridge once (a resume or a respawn keeps the session id, so the link is found again);
+#   2. the bridge: <plugin data>/bridge/<key>=<old id>, left by the SessionEnd hook of the session
+#      that /clear just closed in this same process (<key> identifies the process, see
+#      session-end-mark.sh). It is turned into a chain entry and deleted;
+#   3. neither: no predecessor on record. On "startup" and "clear" the hook then falls back to the
+#      newest transcript in the project directory other than the current one, skipping sessions
+#      recorded as still running in another process, and says that it guessed.
+# The chain is the durable record: one empty file per transition, any depth by walking it.
 #
 # jq is optional. Without it the transcript cannot be parsed, so the previous session's prompt,
-# message and edited files are replaced by a note asking the user to install jq; everything that
-# comes from the filesystem (previous session id, handoff documents, standing rule) still works.
+# message, edited files and handoffs are replaced by a note asking the user to install jq;
+# everything that comes from the filesystem (previous session id, handoff directories, standing
+# rule) still works.
 #
-# It reads only the current project's transcript directory, so context from other projects never
-# surfaces. The only thing it writes is the removal of the marker it consumed.
+# It reads only the current project's transcript directory (and, for a session id from the
+# chain, that session's own transcript), so context from other projects never surfaces. It
+# writes only under the plugin data directory: the chain entry, the pid of this session in
+# onboarded/<session id>, and the removal of the bridge it consumed.
 #
 # Usage: session-start-context.sh <plugin data dir>
 
@@ -132,6 +140,64 @@ cache_status() {
   fi
 }
 
+bridge_key() {
+  # The identity of the Claude Code process both hooks of a /clear run in. Same function in the
+  # SessionEnd hook; the two must agree. Only the checksum of the token is ever used.
+  if [ -n "${CLAUDE_CODE_MESSAGING_TOKEN:-}" ]; then
+    printf 'tok-%s' "$(printf '%s' "$CLAUDE_CODE_MESSAGING_TOKEN" | cksum | cut -d' ' -f1)"
+  elif [ -n "${CLAUDE_PID:-}" ]; then
+    printf 'pid-%s' "$CLAUDE_PID"
+  else
+    printf 'pid-%s' "$PPID"
+  fi
+}
+
+chain_prev() {
+  # Predecessor of session $1 according to the chain, or nothing.
+  for cp_f in "$data_dir/chain/"*"=$1"; do
+    [ -e "$cp_f" ] || return 0
+    cp_name=${cp_f##*/}
+    printf '%s' "${cp_name%%=*}"
+    return 0
+  done
+}
+
+session_live() {
+  # True when session $1 is recorded as running in a Claude Code process other than this one:
+  # the SessionStart and UserPromptSubmit hooks write the pid into onboarded/<session id>, and
+  # that pid still belongs to a live claude process. Sessions the plugin never saw are not live.
+  sl_pid=$(head -1 "$data_dir/onboarded/$1" 2>/dev/null | tr -dc '0-9')
+  [ -n "$sl_pid" ] || return 1
+  [ "$sl_pid" = "${CLAUDE_PID:-$PPID}" ] && return 1
+  kill -0 "$sl_pid" 2>/dev/null || return 1
+  ps -o command= -p "$sl_pid" 2>/dev/null | grep -q claude
+}
+
+transcript_of() {
+  # Transcript of session id $1: this project's directory first, any other project otherwise
+  # (the chain does not care where a session started).
+  if [ -f "$project_dir/$1.jsonl" ]; then
+    printf '%s' "$project_dir/$1.jsonl"
+    return 0
+  fi
+  for to_t in "$config_dir/projects"/*/"$1.jsonl"; do
+    [ -f "$to_t" ] || continue
+    printf '%s' "$to_t"
+    return 0
+  done
+}
+
+handoffs_edited() {
+  # Handoff documents the transcript $1 wrote or edited, most recent first, still on disk.
+  jq -r 'select(.type=="assistant") | .message.content[]? | select(.type=="tool_use")
+      | select(.name=="Write" or .name=="Edit" or .name=="MultiEdit")
+      | .input.file_path // empty' "$1" 2>/dev/null \
+    | grep -e '/handoffs/[^/]*\.md$' \
+    | awk '{ a[NR] = $0 } END { for (i = NR; i > 0; i--) print a[i] }' \
+    | awk '!seen[$0]++' \
+    | while IFS= read -r he_p; do [ -f "$he_p" ] && printf '%s\n' "$he_p"; done
+}
+
 # --- input ---------------------------------------------------------------------------------------
 
 source=$(printf '%s' "$input" | json_str source)
@@ -158,12 +224,60 @@ data_dir="${1:-}"
 case "$data_dir" in
   ""|*'${CLAUDE_PLUGIN_DATA}'*) data_dir="$config_dir/plugins/data/seamless" ;;
 esac
-marker="$data_dir/cleared/$(basename "$project_dir").json"
+case "$session_id" in
+  */*|*=*|.*) session_id="" ;;
+esac
+
+# --- chain: which session this one continues ----------------------------------------------------
+
+prev_id=""
+prev_how=""
+key=$(bridge_key)
+if [ -n "$session_id" ]; then
+  prev_id=$(chain_prev "$session_id")
+  if [ -n "$prev_id" ]; then
+    prev_how="the session this one continues from, on record"
+  else
+    # Several bridges under one key happen only when an earlier SessionStart hook died before
+    # deleting its bridge; the newest is the right one.
+    bridge=$(ls -t "$data_dir/bridge/$key="* 2>/dev/null | head -1)
+    if [ -n "$bridge" ]; then
+      bridge_name=${bridge##*/}
+      old_id=${bridge_name#*=}
+      if [ -n "$old_id" ] && [ "$old_id" != "$session_id" ]; then
+        mkdir -p "$data_dir/chain" 2>/dev/null && : > "$data_dir/chain/$old_id=$session_id" 2>/dev/null
+        prev_id="$old_id"
+        prev_how="the session that was just cleared"
+      fi
+    fi
+  fi
+fi
+# Whatever answered, a bridge under this process's key was left by this process and is spent.
+rm -f "$data_dir/bridge/$key="* 2>/dev/null
+# A bridge nobody consumed within an hour belongs to a process that died between /clear and the
+# next start; its key can never match again.
+find "$data_dir/bridge" -type f -mmin +60 -delete 2>/dev/null
+
+# Handoff documents the predecessors kept, nearest session first, at most five, following the
+# chain up to five steps. This is the list that names the document to read.
+chain_handoffs=""
+if [ "$have_jq" -eq 1 ] && [ -n "$prev_id" ]; then
+  ch_cur="$prev_id"
+  ch_depth=0
+  while [ -n "$ch_cur" ] && [ "$ch_depth" -lt 5 ]; do
+    ch_t=$(transcript_of "$ch_cur")
+    [ -n "$ch_t" ] && chain_handoffs="$chain_handoffs
+$(handoffs_edited "$ch_t")"
+    ch_cur=$(chain_prev "$ch_cur")
+    ch_depth=$(( ch_depth + 1 ))
+  done
+  chain_handoffs=$(printf '%s\n' "$chain_handoffs" | awk 'NF && !seen[$0]++' | head -5)
+fi
 
 # SEAMLESS_DEBUG=1 appends one line per hook run to <plugin data>/debug.log, for troubleshooting.
 case "${SEAMLESS_DEBUG:-}" in
-  1|true|yes) mkdir -p "$data_dir" 2>/dev/null && printf '%s SessionStart source=%s session_id=%s transcript=%s cwd=%s cache_expired=%s idle_s=%s context_tokens=%s\n' \
-    "$(date '+%Y-%m-%d %H:%M:%S')" "$source" "$session_id" "$transcript" "$hook_cwd" \
+  1|true|yes) mkdir -p "$data_dir" 2>/dev/null && printf '%s SessionStart source=%s session_id=%s prev_id=%s bridge=%s transcript=%s cwd=%s cache_expired=%s idle_s=%s context_tokens=%s\n' \
+    "$(date '+%Y-%m-%d %H:%M:%S')" "$source" "$session_id" "${prev_id:-none}" "$key" "$transcript" "$hook_cwd" \
     "$(printf '%s' "$input" | json_str prompt_cache_likely_expired)" \
     "$(printf '%s' "$input" | json_str seconds_since_last_response)" \
     "$(printf '%s' "$input" | json_str context_tokens)" >> "$data_dir/debug.log" 2>/dev/null ;;
@@ -172,9 +286,11 @@ esac
 # --- onboarding marker ---------------------------------------------------------------------------
 
 emit() {
-  # $1 = context for the model, $2 = status line for the user. Also leaves the per-session marker
-  # that tells the UserPromptSubmit hook this session has heard from the plugin, and drops markers
-  # older than a month so the directory does not grow without bound.
+  # $1 = context for the model, $2 = status line for the user. Also records this session in
+  # onboarded/<session id>: its presence tells the UserPromptSubmit hook that the session has heard
+  # from the plugin, its content (the pid of the Claude Code process) lets a later start tell a
+  # session that is still running from one that ended. Records older than a month are dropped so
+  # the directory does not grow without bound; chain entries older than three months likewise.
   if [ "$have_jq" -eq 1 ]; then
     jq -n --arg ctx "$1" --arg msg "$2" \
       '{systemMessage: $msg, hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $ctx}}'
@@ -182,11 +298,12 @@ emit() {
     printf '{"systemMessage":"%s","hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%s"}}\n' \
       "$(printf '%s' "$2" | json_escape)" "$(printf '%s' "$1" | json_escape)"
   fi
-  case "$session_id" in
-    ""|*/*|.*) ;;
-    *) mkdir -p "$data_dir/onboarded" 2>/dev/null && : > "$data_dir/onboarded/$session_id" 2>/dev/null ;;
-  esac
+  if [ -n "$session_id" ]; then
+    mkdir -p "$data_dir/onboarded" 2>/dev/null \
+      && printf '%s\n' "${CLAUDE_PID:-$PPID}" > "$data_dir/onboarded/$session_id" 2>/dev/null
+  fi
   find "$data_dir/onboarded" -type f -mtime +30 -delete 2>/dev/null
+  find "$data_dir/chain" -type f -mtime +90 -delete 2>/dev/null
 }
 
 if [ "$source" = "resume" ] || [ "$source" = "compact" ]; then
@@ -198,42 +315,49 @@ if [ "$source" = "resume" ] || [ "$source" = "compact" ]; then
     cache_note=$(cache_status)
     [ -n "$cache_note" ] && msg="seamless: resume; $cache_note The session is asked to load the save skill before working on."
   fi
-  emit "[seamless] seamless is installed: before any further work, invoke the seamless:save skill once to load its rules, and keep the handoff living." \
-       "$msg"
+  ctx="[seamless] seamless is installed: before any further work, invoke the seamless:save skill once to load its rules, and keep the handoff living."
+  # A resumed session has its context back, but the handoff documents its predecessors kept are
+  # the ones it should go on updating; a compacted session already knows them.
+  if [ "$source" = "resume" ] && [ -n "$chain_handoffs" ]; then
+    ctx="$ctx
+Handoff documents kept by the session(s) this one continues from (nearest first):"
+    while IFS= read -r p; do
+      ctx="$ctx
+  $p"
+    done <<EOF_CHAIN
+$chain_handoffs
+EOF_CHAIN
+  fi
+  emit "$ctx" "$msg"
   exit 0
 fi
 
 # --- previous session ----------------------------------------------------------------------------
 
 prev=""
-prev_how=""
+skipped=0
 
-# After /clear, prefer the transcript the SessionEnd hook marked as cleared, if the marker is
-# recent (a stale marker would belong to an earlier clear whose successor never started).
-if [ "$source" = "clear" ] && [ -f "$marker" ]; then
-  marked=$(json_str transcript_path < "$marker")
-  marked_at=$(json_str cleared_at < "$marker")
-  now=$(date +%s)
-  if [ -n "$marked" ] && [ -f "$marked" ] && [ "$marked" != "$transcript" ] \
-     && [ $(( now - ${marked_at:-0} )) -lt 600 ]; then
-    prev="$marked"
-    prev_how="the session that was just cleared"
-  fi
-  rm -f "$marker" 2>/dev/null
-fi
-
-if [ -z "$prev" ] && [ -d "$project_dir" ]; then
+if [ -n "$prev_id" ]; then
+  prev=$(transcript_of "$prev_id")
+elif [ -d "$project_dir" ]; then
+  # No chain and no bridge: an older Claude Code, a hook that did not run, or a process that died
+  # between /clear and this start. Take the newest other transcript in this project, skipping
+  # sessions recorded as still running in another process: those are neighbours, not predecessors.
   prev_list=$(ls -t "$project_dir"/*.jsonl 2>/dev/null)
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     [ "$f" = "$transcript" ] && continue
+    if session_live "$(basename "$f" .jsonl)"; then
+      skipped=$(( skipped + 1 ))
+      continue
+    fi
     prev="$f"
     break
   done <<EOF_PREV
 $prev_list
 EOF_PREV
   if [ "$source" = "clear" ]; then
-    prev_how="the newest transcript in this project, presumably the session that was just cleared"
+    prev_how="the newest transcript in this project, presumably the session that was just cleared (no bridge was found for this process)"
   else
     prev_how="the last time Claude Code ran in this directory"
   fi
@@ -284,11 +408,15 @@ if [ -n "$prev" ]; then
       prev_note="; more than a day old, so it may be unrelated to what the user wants now"
     fi
   fi
+  [ "$skipped" -gt 0 ] && prev_note="$prev_note; $skipped transcript(s) of sessions still running in parallel were skipped"
   ctx="$ctx
 Previous session: $prev_id — $prev_how (last activity $prev_when$prev_note)"
+elif [ -n "$prev_id" ]; then
+  ctx="$ctx
+Previous session: $prev_id — $prev_how; its transcript is no longer on disk, so nothing can be quoted from it."
 else
   ctx="$ctx
-Previous session: none found for this project."
+Previous session: none found for this project.$([ "$skipped" -gt 0 ] && printf ' %s transcript(s) belong to sessions still running in parallel and were skipped.' "$skipped")"
 fi
 
 if [ -n "$prev" ] && [ "$have_jq" -eq 1 ]; then
@@ -386,11 +514,28 @@ done <<EOF_DIRS
 $handoff_dirs
 EOF_DIRS
 
+if [ -n "$chain_handoffs" ]; then
+  ctx="$ctx
+Handoff documents kept by the previous session(s) (nearest session first; the first one is the document to read):"
+  while IFS= read -r p; do
+    ctx="$ctx
+  $p"
+  done <<EOF_CHAIN
+$chain_handoffs
+EOF_CHAIN
+fi
+
 if [ -n "$(printf '%s' "$handoff_lines" | tr -d '[:space:]')" ]; then
   ctx="$ctx
 Handoff documents (newest per directory, absolute paths):
-$(printf '%s' "$handoff_lines")
+$(printf '%s' "$handoff_lines")"
+  if [ -n "$chain_handoffs" ]; then
+    ctx="$ctx
+Now: before asking the user what they were working on, read the first document listed under \"kept by the previous session(s)\" with the seamless:restore skill; other sessions may be running in this directory, so a newer file in the per-directory list is not necessarily this session's. Right after that, invoke the seamless:save skill once, even though there is nothing to write yet: that loads its rules (where the document lives, how it is named, when and what to write) into this session, which has not read them. Without that step the document gets edited by guesswork."
+  else
+    ctx="$ctx
 Now: before asking the user what they were working on, read the newest handoff with the seamless:restore skill. If more than one directory is listed, ask the user which one applies instead of guessing. Right after that, invoke the seamless:save skill once, even though there is nothing to write yet: that loads its rules (where the document lives, how it is named, when and what to write) into this session, which has not read them. Without that step the document gets edited by guesswork."
+  fi
 else
   ctx="$ctx
 Handoff documents: none found under the startup directory or its ancestors.

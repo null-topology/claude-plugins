@@ -1,10 +1,18 @@
 #!/bin/sh
 # SessionEnd hook for the seamless plugin. POSIX sh: runs under dash, ash, bash and zsh.
 #
-# When a session ends because of /clear, remember which transcript was cleared, so that the
-# SessionStart hook of the session that replaces it can read exactly that transcript instead of
-# guessing "the newest one". One small JSON marker per project, in the plugin's data directory.
-# Works without jq: the hook input is flat JSON and the marker is written by hand.
+# When a session ends because of /clear, leave a bridge for the session that replaces it. The
+# SessionEnd hook knows only the old session id and the SessionStart hook only the new one; what
+# both see is the process they run in, because /clear keeps the process and swaps the session.
+# The bridge is an empty file whose name carries everything:
+#
+#   <plugin data>/bridge/<key>=<old session id>
+#
+# where <key> identifies the process: the CRC of CLAUDE_CODE_MESSAGING_TOKEN (a per-process
+# random token; only its checksum is ever written), or the process id when the token is missing.
+# Several sessions running in parallel in the same directory have different keys, so the new
+# session finds exactly the transcript that was cleared in its own process, never a neighbour's.
+# The SessionStart hook turns the bridge into a permanent chain entry and deletes it.
 #
 # Usage: session-end-mark.sh <plugin data dir>
 
@@ -23,28 +31,44 @@ json_str() {
   fi
 }
 
-json_escape() {
-  tab=$(printf '\t')
-  sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e "s/$tab/\\\\t/g" \
-    | awk 'BEGIN { ORS = "" } { if (NR > 1) printf "\\n"; printf "%s", $0 }'
+bridge_key() {
+  # The identity of the Claude Code process both hooks of a /clear run in. Same function in the
+  # SessionStart hook; the two must agree.
+  if [ -n "${CLAUDE_CODE_MESSAGING_TOKEN:-}" ]; then
+    printf 'tok-%s' "$(printf '%s' "$CLAUDE_CODE_MESSAGING_TOKEN" | cksum | cut -d' ' -f1)"
+  elif [ -n "${CLAUDE_PID:-}" ]; then
+    printf 'pid-%s' "$CLAUDE_PID"
+  else
+    printf 'pid-%s' "$PPID"
+  fi
 }
 
 reason=$(printf '%s' "$input" | json_str reason)
 [ "$reason" = "clear" ] || exit 0
 
-transcript=$(printf '%s' "$input" | json_str transcript_path)
-[ -n "$transcript" ] || exit 0
+session_id=$(printf '%s' "$input" | json_str session_id)
+if [ -z "$session_id" ]; then
+  transcript=$(printf '%s' "$input" | json_str transcript_path)
+  [ -n "$transcript" ] && session_id=$(basename "$transcript" .jsonl)
+fi
+case "$session_id" in
+  ""|*/*|*=*|.*) exit 0 ;;
+esac
 
 data_dir="${1:-}"
 case "$data_dir" in
   ""|*'${CLAUDE_PLUGIN_DATA}'*) data_dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/data/seamless" ;;
 esac
 
-project_slug=$(basename "$(dirname "$transcript")")
-mkdir -p "$data_dir/cleared" 2>/dev/null || exit 0
+key=$(bridge_key)
 
-printf '{"transcript_path":"%s","cleared_at":%s}\n' \
-  "$(printf '%s' "$transcript" | json_escape)" "$(date +%s)" \
-  > "$data_dir/cleared/$project_slug.json" 2>/dev/null
+# SEAMLESS_DEBUG=1 appends one line per hook run to <plugin data>/debug.log, for troubleshooting.
+case "${SEAMLESS_DEBUG:-}" in
+  1|true|yes) mkdir -p "$data_dir" 2>/dev/null && printf '%s SessionEnd reason=%s session_id=%s bridge=%s\n' \
+    "$(date '+%Y-%m-%d %H:%M:%S')" "$reason" "$session_id" "$key" >> "$data_dir/debug.log" 2>/dev/null ;;
+esac
+
+mkdir -p "$data_dir/bridge" 2>/dev/null || exit 0
+: > "$data_dir/bridge/$key=$session_id" 2>/dev/null
 
 exit 0

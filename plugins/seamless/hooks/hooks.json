@@ -1,5 +1,5 @@
 {
-  "description": "On startup and after /clear, hands the new session the previous one's context (startup directory, last prompt, last message or actions, handoff documents, recently edited files) and the standing rule to keep a living handoff. On resume and after compaction, one sentence asking the session to load the save skill. On /clear the ending session leaves a marker so the new one reads exactly the cleared transcript. On each prompt, a session that never received any of that (plugin installed while it was running) gets the same sentence once.",
+  "description": "On startup and after /clear, hands the new session the previous one's context (startup directory, last prompt, last message or actions, the handoffs its predecessors kept, recently edited files) and the standing rule to keep a living handoff. On resume, one sentence asking the session to load the save skill plus the predecessors' handoffs; after compaction, the sentence alone. On /clear the ending session leaves a bridge keyed to its process, so the new session in that process finds exactly the cleared session even with other sessions running in the same directory; the link is then recorded in a chain of session ids. On each prompt, a session that never received any of that (plugin installed while it was running) gets the same sentence once.",
   "hooks": {
     "SessionEnd": [
       {

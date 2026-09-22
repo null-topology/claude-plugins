@@ -42,10 +42,14 @@ This plugin closes the gap from both sides:
 - **`/seamless:restore`** reads that document in a fresh session and continues from it.
 - A **`SessionStart` hook** runs on `startup` and `clear` and hands the new session, before its
   first message: the startup directory, the previous session's last prompt, the handoff documents
-  that exist for the project, the files edited most recently, and the standing rule to keep the
-  handoff living. That is usually enough to resume without a question, even when no handoff was
-  written, and it means nothing has to be added to `CLAUDE.md`. On `resume` and `compact` the
-  same hook says one sentence: load the save skill before working on.
+  that session and its predecessors kept, the handoff documents that exist for the project, the
+  files edited most recently, and the standing rule to keep the handoff living. That is usually
+  enough to resume without a question, even when no handoff was written, and it means nothing has
+  to be added to `CLAUDE.md`. On `resume` and `compact` the same hook says one sentence: load the
+  save skill before working on; on `resume` it adds the predecessors' handoffs.
+- A **`SessionEnd` hook** runs on `/clear` and leaves a bridge from the session that just ended
+  to the one that replaces it, keyed to the process they share. Several sessions in one directory
+  never get each other's context (see "Which session was the previous one" below).
 - A **`UserPromptSubmit` hook** covers the one case no session event can: the plugin was
   installed or reloaded while the session was already running. It costs one file check per
   prompt and speaks once, if ever (see "Sessions that predate the plugin" below).
@@ -99,9 +103,11 @@ Lock added and applied; the plan is clean. Left for you: decide whether the dorm
 Recently edited in the previous session (most recent first):
   /path/to/project/.claude/handoffs/2026-09-15-handoff-plugin.md
   /path/to/project/services/analytics/.infrastructure/locals.tf
+Handoff documents kept by the previous session(s) (nearest session first; the first one is the document to read):
+  /path/to/project/.claude/handoffs/2026-09-15-handoff-plugin.md
 Handoff documents (newest per directory, absolute paths):
-  /path/to/project/.claude/handoffs/2026-09-15-handoff-plugin.md (modified 2026-09-15 17:18; 3 file(s) in this directory)
-Now: before asking the user what they were working on, read the newest handoff with the seamless:restore skill. … Right after that, invoke the seamless:save skill once, even though there is nothing to write yet: that loads its rules …
+  /path/to/project/.claude/handoffs/2026-09-15-sentry-lock.md (modified 2026-09-15 17:20; 3 file(s) in this directory)
+Now: before asking the user what they were working on, read the first document listed under "kept by the previous session(s)" with the seamless:restore skill; other sessions may be running in this directory, so a newer file in the per-directory list is not necessarily this session's. Right after that, invoke the seamless:save skill once, even though there is nothing to write yet: that loads its rules …
 Standing rule: the user relies on this plugin to /clear at any moment without losing the thread. Keep a living handoff document: … Never create or edit a handoff document in a session that has not invoked the seamless:save skill …
 ```
 
@@ -148,8 +154,8 @@ it. Two ways to look at it:
 
 - **Debug log.** Set `SEAMLESS_DEBUG=1` the same way and every hook run appends one line to
   `debug.log` in the plugin's data directory (`~/.claude/plugins/data/seamless-<marketplace>/`):
-  time, event, source, session id, transcript path, and for the prompt hook whether the marker
-  was present. Off by default; nothing is logged otherwise.
+  time, event, source, session id, the predecessor found, the bridge key, transcript path, and
+  for the prompt hook whether the marker was present. Off by default; nothing is logged otherwise.
 
 The hook reads only the current project's own transcript directory under `~/.claude/projects/`,
 so context from another project never leaks into this one. A directory that has never had a
@@ -163,7 +169,10 @@ and `compact` keeps the same session with a summary, so on those two the hook sa
 ```
 
 A summary may have dropped the rule, and a resumed session may predate the plugin; the sentence
-costs a few dozen tokens per resume. `fork` inherits the parent's context and gets nothing.
+costs a few dozen tokens per resume. On `resume` the hook also lists the handoff documents the
+session's predecessors kept, when the chain knows any (see below): a resumed session has its
+context back, but it should keep updating the same document rather than start another. `fork`
+inherits the parent's context and gets nothing.
 
 On `resume` the status line also tells you what continuing will cost. Claude Code hands the hook
 how long the resumed transcript has been idle, how many tokens its context holds and whether the
@@ -182,22 +191,44 @@ A Claude Code without these fields (before 2.1.251) gets the plain sentence.
 ### Sessions that predate the plugin
 
 Install the plugin from inside a running session, `/reload-plugins`, and keep typing: no session
-event fires, so the hooks above never speak. For that case the `SessionStart` hook leaves an
-empty marker file named after the session id under the plugin's data directory whenever it has
-spoken, and a `UserPromptSubmit` hook checks for that file on every prompt. Marker present: it
-exits at once, one `stat` and no output. Marker absent: the session started before the plugin
-was loaded, so the hook injects the sentence above with that prompt, shows you one status line
-saying so, and leaves the marker. The transcript is never read, whatever its size. Markers older
-than a month are deleted at the next session start.
+event fires, so the hooks above never speak. For that case the `SessionStart` hook leaves a
+marker file named after the session id under the plugin's data directory whenever it has spoken,
+and a `UserPromptSubmit` hook checks for that file on every prompt. Marker present: it exits at
+once, one `stat` and no output. Marker absent: the session started before the plugin was loaded,
+so the hook injects the sentence above with that prompt, shows you one status line saying so, and
+leaves the marker. The transcript is never read, whatever its size. The marker holds the pid of
+the Claude Code process, which later starts use to tell a session that is still running from one
+that ended. Markers older than a month are deleted at the next session start.
 
-How it knows which session was the previous one:
+### Which session was the previous one
 
-- **After `/clear`** a `SessionEnd` hook (reason `clear`) has just written a marker naming the
-  transcript that was cleared, in the plugin's data directory. The `SessionStart` hook reads
-  exactly that transcript and removes the marker. If the marker is missing or older than ten
-  minutes it falls back to the newest transcript in the project other than the current one.
-- **At `startup`** it takes the newest transcript in the project other than the current one, which
-  is simply the last time Claude Code ran in this directory, and says how old it is.
+Several sessions may run in the same directory at once, and a session id says nothing about which
+one came before it. Claude Code's hooks give the ending session only its own id and the starting
+session only its own; what both see is the process they run in, because `/clear` keeps the
+process and swaps the session. The plugin turns that into a durable record, all of it under the
+plugin's data directory as empty files whose names carry the facts:
+
+- **Bridge.** On `/clear` the `SessionEnd` hook creates `bridge/<key>=<old session id>`. The key
+  is the checksum of `CLAUDE_CODE_MESSAGING_TOKEN`, a random token Claude Code gives each process;
+  only the checksum is written, never the token. Without the token (older Claude Code) the key is
+  the process id. Two sessions in two processes have two keys, so a session never picks up a
+  neighbour's bridge.
+- **Chain.** Every `SessionStart`, whatever its source, resolves the predecessor the same way.
+  First the chain: `chain/<old id>=<this id>` exists when this session consumed its bridge once
+  before; a resume, a respawn or a restart keeps the session id, so the link is found again.
+  Then the bridge under this process's key: it becomes a chain entry and is deleted. Neither: the
+  session has no predecessor on record. The predecessor of any session is one `ls chain/*=<id>`;
+  its successors are `ls chain/<id>=*`; the whole history is a walk.
+- **Fallback.** With neither chain nor bridge (older Claude Code, a hook that did not run, a
+  process killed between `/clear` and the next start) the hook takes the newest transcript in the
+  project other than the current one, skipping sessions recorded as still running in another
+  process, and says in the context that it guessed. At `startup` that transcript is simply the
+  last time Claude Code ran in this directory, and the hook says how old it is.
+
+The handoff documents follow the chain: the hook reads the transcripts of the predecessor and up
+to four sessions before it, takes the handoff files they wrote or edited, and lists them nearest
+session first as "kept by the previous session(s)". That list, not the newest file in the
+directory, is what the new session is told to read. The per-directory list stays for orientation.
 
 ## Handoff documents
 
@@ -219,9 +250,14 @@ not touch `.gitignore`.
 
 ## Known limits
 
-- **Parallel sessions in one project.** After `/clear` the marker makes the choice exact. On
-  `startup` "previous session" is the newest transcript other than the current one; if it was
-  written less than a minute ago, the hook says it may belong to a session still running.
+- **Parallel sessions in one project.** After `/clear` the bridge makes the choice exact. On
+  `startup` a fresh session has no predecessor by definition; "previous session" is then the
+  newest transcript other than the current one, minus the sessions known to be still running,
+  and if it was written less than a minute ago the hook says it may belong to a session still
+  running. Sessions the plugin never saw start (it was installed later) cannot be recognised as
+  running.
+- **A process that dies between `/clear` and the next start** leaves a bridge nobody can match;
+  it is deleted after an hour, and the new session falls back to the newest transcript.
 - **mtime is not trusted alone.** `git checkout`, `clone` and `rsync` reset it. The date in the
   filename is the reference; when the two disagree by more than a day the hook says so.
 - **Only Write/Edit/NotebookEdit calls count as edits.** Files changed through shell commands are
@@ -235,10 +271,16 @@ plugins/seamless/
 ├── .claude-plugin/plugin.json
 ├── hooks/hooks.json                  SessionEnd "clear", SessionStart "startup|clear|resume|compact", UserPromptSubmit
 ├── scripts/
-│   ├── session-end-mark.sh           marks the transcript that /clear just closed
-│   ├── session-start-context.sh      builds the context for the new session; one sentence on resume/compact
+│   ├── session-end-mark.sh           on /clear: bridge from the closed session to the process
+│   ├── session-start-context.sh      resolves the predecessor (chain, bridge, fallback), builds the context
 │   └── user-prompt-onboard.sh        once per session that predates the plugin: the same sentence
 └── skills/
     ├── save/SKILL.md                 /seamless:save
     └── restore/SKILL.md              /seamless:restore
+
+~/.claude/plugins/data/seamless-<marketplace>/
+├── bridge/<key>=<session id>         left by /clear, consumed by the next start in the same process
+├── chain/<old id>=<new id>           one empty file per transition; the durable record
+├── onboarded/<session id>            the session has heard from the plugin; content: its process id
+└── debug.log                         only with SEAMLESS_DEBUG=1
 ```
