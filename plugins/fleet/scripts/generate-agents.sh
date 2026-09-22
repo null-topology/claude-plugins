@@ -50,11 +50,13 @@ mkdir -p "$agents" "$(dirname "$reference")"
 rm -f "$agents"/*.md
 
 jq -r '.models[] | .id as $id | .name as $name | .efforts | to_entries[]
-       | [$id, $name, .key, .value.index, .value.usd, .value.tps, (.value.usd_estimated // false)] | @tsv' "$models" |
+       | [$id, $name, .key, .value.index, .value.usd, (.value.tps // "none"), (.value.usd_estimated // false)] | @tsv' "$models" |
 while IFS="$(printf '\t')" read -r id name effort index usd tps estimated; do
   cost=$(printf '$%.2f per task' "$usd")
   [ "$estimated" = true ] && cost="$cost (estimated)"
-  benchmark="Benchmark $snapshot; Index $index, $cost, $tps output tokens/s."
+  speed="$tps output tokens/s"
+  [ "$tps" = none ] && speed="output speed not published"
+  benchmark="Benchmark $snapshot; Index $index, $cost, $speed."
   if [ "$effort" = default ]; then
     agent=$id
     lead="Executor subagent on $name."
@@ -77,7 +79,7 @@ jq -r '.snapshot as $s
     "| Model | Effort | Index | $ per task | Index per $ | Output tokens/s |",
     "|---|---|---:|---:|---:|---:|",
     (.models[] | .name as $n | .efforts | to_entries[]
-      | "| \($n) | \(if .key == "default" then "n/a" else .key end) | \(.value.index) | \(.value.usd)\(if .value.usd_estimated then " est." else "" end) | \((.value.index / .value.usd * 10 | round) / 10) | \(.value.tps) |")
+      | "| \($n) | \(if .key == "default" then "n/a" else .key end) | \(.value.index) | \(.value.usd)\(if .value.usd_estimated then " est." else "" end) | \((.value.index / .value.usd * 10 | round) / 10) | \(.value.tps // "not published") |")
 ' "$models" > "$reference"
 
 echo "generated $(ls "$agents" | wc -l | tr -d ' ') agents in $agents and $reference"

@@ -1,6 +1,6 @@
 ---
 name: gpt-5.6-terra-low
-description: Executor subagent on GPT-5.6 Terra at low reasoning effort. Use for straightforward tasks of any size, where the steps are clear and there are no real decision points. Benchmark Artificial Analysis Intelligence Index v4.3, 2026-09-12; Index 28, $0.09 per task (estimated), 79 output tokens/s. Follows the prompt literally; does not invent scope.
+description: Executor subagent on GPT-5.6 Terra at low reasoning effort. Use for straightforward tasks of any size, where the steps are clear and there are no real decision points. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-09-22; Index 27, $0.14 per task, 75 output tokens/s. Follows the prompt literally; does not invent scope.
 model: gpt-5.6-terra
 effort: low
 ---

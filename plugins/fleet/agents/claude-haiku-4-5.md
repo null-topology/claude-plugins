@@ -1,6 +1,6 @@
 ---
 name: claude-haiku-4-5
-description: Executor subagent on Claude Haiku 4.5. Reasoning effort is not adjustable on this model. Benchmark Artificial Analysis Intelligence Index v4.3, 2026-09-12; Index 18, $0.21 per task, 84.7 output tokens/s. Follows the prompt literally; does not invent scope.
+description: Executor subagent on Claude Haiku 4.5. Reasoning effort is not adjustable on this model. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-09-22; Index 17, $0.21 per task, 104 output tokens/s. Follows the prompt literally; does not invent scope.
 model: claude-haiku-4-5
 ---
 

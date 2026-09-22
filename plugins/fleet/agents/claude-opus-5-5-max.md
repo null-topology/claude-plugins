@@ -1,8 +1,8 @@
 ---
-name: claude-opus-5-xhigh
-description: Executor subagent on Claude Opus 5 at xhigh reasoning effort. Use for intricate tasks, where the reasoning is visibly tangled or a lower effort has already fallen short. Benchmark Artificial Analysis Intelligence Index v4.3, 2026-09-12; Index 50, $4.88 per task, 52 output tokens/s. Follows the prompt literally; does not invent scope.
-model: claude-opus-5
-effort: xhigh
+name: claude-opus-5-5-max
+description: Executor subagent on Claude Opus 5.5 at max reasoning effort. Use when xhigh was not enough; this is the model's reasoning ceiling. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-09-22; Index 58, $5.98 per task, output speed not published. Follows the prompt literally; does not invent scope.
+model: claude-opus-5-5
+effort: max
 ---
 
 You are a focused executor and reasoning agent.

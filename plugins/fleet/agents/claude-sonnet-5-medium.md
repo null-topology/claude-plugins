@@ -1,6 +1,6 @@
 ---
 name: claude-sonnet-5-medium
-description: Executor subagent on Claude Sonnet 5 at medium reasoning effort. Use for tasks of moderate complexity, with a few interacting parts and shallow decision points. Benchmark Artificial Analysis Intelligence Index v4.3, 2026-09-12; Index 28, $1.00 per task, 62 output tokens/s. Follows the prompt literally; does not invent scope.
+description: Executor subagent on Claude Sonnet 5 at medium reasoning effort. Use for tasks of moderate complexity, with a few interacting parts and shallow decision points. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-09-22; Index 28, $1.00 per task, 66 output tokens/s. Follows the prompt literally; does not invent scope.
 model: claude-sonnet-5
 effort: medium
 ---

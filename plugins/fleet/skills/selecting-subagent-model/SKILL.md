@@ -7,12 +7,12 @@ description: Use when choosing or revising a sub-agent model and reasoning effor
 
 Choose a suitable model and reasoning effort for the assigned task. First satisfy its capability requirements; then compare appropriate alternatives using evidence about quality, latency, and avoidable rework. This skill guides selection without prescribing a new agent lifecycle, task taxonomy, or decision format.
 
-The fleet this skill selects from: GPT-6 Astra, Claude Fable 5.1 (top tier); Claude Opus 5, GPT-5.6 Sol (middle); GPT-5.6 Luna (bottom). Use the model and effort options exposed by the actual invocation tool; the agent descriptions there state each rung's role and are kept in agreement with this document.
+The fleet this skill selects from: GPT-6 Astra, Claude Fable 5.1 (top tier); Claude Opus 5.5, GPT-5.6 Sol (middle); GPT-5.6 Luna (bottom). Use the model and effort options exposed by the actual invocation tool; the agent descriptions there state each rung's role and are kept in agreement with this document.
 
 ## Selection policy
 
 - **Max is allowed only for GPT-5.6 Luna.** For every other model, consider an appropriate lower effort or another eligible model. Luna max is an option when the task needs it, not a default.
-- **Low is allowed only for GPT-6 Astra, Claude Opus 5, and Claude Fable 5.1.** Sol is explicitly excluded. Permission to use low does not override a stricter requirement attached to the assigned work.
+- **Low is allowed only for GPT-6 Astra, Claude Opus 5.5, and Claude Fable 5.1.** Sol is explicitly excluded. Permission to use low does not override a stricter requirement attached to the assigned work.
 - **Luna medium requires caution.** Prefer high unless the work is simple, fully specified, reversible, and independently checkable for correctness and completeness. Explain why medium is sufficient in the existing declaration. Format validation alone is not enough. Unclear requirements or weak verification are reasons to avoid medium.
 - Keep the existing task constraints: complex development requires at least Opus high; architecture requires Astra/Fable medium or above. These are capability requirements for the assigned work, not a taxonomy of agent roles. Do not infer cross-model developer equivalence from equal AA scores alone.
 - Use the model and effort options exposed by the actual invocation tool. This document supplies selection judgment rather than duplicating parameter validation.
@@ -23,10 +23,10 @@ The fleet this skill selects from: GPT-6 Astra, Claude Fable 5.1 (top tier); Cla
 These come from observed experience with this fleet. No benchmark exposes them, and they apply before any benchmark comparison.
 
 - **GPT-5.6 Sol is not for complex development.** It does not reliably anticipate the bottlenecks such work has to be designed around. Use Sol for review, research, and test work. A review curated by Sol at high or above, fanning findings out to micro-agents on Luna at xhigh or max, is a proven pattern; Sol at medium does not hold the curator role.
-- **Claude Fable 5.1 draws on a separate capacity pool.** Prefer GPT-6 Astra when it is available, then Claude Opus 5 at high when that is enough, and take Fable when the work needs the top tier on an Anthropic model. This is a capacity constraint, not a price argument.
+- **Claude Fable 5.1 draws on a separate capacity pool.** Prefer GPT-6 Astra when it is available, then Claude Opus 5.5 at high when that is enough, and take Fable when the work needs the top tier on an Anthropic model. This is a capacity constraint, not a price argument.
 - **On the top tier (Astra, Fable), effort tracks complexity, not size.** Both hold volume at every effort, so a large but straightforward task is a legitimate low. Raise effort for interacting parts, real decision points, and easy-to-miss details, not for file count or prompt length.
 - **Either vendor may be unavailable, and each ladder is complete on its own.** When one side is down, route within the other side without lowering the task's floors; a cross-vendor substitution below is a routing candidate for a live task, never a reason to treat a rung as redundant.
-- **Code review runs below the implementation rung.** Review of code written by a subagent goes to Claude Opus 5 one effort rung below the effort the code was written at (floor: low), or to GPT-5.6 Sol at that Opus review rung plus one (floor: medium, since Sol low is prohibited). The rule keys on the implementation effort alone, whichever model wrote the code (Opus, Astra, or Fable). Never review at the implementation rung or above, and never on Astra or Fable.
+- **Code review runs below the implementation rung.** Review of code written by a subagent goes to Claude Opus 5.5 one effort rung below the effort the code was written at (floor: low), or to GPT-5.6 Sol at that Opus review rung plus one (floor: medium, since Sol low is prohibited). The rule keys on the implementation effort alone, whichever model wrote the code (Opus, Astra, or Fable). Never review at the implementation rung or above, and never on Astra or Fable.
 
   | Code written at (any model) | Review on Opus | Review on Sol |
   |---|---|---|
@@ -58,24 +58,24 @@ Prefer sufficient capability, dependable completion, useful response time, and l
 
 ## Benchmark reference and limitations
 
-Benchmark: **Artificial Analysis Intelligence Index v4.3**, reference date **2026-09-12**. Treat the values below as historical routing priors, not live measurements or availability guarantees. Independent verification of every entry is not established; retain the uncertainty and conflicts documented below. Only models present in the fleet are listed.
+Benchmark: **Artificial Analysis Intelligence Index v4.3.2**, reference date **2026-09-22**. Treat the values below as historical routing priors, not live measurements or availability guarantees. Independent verification of every entry is not established; retain the uncertainty and conflicts documented below. Only models present in the fleet are listed.
 
-Each cell: **Index / USD per AA task / output tokens per second**. All values belong to v4.3 only. `‡` marks provisional promotional economics. Prohibited low/max entries and caution-only medium entries are retained as historical evidence, not routing permissions.
+Each cell: **Index / USD per AA task / output tokens per second**. All values belong to v4.3.2 only. `‡` marks provisional promotional economics. Prohibited low/max entries and caution-only medium entries are retained as historical evidence, not routing permissions.
 
 | Model | low | medium | high | xhigh | max — only Luna eligible |
 |---|---|---|---|---|---|
-| GPT-5.6 Luna | 22 / .01 / 105 | 25 / .02 / 104 | 32 / .04 / 102 | 35 / .09 / 116 | 38 / .18 / 116 |
-| GPT-5.6 Sol‡ | 34 / .26 / 55 | 39 / .50 / 57.5 | 42 / .81 / 60 | 44 / 1.18 / 61 | 47 / 1.99 / 59.6 |
-| GPT-6 Astra | 46 / .82 / 51.2 | 50 / 1.54 / 49.9 | 51 / 1.72 / 48.5 | 53 / 2.31 / 53.4 | 53 / 3.26 / 53.9 |
-| Claude Opus 5 | 40 / 1.10 / 48 | 45 / 2.19 / 49 | 48 / 3.61 / 50 | 50 / 4.88 / 52 | 51 / 5.86 / 50 |
-| Claude Fable 5.1 | 47 / 2.37 / 46.6 | 49 / 2.98 / 56.2 | 51 / 3.91 / 49 | 53 / 5.98 / 60 | 53 / 7.63 / 65.4 |
+| GPT-5.6 Luna | 21 / .01 / 131 | 25 / .02 / 129 | 32 / .04 / 130 | 35 / .09 / 136 | 37 / .18 / 144 |
+| GPT-5.6 Sol‡ | 33 / .26 / 58 | 39 / .50 / 58 | 42 / .81 / 64 | 44 / 1.18 / 69 | 47 / 1.99 / 73 |
+| GPT-6 Astra | 46 / .82 / 50 | 50 / 1.54 / 47 | 51 / 1.73 / 49 | 52 / 2.31 / 54 | 53 / 3.26 / 58 |
+| Claude Opus 5.5 | 42 / .55 / 86 | 51 / 1.34 / 76 | 54 / 1.82 / 85 | 56 / 3.46 / 74 | 58 / 5.98 / not published |
+| Claude Fable 5.1 | 47 / 2.37 / 55 | 49 / 2.98 / 55 | 51 / 3.91 / 56 | 53 / 5.98 / 59 | 53 / 7.63 / 65 |
 
 Preserve these caveats when using the data:
 
-- **Fable safety fallback:** Evaluation includes Anthropic's default fallback; approximately 4% of output tokens across the index came from Opus 4.8/Opus 5. The per-effort share is unknown. This measures a fallback-enabled configuration, not pure Fable; do not disable safeguards for comparison. If runtime fallback differs or is unknown, reduce comparability.
-- **Cache pricing is excluded from the benchmark cost comparison.** Historical cache-read rates are .25 USD/M for Fable and 1.00 USD/M for Astra. These historical rates may narrow the gap at high cache hit rates, but cannot establish a Fable win without full input/output/cache-write/cache-read accounting.
+- **Anthropic safety fallback:** Fable 5.1 and Opus 5.5 are both measured with Anthropic's default fallback. For Fable, approximately 4% of output tokens across the v4.3 index came from Opus 4.8/Opus 5; the per-effort share is unknown, and no share is published for Opus 5.5. These measure fallback-enabled configurations, not the pure models; do not disable safeguards for comparison. If runtime fallback differs or is unknown, reduce comparability.
+- **Cache pricing is excluded from the benchmark cost comparison.** Cache-read rates are .25 USD/M for Fable, .20 USD/M for Opus 5.5 and 1.00 USD/M for Astra. These rates may narrow the gap at high cache hit rates, but cannot establish a win without full input/output/cache-write/cache-read accounting.
 - **Promotion provisional:** Sol 4/20 USD/M is stated to run through at least 2026-11-21, but the repricing step embedded in AA cost is ambiguous. Treat this price as provisional benchmark context, not a subscription charge; do not assume the promotion automatically ends on that exact date.
-- Speed and TTFT are rolling metrics, with reported snapshot variation of 10–15%. Complete per-variant TTFT is unavailable. Fable max has approximately 295 s and Astra max approximately 340 s to first token; neither adds Index over xhigh. Higher tokens/s does not guarantee a faster verified answer.
+- Speed and TTFT are rolling metrics, with reported snapshot variation of 10–15%. Complete per-variant TTFT is unavailable. Fable max has approximately 295 s and Astra max approximately 340 s to first token (v4.3 figures); Fable max adds no Index over xhigh, Astra max adds one point. Opus 5.5 max output speed is not published. Higher tokens/s does not guarantee a faster verified answer.
 - Non-reasoning cost is unpublished; quality scores are preliminary. Astra non-reasoning has a 45/48 conflict. Never replace missing values with zero.
 - When AA version, model, price, fallback, or harness changes, refresh the comparable dataset as a whole. Until refreshed, retain old values with their date and reduced confidence; do not call them current.
 
@@ -83,18 +83,20 @@ Preserve these caveats when using the data:
 
 For comparable AA measurements, B dominates A on the benchmark's cost/Index axes when its Index is no lower and its API cost/task is no higher, with at least one strict improvement. That establishes neither subscription savings nor task-specific dominance. Apply the selection policy, the fleet constraints, and assigned constraints before considering any replacement.
 
-The historical measured frontier includes Luna low through max, Sol medium/high, and Astra low through xhigh. The eligible set differs: Luna low is prohibited, Luna medium is caution-only, and task constraints may remove other points. Unknown latency or conflicting evidence cannot establish dominance on those dimensions.
+The historical measured frontier includes Luna low through max, Sol medium, Opus 5.5 low through max, and Astra low. The eligible set differs: Luna low and Opus max are prohibited, Luna medium is caution-only, and task constraints may remove other points. Unknown latency or conflicting evidence cannot establish dominance on those dimensions.
 
 | Pair to replace | Preferred substitute to evaluate | Snapshot basis |
 |---|---|---|
-| Sol low | Luna xhigh | 35/.09 instead of 34/.26; Sol low is prohibited anyway |
+| Sol low | Luna xhigh | 35/.09 instead of 33/.26; Sol low is prohibited anyway |
+| Sol high | Opus low | Same 42 at .55 instead of .81; check that the work allows Opus in Sol's place |
 | Sol xhigh | Astra low | 46/.82 instead of 44/1.18 |
-| Sol max | Astra medium | Strict AA substitution: 50/1.54 instead of 47/1.99; Sol max is prohibited anyway |
+| Sol max | Opus medium **or** Astra medium | Strict AA substitution: 51/1.34 or 50/1.54 instead of 47/1.99; Sol max is prohibited anyway |
 | Sol max | Astra low **or** Fable low | Astra 46/.82 loses 1 Index; allowed only if the floor still holds. Fable 47/2.37 preserves Index but costs more and sits behind Astra on capacity priority |
-| Opus low / medium / high / xhigh | Astra low / low / medium / medium | Respectively ≥Index and cheaper; check Claude-specific requirements |
-| Opus max | Astra high or Fable high | Same 51; 1.72 or 3.91 instead of 5.86; Opus max is prohibited anyway |
-| Fable low / medium / high / xhigh | Astra medium / medium / high / xhigh | ≥Index at lower cost and consistent with the Fable capacity priority; reassess cache, fallback, and specialization |
-| Fable max / Astra max | Its own xhigh | Same 53 at lower cost; max prohibited by policy |
+| Astra medium / high | Opus medium | 51/1.34 instead of 50/1.54 and 51/1.73; the architecture floor names Astra/Fable, so check task constraints first |
+| Astra xhigh / max | Opus high | 54/1.82 instead of 52/2.31 and 53/3.26; Astra max is prohibited anyway |
+| Fable low / medium / high | Astra medium / medium / high, or Opus medium | ≥Index at lower cost and consistent with the Fable capacity priority; reassess cache, fallback, and specialization |
+| Fable xhigh | Opus high | 54/1.82 instead of 53/5.98; Astra xhigh (52/2.31) loses 1 Index |
+| Fable max | Fable xhigh | Same 53 at lower cost; max prohibited by policy |
 
 Do not choose a model merely from tokens/s or reject a suitable model merely because its benchmark API cost is higher. Prefer relevant evidence about quality, completion time, and rework. General benchmark dominance does not establish task-specific suitability or subscription savings.
 
@@ -115,7 +117,7 @@ Do not choose a model merely from tokens/s or reject a suitable model merely bec
 | Sol proposed for a feature that has to be designed around a bottleneck | Exclude Sol regardless of its Index; route to Astra or Fable, or Opus at high or above |
 | A review of a large change | Sol at high or above curating, findings fanned out to Luna xhigh/max micro-agents; not a single large reviewer |
 | Review of code a subagent wrote at Opus high (or Astra/Fable high) | Opus medium or Sol high; not Opus high, not the model that wrote it at the same effort, never Fable |
-| Sol max proposed | Evaluate Astra medium to preserve or improve benchmark Index; Astra low loses an Index point, and Fable low costs more on the benchmark. Apply task requirements first |
+| Sol max proposed | Evaluate Opus medium or Astra medium to preserve or improve benchmark Index; Astra low loses an Index point, and Fable low costs more on the benchmark. Apply task requirements first |
 | Fable proposed while Astra is available | Prefer Astra, then Opus high if that is enough; Fable when the work needs the top tier on an Anthropic model |
 | Large but straightforward top-tier task (many files, clear steps, no decision points) | Astra or Fable at low; size alone does not raise effort |
 | Complex development | Preserve the Opus high minimum; do not substitute Astra medium solely because of AA scores |

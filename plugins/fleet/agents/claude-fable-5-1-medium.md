@@ -1,6 +1,6 @@
 ---
 name: claude-fable-5-1-medium
-description: Executor subagent on Claude Fable 5.1 at medium reasoning effort. Use for tasks of moderate complexity, with a few interacting parts and shallow decision points. Benchmark Artificial Analysis Intelligence Index v4.3, 2026-09-12; Index 49, $2.98 per task, 56.2 output tokens/s. Follows the prompt literally; does not invent scope.
+description: Executor subagent on Claude Fable 5.1 at medium reasoning effort. Use for tasks of moderate complexity, with a few interacting parts and shallow decision points. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-09-22; Index 49, $2.98 per task, 55 output tokens/s. Follows the prompt literally; does not invent scope.
 model: claude-fable-5-1
 effort: medium
 ---

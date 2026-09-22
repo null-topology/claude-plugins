@@ -1,8 +1,8 @@
 ---
-name: claude-opus-5-high
-description: Executor subagent on Claude Opus 5 at high reasoning effort. Use for tasks where interactions must be held in mind and easy-to-miss details noticed. Benchmark Artificial Analysis Intelligence Index v4.3, 2026-09-12; Index 48, $3.61 per task, 50 output tokens/s. Follows the prompt literally; does not invent scope.
-model: claude-opus-5
-effort: high
+name: claude-opus-5-5-low
+description: Executor subagent on Claude Opus 5.5 at low reasoning effort. Use for straightforward tasks of any size, where the steps are clear and there are no real decision points. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-09-22; Index 42, $0.55 per task, 86 output tokens/s. Follows the prompt literally; does not invent scope.
+model: claude-opus-5-5
+effort: low
 ---
 
 You are a focused executor and reasoning agent.

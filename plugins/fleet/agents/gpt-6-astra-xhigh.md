@@ -1,6 +1,6 @@
 ---
 name: gpt-6-astra-xhigh
-description: Executor subagent on GPT-6 Astra at xhigh reasoning effort. Use for intricate tasks, where the reasoning is visibly tangled or a lower effort has already fallen short. Benchmark Artificial Analysis Intelligence Index v4.3, 2026-09-12; Index 53, $2.31 per task, 53.4 output tokens/s. Follows the prompt literally; does not invent scope.
+description: Executor subagent on GPT-6 Astra at xhigh reasoning effort. Use for intricate tasks, where the reasoning is visibly tangled or a lower effort has already fallen short. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-09-22; Index 52, $2.31 per task, 54 output tokens/s. Follows the prompt literally; does not invent scope.
 model: gpt-6-astra
 effort: xhigh
 ---

@@ -1,6 +1,6 @@
 ---
 name: gpt-6-astra-max
-description: Executor subagent on GPT-6 Astra at max reasoning effort. Use when xhigh was not enough; this is the model's reasoning ceiling. Benchmark Artificial Analysis Intelligence Index v4.3, 2026-09-12; Index 53, $3.26 per task, 53.9 output tokens/s. Follows the prompt literally; does not invent scope.
+description: Executor subagent on GPT-6 Astra at max reasoning effort. Use when xhigh was not enough; this is the model's reasoning ceiling. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-09-22; Index 53, $3.26 per task, 58 output tokens/s. Follows the prompt literally; does not invent scope.
 model: gpt-6-astra
 effort: max
 ---
