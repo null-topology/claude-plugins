@@ -5,15 +5,13 @@
 # resumed or compacted session has its context already; the sentence only makes sure the rules
 # of the save skill get loaded, since a summary may have dropped them or the session may predate
 # the plugin. Whatever the source, it records the session in onboarded/<session id> under the
-# plugin data directory (content: the pid of the Claude Code process); the UserPromptSubmit hook
-# uses the file to spot a session that never got any SessionStart from this plugin (installed
-# while the session was running), and later starts use the pid to skip sessions still running.
+# plugin data directory (an empty file); the UserPromptSubmit hook uses the file to spot a session
+# that never got any SessionStart from this plugin (installed while the session was running).
 #
-# On a fresh session (source "startup" or "clear") it looks at the previous session's transcript
-# in the current project's own directory under ~/.claude/projects/ and hands the new session a few
-# facts: the startup directory, what the previous session was asked and what it last did, the
-# handoff documents that exist for this project, the files edited most recently, and the standing
-# rule to keep a living handoff so the user can /clear at any time.
+# On a fresh session (source "startup" or "clear") it hands the new session a few facts: the
+# startup directory, the handoff documents that exist for this project, the standing rule to keep
+# a living handoff so the user can /clear at any time, and, when the chain names a predecessor,
+# what that session was asked, what it last did and which files it edited.
 #
 # Which session is "the previous session" is resolved the same way on every source:
 #   1. the chain: <plugin data>/chain/<old id>=<this id> exists when this session already consumed
@@ -21,9 +19,9 @@
 #   2. the bridge: <plugin data>/bridge/<key>=<old id>, left by the SessionEnd hook of the session
 #      that /clear just closed in this same process (<key> identifies the process, see
 #      session-end-mark.sh). It is turned into a chain entry and deleted;
-#   3. neither: no predecessor on record. On "startup" and "clear" the hook then falls back to the
-#      newest transcript in the project directory other than the current one, skipping sessions
-#      recorded as still running in another process, and says that it guessed.
+#   3. neither: no predecessor on record, and none is guessed. A new process starts a new chain.
+#      The newest transcript in the directory is not a predecessor: with several sessions running
+#      in one directory it is as likely a neighbour's, so the block says there is none instead.
 # The chain is the durable record: one empty file per transition, any depth by walking it.
 #
 # jq is optional. Without it the transcript cannot be parsed, so the previous session's prompt,
@@ -33,8 +31,8 @@
 #
 # It reads only the current project's transcript directory (and, for a session id from the
 # chain, that session's own transcript), so context from other projects never surfaces. It
-# writes only under the plugin data directory: the chain entry, the pid of this session in
-# onboarded/<session id>, and the removal of the bridge it consumed.
+# writes only under the plugin data directory: the chain entry, the onboarded/<session id> marker,
+# and the removal of the bridge it consumed.
 #
 # Usage: session-start-context.sh <plugin data dir>
 
@@ -162,17 +160,6 @@ chain_prev() {
   done
 }
 
-session_live() {
-  # True when session $1 is recorded as running in a Claude Code process other than this one:
-  # the SessionStart and UserPromptSubmit hooks write the pid into onboarded/<session id>, and
-  # that pid still belongs to a live claude process. Sessions the plugin never saw are not live.
-  sl_pid=$(head -1 "$data_dir/onboarded/$1" 2>/dev/null | tr -dc '0-9')
-  [ -n "$sl_pid" ] || return 1
-  [ "$sl_pid" = "${CLAUDE_PID:-$PPID}" ] && return 1
-  kill -0 "$sl_pid" 2>/dev/null || return 1
-  ps -o command= -p "$sl_pid" 2>/dev/null | grep -q claude
-}
-
 transcript_of() {
   # Transcript of session id $1: this project's directory first, any other project otherwise
   # (the chain does not care where a session started).
@@ -288,9 +275,8 @@ esac
 emit() {
   # $1 = context for the model, $2 = status line for the user. Also records this session in
   # onboarded/<session id>: its presence tells the UserPromptSubmit hook that the session has heard
-  # from the plugin, its content (the pid of the Claude Code process) lets a later start tell a
-  # session that is still running from one that ended. Records older than a month are dropped so
-  # the directory does not grow without bound; chain entries older than three months likewise.
+  # from the plugin. Records older than a month are dropped so the directory does not grow without
+  # bound; chain entries older than three months likewise.
   if [ "$have_jq" -eq 1 ]; then
     jq -n --arg ctx "$1" --arg msg "$2" \
       '{systemMessage: $msg, hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $ctx}}'
@@ -299,8 +285,7 @@ emit() {
       "$(printf '%s' "$2" | json_escape)" "$(printf '%s' "$1" | json_escape)"
   fi
   if [ -n "$session_id" ]; then
-    mkdir -p "$data_dir/onboarded" 2>/dev/null \
-      && printf '%s\n' "${CLAUDE_PID:-$PPID}" > "$data_dir/onboarded/$session_id" 2>/dev/null
+    mkdir -p "$data_dir/onboarded" 2>/dev/null && : > "$data_dir/onboarded/$session_id" 2>/dev/null
   fi
   find "$data_dir/onboarded" -type f -mtime +30 -delete 2>/dev/null
   find "$data_dir/chain" -type f -mtime +90 -delete 2>/dev/null
@@ -334,34 +319,9 @@ fi
 
 # --- previous session ----------------------------------------------------------------------------
 
+# Only the chain names a predecessor. Without it there is none: no transcript is picked by age.
 prev=""
-skipped=0
-
-if [ -n "$prev_id" ]; then
-  prev=$(transcript_of "$prev_id")
-elif [ -d "$project_dir" ]; then
-  # No chain and no bridge: an older Claude Code, a hook that did not run, or a process that died
-  # between /clear and this start. Take the newest other transcript in this project, skipping
-  # sessions recorded as still running in another process: those are neighbours, not predecessors.
-  prev_list=$(ls -t "$project_dir"/*.jsonl 2>/dev/null)
-  while IFS= read -r f; do
-    [ -n "$f" ] || continue
-    [ "$f" = "$transcript" ] && continue
-    if session_live "$(basename "$f" .jsonl)"; then
-      skipped=$(( skipped + 1 ))
-      continue
-    fi
-    prev="$f"
-    break
-  done <<EOF_PREV
-$prev_list
-EOF_PREV
-  if [ "$source" = "clear" ]; then
-    prev_how="the newest transcript in this project, presumably the session that was just cleared (no bridge was found for this process)"
-  else
-    prev_how="the last time Claude Code ran in this directory"
-  fi
-fi
+[ -n "$prev_id" ] && prev=$(transcript_of "$prev_id")
 
 # --- handoff directories: startup dir, ancestors below $HOME, descendants --------------------------
 
@@ -392,31 +352,23 @@ EOF_FOUND
 if [ "$source" = "clear" ]; then
   ctx="[seamless] This session replaces one the user just cleared. Context recovered:"
 else
-  ctx="[seamless] Context recovered for this project at session start:"
+  ctx="[seamless] New session. What is on record for this project at start:"
 fi
 ctx="$ctx
 Startup directory: $start_dir"
 
 if [ -n "$prev" ]; then
-  prev_id=$(basename "$prev" .jsonl)
-  prev_when=$(mtime_human "$prev")
-  prev_note=""
-  if [ "$source" = "startup" ]; then
-    if [ -n "$(find "$prev" -mmin -1 2>/dev/null)" ]; then
-      prev_note="; written less than a minute ago, so it may be a session still running in parallel"
-    elif [ -z "$(find "$prev" -mtime -1 2>/dev/null)" ]; then
-      prev_note="; more than a day old, so it may be unrelated to what the user wants now"
-    fi
-  fi
-  [ "$skipped" -gt 0 ] && prev_note="$prev_note; $skipped transcript(s) of sessions still running in parallel were skipped"
   ctx="$ctx
-Previous session: $prev_id — $prev_how (last activity $prev_when$prev_note)"
+Previous session: $prev_id — $prev_how (last activity $(mtime_human "$prev"))"
 elif [ -n "$prev_id" ]; then
   ctx="$ctx
 Previous session: $prev_id — $prev_how; its transcript is no longer on disk, so nothing can be quoted from it."
+elif [ "$source" = "clear" ]; then
+  ctx="$ctx
+Previous session: not on record. This process left no bridge when the user cleared, so the cleared session cannot be named, and none is guessed."
 else
   ctx="$ctx
-Previous session: none found for this project.$([ "$skipped" -gt 0 ] && printf ' %s transcript(s) belong to sessions still running in parallel and were skipped.' "$skipped")"
+Previous session: none. A new session has no predecessor on record; the chain links sessions only through /clear and resume. Other sessions may be running in this directory, and none of them is this session's past."
 fi
 
 if [ -n "$prev" ] && [ "$have_jq" -eq 1 ]; then
@@ -533,8 +485,13 @@ $(printf '%s' "$handoff_lines")"
     ctx="$ctx
 Now: before asking the user what they were working on, read the first document listed under \"kept by the previous session(s)\" with the seamless:restore skill; other sessions may be running in this directory, so a newer file in the per-directory list is not necessarily this session's. Right after that, invoke the seamless:save skill once, even though there is nothing to write yet: that loads its rules (where the document lives, how it is named, when and what to write) into this session, which has not read them. Without that step the document gets edited by guesswork."
   else
+    if [ -n "$prev_id" ]; then
+      why="the previous session on record kept no handoff document"
+    else
+      why="this session has no predecessor on record"
+    fi
     ctx="$ctx
-Now: before asking the user what they were working on, read the newest handoff with the seamless:restore skill. If more than one directory is listed, ask the user which one applies instead of guessing. Right after that, invoke the seamless:save skill once, even though there is nothing to write yet: that loads its rules (where the document lives, how it is named, when and what to write) into this session, which has not read them. Without that step the document gets edited by guesswork."
+Now: $why, so none of the documents listed is known to be this session's, and other sessions may be working on them. Do not restore one on your own: if the user refers to earlier work, ask which document applies and restore only that one with the seamless:restore skill. Before any work, invoke the seamless:save skill once, even though there is nothing to write yet: that loads its rules (where the document lives, how it is named, when and what to write) into this session, which has not read them. Without that step the document gets edited by guesswork."
   fi
 else
   ctx="$ctx
@@ -549,14 +506,17 @@ Standing rule: the user relies on this plugin to /clear at any moment without lo
 # the mechanism fired and that the session is waiting for a message. systemMessage is a top-level
 # field of the hook output, not part of hookSpecificOutput; Claude Code ignores it elsewhere.
 handoff_count=$(printf '%s' "$handoff_lines" | grep -c '^  ' 2>/dev/null | tr -d ' ')
-if [ -n "$prev" ]; then
-  prev_summary="previous session found"
+if [ -n "$prev_id" ]; then
+  prev_summary="previous session on record"
+elif [ "$source" = "clear" ]; then
+  prev_summary="cleared session not on record"
 else
-  prev_summary="no previous session"
+  prev_summary="new session, no predecessor"
 fi
 if [ "${handoff_count:-0}" -gt 0 ]; then
   if [ "$handoff_count" -eq 1 ]; then dirs_word="directory"; else dirs_word="directories"; fi
-  msg="seamless: $prev_summary, $handoff_count handoff $dirs_word listed. Send any message to resume."
+  if [ -n "$prev_id" ]; then next_step="resume"; else next_step="continue"; fi
+  msg="seamless: $prev_summary, $handoff_count handoff $dirs_word listed. Send any message to $next_step."
 else
   msg="seamless: $prev_summary, no handoff documents. Send any message to continue."
 fi

@@ -16,7 +16,8 @@ same directory, so a newer file in the per-directory list below it is not necess
 
 Otherwise, if the context lists `Handoff documents (newest per directory)`, start from that
 list — it was built at startup from the real filesystem and names the newest file in every
-handoff directory that belongs to this project.
+handoff directory that belongs to this project. Without the chain, nothing ties those files to
+this session: other sessions may be running in the same directory and keeping them.
 
 Otherwise resolve the startup directory (the `Startup directory:` line of that context, else the
 primary working directory in the system prompt, else the first `cwd` in this session's transcript:
@@ -35,10 +36,12 @@ document can look fresh.
 ## 2. Choose one
 
 - **The chain names a document** — read it; the questions below do not arise.
-- **One directory has handoffs** — read its newest document.
-- **Several directories do** — do not pick by mtime or by depth; any heuristic eventually picks
-  wrong silently. Show the candidates (path, filename date, mtime, first heading) and ask the user
-  which one applies. One question costs a line; a wrong guess costs the session.
+- **The user named the work** — read the document that matches what they named.
+- **Otherwise** — do not pick by mtime or by depth, not even when only one directory has
+  handoffs: the newest file there may belong to a session still running next to this one, and
+  any heuristic eventually picks wrong silently. Show the candidates (path, filename date, mtime,
+  first heading) and ask the user which one applies. One question costs a line; a wrong guess
+  costs the session.
 - A document that another handoff explicitly supersedes is not a candidate.
 
 ## 3. Rename old-format files on the way
