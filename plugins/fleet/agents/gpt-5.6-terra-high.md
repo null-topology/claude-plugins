@@ -1,6 +1,6 @@
 ---
 name: gpt-5.6-terra-high
-description: Executor subagent on GPT-5.6 Terra at high reasoning effort. Use for tasks where interactions must be held in mind and easy-to-miss details noticed. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-09-22; Index 34, $0.34 per task, 77 output tokens/s. Follows the prompt literally; does not invent scope.
+description: Executor subagent on GPT-5.6 Terra at high reasoning effort. Use for tasks where interactions must be held in mind and easy-to-miss details noticed. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-09-25; Index 34, $0.34 per task, 73 output tokens/s. Follows the prompt literally; does not invent scope.
 model: gpt-5.6-terra
 effort: high
 ---

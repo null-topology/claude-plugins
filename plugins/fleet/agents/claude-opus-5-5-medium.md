@@ -1,6 +1,6 @@
 ---
 name: claude-opus-5-5-medium
-description: Executor subagent on Claude Opus 5.5 at medium reasoning effort. Use for tasks of moderate complexity, with a few interacting parts and shallow decision points. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-09-22; Index 51, $1.34 per task, 76 output tokens/s. Follows the prompt literally; does not invent scope.
+description: Executor subagent on Claude Opus 5.5 at medium reasoning effort. Use for tasks of moderate complexity, with a few interacting parts and shallow decision points. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-09-25; Index 51, $1.34 per task, 76 output tokens/s. Follows the prompt literally; does not invent scope.
 model: claude-opus-5-5
 effort: medium
 ---

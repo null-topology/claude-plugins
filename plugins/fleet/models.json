@@ -1,7 +1,7 @@
 {
   "snapshot": {
     "benchmark": "Artificial Analysis Intelligence Index v4.3.2",
-    "date": "2026-09-22"
+    "date": "2026-09-25"
   },
   "models": [
     {
@@ -10,10 +10,10 @@
       "vendor": "Anthropic",
       "efforts": {
         "low":    { "index": 47, "usd": 2.37, "tps": 55 },
-        "medium": { "index": 49, "usd": 2.98, "tps": 55 },
+        "medium": { "index": 49, "usd": 2.98, "tps": 57 },
         "high":   { "index": 51, "usd": 3.91, "tps": 56 },
-        "xhigh":  { "index": 53, "usd": 5.98, "tps": 59 },
-        "max":    { "index": 53, "usd": 7.63, "tps": 65 }
+        "xhigh":  { "index": 53, "usd": 5.98, "tps": 60 },
+        "max":    { "index": 53, "usd": 7.63, "tps": 68 }
       }
     },
     {
@@ -33,10 +33,10 @@
       "name": "Claude Sonnet 5",
       "vendor": "Anthropic",
       "efforts": {
-        "low":    { "index": 24, "usd": 0.51, "tps": 61 },
+        "low":    { "index": 24, "usd": 0.51, "tps": 63 },
         "medium": { "index": 28, "usd": 1.00, "tps": 66 },
         "high":   { "index": 32, "usd": 1.79, "tps": 68 },
-        "xhigh":  { "index": 34, "usd": 2.87, "tps": 66 },
+        "xhigh":  { "index": 34, "usd": 2.87, "tps": 67 },
         "max":    { "index": 38, "usd": 5.09, "tps": 79 }
       }
     },
@@ -45,7 +45,7 @@
       "name": "Claude Haiku 4.5",
       "vendor": "Anthropic",
       "efforts": {
-        "default": { "index": 17, "usd": 0.21, "tps": 104 }
+        "default": { "index": 17, "usd": 0.21, "tps": 84.7 }
       }
     },
     {
@@ -53,11 +53,11 @@
       "name": "GPT-6 Astra",
       "vendor": "OpenAI",
       "efforts": {
-        "low":    { "index": 46, "usd": 0.82, "tps": 50 },
-        "medium": { "index": 50, "usd": 1.54, "tps": 47 },
+        "low":    { "index": 46, "usd": 0.82, "tps": 46 },
+        "medium": { "index": 50, "usd": 1.54, "tps": 45 },
         "high":   { "index": 51, "usd": 1.73, "tps": 49 },
-        "xhigh":  { "index": 52, "usd": 2.31, "tps": 54 },
-        "max":    { "index": 53, "usd": 3.26, "tps": 58 }
+        "xhigh":  { "index": 52, "usd": 2.31, "tps": 51 },
+        "max":    { "index": 53, "usd": 3.26, "tps": 52 }
       }
     },
     {
@@ -65,11 +65,11 @@
       "name": "GPT-6 Sol",
       "vendor": "OpenAI",
       "efforts": {
-        "low":    { "index": 34, "usd": 0.14, "tps": 124, "usd_estimated": true },
-        "medium": { "index": 40, "usd": 0.27, "tps": 114, "usd_estimated": true },
-        "high":   { "index": 43, "usd": 0.43, "tps": 138, "usd_estimated": true },
-        "xhigh":  { "index": 44, "usd": 0.63, "tps": 136, "usd_estimated": true },
-        "max":    { "index": 48, "usd": 1.06, "tps": 104 }
+        "low":    { "index": 34, "usd": 0.13, "tps": 92 },
+        "medium": { "index": 40, "usd": 0.25, "tps": 114 },
+        "high":   { "index": 43, "usd": 0.37, "tps": 96 },
+        "xhigh":  { "index": 44, "usd": 0.53, "tps": 101 },
+        "max":    { "index": 48, "usd": 1.06, "tps": 107 }
       }
     },
     {
@@ -77,11 +77,11 @@
       "name": "GPT-5.6 Terra",
       "vendor": "OpenAI",
       "efforts": {
-        "low":    { "index": 27, "usd": 0.14, "tps": 75 },
-        "medium": { "index": 30, "usd": 0.18, "tps": 77 },
-        "high":   { "index": 34, "usd": 0.34, "tps": 77 },
-        "xhigh":  { "index": 38, "usd": 0.63, "tps": 84 },
-        "max":    { "index": 42, "usd": 1.40, "tps": 82 }
+        "low":    { "index": 27, "usd": 0.14, "tps": 71 },
+        "medium": { "index": 30, "usd": 0.18, "tps": 79 },
+        "high":   { "index": 34, "usd": 0.34, "tps": 73 },
+        "xhigh":  { "index": 38, "usd": 0.63, "tps": 82 },
+        "max":    { "index": 42, "usd": 1.40, "tps": 83 }
       }
     },
     {
@@ -89,11 +89,11 @@
       "name": "GPT-6 Luna",
       "vendor": "OpenAI",
       "efforts": {
-        "low":    { "index": 21, "usd": 0.004, "tps": 152, "usd_estimated": true },
-        "medium": { "index": 29, "usd": 0.008, "tps": 143, "usd_estimated": true },
-        "high":   { "index": 32, "usd": 0.016, "tps": 127, "usd_estimated": true },
-        "xhigh":  { "index": 34, "usd": 0.035, "tps": 153, "usd_estimated": true },
-        "max":    { "index": 37, "usd": 0.07, "tps": 157 }
+        "low":    { "index": 21, "usd": 0.0045, "tps": 124 },
+        "medium": { "index": 29, "usd": 0.02, "tps": 143 },
+        "high":   { "index": 32, "usd": 0.03, "tps": 135 },
+        "xhigh":  { "index": 34, "usd": 0.04, "tps": 128 },
+        "max":    { "index": 37, "usd": 0.07, "tps": 132 }
       }
     }
   ]

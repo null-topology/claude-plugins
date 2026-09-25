@@ -1,6 +1,6 @@
 ---
 name: claude-sonnet-5-max
-description: Executor subagent on Claude Sonnet 5 at max reasoning effort. Use when xhigh was not enough; this is the model's reasoning ceiling. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-09-22; Index 38, $5.09 per task, 79 output tokens/s. Follows the prompt literally; does not invent scope.
+description: Executor subagent on Claude Sonnet 5 at max reasoning effort. Use when xhigh was not enough; this is the model's reasoning ceiling. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-09-25; Index 38, $5.09 per task, 79 output tokens/s. Follows the prompt literally; does not invent scope.
 model: claude-sonnet-5
 effort: max
 ---

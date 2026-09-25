@@ -1,6 +1,6 @@
 ---
 name: gpt-6-astra-high
-description: Executor subagent on GPT-6 Astra at high reasoning effort. Use for tasks where interactions must be held in mind and easy-to-miss details noticed. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-09-22; Index 51, $1.73 per task, 49 output tokens/s. Follows the prompt literally; does not invent scope.
+description: Executor subagent on GPT-6 Astra at high reasoning effort. Use for tasks where interactions must be held in mind and easy-to-miss details noticed. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-09-25; Index 51, $1.73 per task, 49 output tokens/s. Follows the prompt literally; does not invent scope.
 model: gpt-6-astra
 effort: high
 ---

@@ -1,6 +1,6 @@
 ---
 name: gpt-6-luna-low
-description: Executor subagent on GPT-6 Luna at low reasoning effort. Use for straightforward tasks of any size, where the steps are clear and there are no real decision points. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-09-22; Index 21, $0.004 per task (estimated), 152 output tokens/s. Follows the prompt literally; does not invent scope.
+description: Executor subagent on GPT-6 Luna at low reasoning effort. Use for straightforward tasks of any size, where the steps are clear and there are no real decision points. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-09-25; Index 21, $0.0045 per task, 124 output tokens/s. Follows the prompt literally; does not invent scope.
 model: gpt-6-luna
 effort: low
 ---

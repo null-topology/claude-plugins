@@ -1,6 +1,6 @@
 ---
 name: gpt-6-luna-medium
-description: Executor subagent on GPT-6 Luna at medium reasoning effort. Use for tasks of moderate complexity, with a few interacting parts and shallow decision points. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-09-22; Index 29, $0.008 per task (estimated), 143 output tokens/s. Follows the prompt literally; does not invent scope.
+description: Executor subagent on GPT-6 Luna at medium reasoning effort. Use for tasks of moderate complexity, with a few interacting parts and shallow decision points. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-09-25; Index 29, $0.02 per task, 143 output tokens/s. Follows the prompt literally; does not invent scope.
 model: gpt-6-luna
 effort: medium
 ---

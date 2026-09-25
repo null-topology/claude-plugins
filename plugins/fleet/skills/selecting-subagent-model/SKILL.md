@@ -58,23 +58,22 @@ Prefer sufficient capability, dependable completion, useful response time, and l
 
 ## Benchmark reference and limitations
 
-Benchmark: **Artificial Analysis Intelligence Index v4.3.2**, reference date **2026-09-22**. Treat the values below as historical routing priors, not live measurements or availability guarantees. Independent verification of every entry is not established; retain the uncertainty and conflicts documented below. Only models present in the fleet are listed.
+Benchmark: **Artificial Analysis Intelligence Index v4.3.2**, reference date **2026-09-25**. Treat the values below as historical routing priors, not live measurements or availability guarantees. Independent verification of every entry is not established; retain the uncertainty and conflicts documented below. Only models present in the fleet are listed.
 
-Each cell: **Index / USD per AA task / output tokens per second**. All values belong to v4.3.2 only. `est.` marks a cost AA has not published yet; the caveats below say how it was estimated. Prohibited low/max entries and caution-only medium entries are retained as historical evidence, not routing permissions.
+Each cell: **Index / USD per AA task / output tokens per second**. All values belong to v4.3.2 only and are published measurements. Prohibited low/max entries and caution-only medium entries are retained as historical evidence, not routing permissions.
 
 | Model | low | medium | high | xhigh | max — only Luna eligible |
 |---|---|---|---|---|---|
-| GPT-6 Luna | 21 / .004 est. / 152 | 29 / .008 est. / 143 | 32 / .016 est. / 127 | 34 / .035 est. / 153 | 37 / .07 / 157 |
-| GPT-6 Sol | 34 / .14 est. / 124 | 40 / .27 est. / 114 | 43 / .43 est. / 138 | 44 / .63 est. / 136 | 48 / 1.06 / 104 |
-| GPT-6 Astra | 46 / .82 / 50 | 50 / 1.54 / 47 | 51 / 1.73 / 49 | 52 / 2.31 / 54 | 53 / 3.26 / 58 |
+| GPT-6 Luna | 21 / .0045 / 124 | 29 / .02 / 143 | 32 / .03 / 135 | 34 / .04 / 128 | 37 / .07 / 132 |
+| GPT-6 Sol | 34 / .13 / 92 | 40 / .25 / 114 | 43 / .37 / 96 | 44 / .53 / 101 | 48 / 1.06 / 107 |
+| GPT-6 Astra | 46 / .82 / 46 | 50 / 1.54 / 45 | 51 / 1.73 / 49 | 52 / 2.31 / 51 | 53 / 3.26 / 52 |
 | Claude Opus 5.5 | 42 / .55 / 86 | 51 / 1.34 / 76 | 54 / 1.82 / 85 | 56 / 3.46 / 74 | 58 / 5.98 / not published |
-| Claude Fable 5.1 | 47 / 2.37 / 55 | 49 / 2.98 / 55 | 51 / 3.91 / 56 | 53 / 5.98 / 59 | 53 / 7.63 / 65 |
+| Claude Fable 5.1 | 47 / 2.37 / 55 | 49 / 2.98 / 57 | 51 / 3.91 / 56 | 53 / 5.98 / 60 | 53 / 7.63 / 68 |
 
 Preserve these caveats when using the data:
 
 - **Anthropic safety fallback:** Fable 5.1 and Opus 5.5 are both measured with Anthropic's default fallback. For Fable, approximately 4% of output tokens across the v4.3 index came from Opus 4.8/Opus 5; the per-effort share is unknown, and no share is published for Opus 5.5. These measure fallback-enabled configurations, not the pure models; do not disable safeguards for comparison. If runtime fallback differs or is unknown, reduce comparability.
 - **Cache pricing is excluded from the benchmark cost comparison.** Cache-read rates are .25 USD/M for Fable, .20 USD/M for Opus 5.5 and 1.00 USD/M for Astra. These rates may narrow the gap at high cache hit rates, but cannot establish a win without full input/output/cache-write/cache-read accounting.
-- **Estimated costs:** at the reference date AA publishes GPT-6 Sol and Luna cost per task only at max. The lower rungs are GPT-5.6 Sol and Luna per-rung costs scaled by the ratio of the max figures (Sol 1.06/1.99, Luna .07/.18). That assumes token use across efforts kept the GPT-5.6 profile, which AA has not confirmed. Any dominance that rests on an `est.` cost is provisional; replace the estimates with published figures when AA adds them.
 - Speed and TTFT are rolling metrics, with reported snapshot variation of 10–15%. Complete per-variant TTFT is unavailable. Fable max has approximately 295 s and Astra max approximately 340 s to first token (v4.3 figures); Fable max adds no Index over xhigh, Astra max adds one point. Opus 5.5 max output speed is not published. Higher tokens/s does not guarantee a faster verified answer.
 - Non-reasoning cost is unpublished; quality scores are preliminary. Astra non-reasoning has a 45/48 conflict. Never replace missing values with zero.
 - When AA version, model, price, fallback, or harness changes, refresh the comparable dataset as a whole. Until refreshed, retain old values with their date and reduced confidence; do not call them current.
@@ -83,14 +82,14 @@ Preserve these caveats when using the data:
 
 For comparable AA measurements, B dominates A on the benchmark's cost/Index axes when its Index is no lower and its API cost/task is no higher, with at least one strict improvement. That establishes neither subscription savings nor task-specific dominance. Apply the selection policy, the fleet constraints, and assigned constraints before considering any replacement.
 
-The historical measured frontier includes Luna low through max, Sol medium through max, Astra low, and Opus 5.5 medium through max; every Luna and Sol point below max rests on an estimated cost. The eligible set differs: Luna low, Sol max and Opus max are prohibited, Luna medium is caution-only, and task constraints may remove other points. Unknown latency or conflicting evidence cannot establish dominance on those dimensions.
+The historical measured frontier includes Luna low through max, Sol medium through max, Astra low, and Opus 5.5 medium through max. The eligible set differs: Luna low, Sol max and Opus max are prohibited, Luna medium is caution-only, and task constraints may remove other points. Unknown latency or conflicting evidence cannot establish dominance on those dimensions.
 
 | Pair to replace | Preferred substitute to evaluate | Snapshot basis |
 |---|---|---|
-| Sol low | Luna max **or** Luna xhigh | 37/.07 or 34/.035 est. instead of 34/.14 est.; all three costs are estimated, so the dominance is provisional |
-| Opus low | Sol high | 43/.43 est. instead of 42/.55; only for work Sol is allowed to do (review, research, tests), and the cost is estimated |
+| Sol low | Luna max **or** Luna xhigh | 37/.07 or 34/.04 instead of 34/.13 |
+| Opus low | Sol high | 43/.37 instead of 42/.55; only for work Sol is allowed to do (review, research, tests) |
 | Sol max | Opus medium **or** Astra medium | Preserves or raises Index at a higher benchmark cost: 51/1.34 or 50/1.54 instead of 48/1.06; Sol max is prohibited anyway |
-| Sol max | Astra low **or** Sol xhigh | 46/.82 or 44/.63 est. loses 2 or 4 Index; allowed only if the floor still holds |
+| Sol max | Astra low **or** Sol xhigh | 46/.82 or 44/.53 loses 2 or 4 Index; allowed only if the floor still holds |
 | Astra medium / high | Opus medium | 51/1.34 instead of 50/1.54 and 51/1.73; the architecture floor names Astra/Fable, so check task constraints first |
 | Astra xhigh / max | Opus high | 54/1.82 instead of 52/2.31 and 53/3.26; Astra max is prohibited anyway |
 | Fable low / medium / high | Astra medium / medium / high, or Opus medium | ≥Index at lower cost and consistent with the Fable capacity priority; reassess cache, fallback, and specialization |
@@ -98,6 +97,33 @@ The historical measured frontier includes Luna low through max, Sol medium throu
 | Fable max | Fable xhigh | Same 53 at lower cost; max prohibited by policy |
 
 Do not choose a model merely from tokens/s or reject a suitable model merely because its benchmark API cost is higher. Prefer relevant evidence about quality, completion time, and rework. General benchmark dominance does not establish task-specific suitability or subscription savings.
+
+## Recommended escalation path
+
+The frontier read from bottom to top as one ladder across both vendors. Each step is the cheapest measured point that reaches a higher Index than the step before it.
+
+| Step | Pair | Index / USD per AA task |
+|---:|---|---|
+| 1 | Luna low | 21 / .0045 |
+| 2 | Luna medium | 29 / .02 |
+| 3 | Luna high | 32 / .03 |
+| 4 | Luna xhigh | 34 / .04 |
+| 5 | Luna max | 37 / .07 |
+| 6 | Sol medium | 40 / .25 |
+| 7 | Sol high | 43 / .37 |
+| 8 | Sol xhigh | 44 / .53 |
+| 9 | Astra low | 46 / .82 |
+| 10 | Opus 5.5 medium | 51 / 1.34 |
+| 11 | Opus 5.5 high | 54 / 1.82 |
+| 12 | Opus 5.5 xhigh | 56 / 3.46 |
+| 13 | Opus 5.5 max | 58 / 5.98 |
+
+- Start at the lowest step whose capability the task needs, not at step 1, and skip steps when the work evidently needs more. Move up only after diagnosing a reasoning shortfall (see Revising a selection). The path orders candidates; it is not a sequence to walk.
+- The selection policy and the fleet constraints apply at every step. Luna low (step 1) is outside the low allowlist and Opus 5.5 max (step 13) outside the Luna-only max rule, so until the policy admits them the usable path runs from step 2 to step 12, and step 2 is caution-only.
+- Sol steps (6–8) take only the work Sol is allowed to do. Complex development enters at step 11 (Opus high). Architecture needs Astra/Fable medium or above, which is not on this path.
+- Sol max (48 / 1.06) is also on the frontier, between steps 9 and 10, and stays off the path because max is Luna-only.
+- Code review follows the review rule under Fleet constraints, not this path.
+- If a step's vendor is unavailable, route within the other vendor's ladder at an equal or higher Index, keeping the floors. The path is the preferred route, not the only one.
 
 ## Revising a selection
 

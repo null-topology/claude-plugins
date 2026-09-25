@@ -1,6 +1,6 @@
 ---
 name: claude-fable-5-1-high
-description: Executor subagent on Claude Fable 5.1 at high reasoning effort. Use for tasks where interactions must be held in mind and easy-to-miss details noticed. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-09-22; Index 51, $3.91 per task, 56 output tokens/s. Follows the prompt literally; does not invent scope.
+description: Executor subagent on Claude Fable 5.1 at high reasoning effort. Use for tasks where interactions must be held in mind and easy-to-miss details noticed. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-09-25; Index 51, $3.91 per task, 56 output tokens/s. Follows the prompt literally; does not invent scope.
 model: claude-fable-5-1
 effort: high
 ---

@@ -1,6 +1,6 @@
 ---
 name: gpt-6-luna-max
-description: Executor subagent on GPT-6 Luna at max reasoning effort. Use when xhigh was not enough; this is the model's reasoning ceiling. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-09-22; Index 37, $0.07 per task, 157 output tokens/s. Follows the prompt literally; does not invent scope.
+description: Executor subagent on GPT-6 Luna at max reasoning effort. Use when xhigh was not enough; this is the model's reasoning ceiling. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-09-25; Index 37, $0.07 per task, 132 output tokens/s. Follows the prompt literally; does not invent scope.
 model: gpt-6-luna
 effort: max
 ---
