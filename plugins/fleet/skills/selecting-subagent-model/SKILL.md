@@ -58,7 +58,7 @@ Prefer sufficient capability, dependable completion, useful response time, and l
 
 ## Benchmark reference and limitations
 
-Benchmark: **Artificial Analysis Intelligence Index v4.3.2**, reference date **2026-09-25**. Treat the values below as historical routing priors, not live measurements or availability guarantees. Independent verification of every entry is not established; retain the uncertainty and conflicts documented below. Only models present in the fleet are listed.
+Benchmark: **Artificial Analysis Intelligence Index v4.3.2**, reference date **2026-09-29**. Treat the values below as historical routing priors, not live measurements or availability guarantees. Independent verification of every entry is not established; retain the uncertainty and conflicts documented below. Only models present in the fleet are listed.
 
 Each cell: **Index / USD per AA task / output tokens per second**. All values belong to v4.3.2 only and are published measurements. Prohibited low/max entries and caution-only medium entries are retained as historical evidence, not routing permissions.
 

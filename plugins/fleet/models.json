@@ -1,7 +1,7 @@
 {
   "snapshot": {
     "benchmark": "Artificial Analysis Intelligence Index v4.3.2",
-    "date": "2026-09-25"
+    "date": "2026-09-29"
   },
   "models": [
     {
@@ -29,15 +29,16 @@
       }
     },
     {
-      "id": "claude-sonnet-5",
-      "name": "Claude Sonnet 5",
+      "id": "claude-sonnet-5-5",
+      "name": "Claude Sonnet 5.5",
       "vendor": "Anthropic",
+      "provisional": true,
       "efforts": {
-        "low":    { "index": 24, "usd": 0.51, "tps": 63 },
-        "medium": { "index": 28, "usd": 1.00, "tps": 66 },
-        "high":   { "index": 32, "usd": 1.79, "tps": 68 },
-        "xhigh":  { "index": 34, "usd": 2.87, "tps": 67 },
-        "max":    { "index": 38, "usd": 5.09, "tps": 79 }
+        "low":    { "index": 36, "usd": 0.41, "tps": 92.6 },
+        "medium": { "index": 41, "usd": 0.59, "tps": null },
+        "high":   { "index": 47, "usd": 1.08, "tps": null },
+        "xhigh":  { "index": null, "usd": null, "tps": null },
+        "max":    { "index": 56, "usd": 7.60, "tps": 139 }
       }
     },
     {

@@ -1,8 +1,8 @@
 ---
-name: claude-sonnet-5-high
-description: Executor subagent on Claude Sonnet 5 at high reasoning effort. Use for tasks where interactions must be held in mind and easy-to-miss details noticed. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-09-25; Index 32, $1.79 per task, 68 output tokens/s. Follows the prompt literally; does not invent scope.
-model: claude-sonnet-5
-effort: high
+name: claude-sonnet-5-5-medium
+description: Executor subagent on Claude Sonnet 5.5 at medium reasoning effort. Use for tasks of moderate complexity, with a few interacting parts and shallow decision points. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-09-29, provisional; Index 41, $0.59 per task, output speed not published. Follows the prompt literally; does not invent scope.
+model: claude-sonnet-5-5
+effort: medium
 ---
 
 You are a focused executor and reasoning agent.

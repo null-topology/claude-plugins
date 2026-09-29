@@ -1,7 +1,8 @@
-# Artificial Analysis Intelligence Index v4.3.2, snapshot 2026-09-25
+# Artificial Analysis Intelligence Index v4.3.2, snapshot 2026-09-29
 
 Historical routing priors, not live measurements. Index is higher-is-better; cost is USD per
-benchmark task; est. marks a cost the benchmark did not publish. Generated from models.json.
+benchmark task; est. marks a cost the benchmark did not publish; (provisional) marks a model
+whose figures the benchmark has announced it will re-run. Generated from models.json.
 
 | Model | Effort | Index | $ per task | Index per $ | Output tokens/s |
 |---|---|---:|---:|---:|---:|
@@ -15,11 +16,11 @@ benchmark task; est. marks a cost the benchmark did not publish. Generated from 
 | Claude Opus 5.5 | high | 54 | 1.82 | 29.7 | 85 |
 | Claude Opus 5.5 | xhigh | 56 | 3.46 | 16.2 | 74 |
 | Claude Opus 5.5 | max | 58 | 5.98 | 9.7 | not published |
-| Claude Sonnet 5 | low | 24 | 0.51 | 47.1 | 63 |
-| Claude Sonnet 5 | medium | 28 | 1.00 | 28 | 66 |
-| Claude Sonnet 5 | high | 32 | 1.79 | 17.9 | 68 |
-| Claude Sonnet 5 | xhigh | 34 | 2.87 | 11.8 | 67 |
-| Claude Sonnet 5 | max | 38 | 5.09 | 7.5 | 79 |
+| Claude Sonnet 5.5 (provisional) | low | 36 | 0.41 | 87.8 | 92.6 |
+| Claude Sonnet 5.5 (provisional) | medium | 41 | 0.59 | 69.5 | not published |
+| Claude Sonnet 5.5 (provisional) | high | 47 | 1.08 | 43.5 | not published |
+| Claude Sonnet 5.5 (provisional) | xhigh | not published | not published | n/a | not published |
+| Claude Sonnet 5.5 (provisional) | max | 56 | 7.60 | 7.4 | 139 |
 | Claude Haiku 4.5 | n/a | 17 | 0.21 | 81 | 84.7 |
 | GPT-6 Astra | low | 46 | 0.82 | 56.1 | 46 |
 | GPT-6 Astra | medium | 50 | 1.54 | 32.5 | 45 |

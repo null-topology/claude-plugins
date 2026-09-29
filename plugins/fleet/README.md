@@ -9,8 +9,9 @@ inside a policy written in one place.
   and, where the model supports effort control, an effort in its frontmatter; no hooks, no rules —
   those live elsewhere.
 - `models.json` — the models the plugin knows: id, name, vendor, the effort rungs each one
-  supports, and a dated benchmark snapshot per rung. The single place to edit when a model or a
-  provider appears.
+  supports, and a dated benchmark snapshot per rung (`null` where a figure is not published,
+  `"provisional": true` on a model whose figures the benchmark has announced it will re-run).
+  The single place to edit when a model or a provider appears.
 - `scripts/generate-agents.sh` — deletes `agents/*.md` and regenerates them from `models.json`,
   then rewrites the benchmark table under `skills/selecting-subagent-model/references/`. Its
   output is committed; the plugin ships files, not a build step.

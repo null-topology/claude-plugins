@@ -49,16 +49,23 @@ render() {
 mkdir -p "$agents" "$(dirname "$reference")"
 rm -f "$agents"/*.md
 
-jq -r '.models[] | .id as $id | .name as $name | .efforts | to_entries[]
-       | [$id, $name, .key, .value.index, .value.usd, (.value.tps // "none"), (.value.usd_estimated // false)] | @tsv' "$models" |
-while IFS="$(printf '\t')" read -r id name effort index usd tps estimated; do
+# A figure the benchmark has not published is null in models.json and "none" here. A model marked
+# provisional has figures the benchmark has announced it will re-run.
+jq -r '.models[] | .id as $id | .name as $name | (.provisional // false) as $provisional | .efforts | to_entries[]
+       | [$id, $name, .key, (.value.index // "none"), (.value.usd // "none"), (.value.tps // "none"), (.value.usd_estimated // false), $provisional] | @tsv' "$models" |
+while IFS="$(printf '\t')" read -r id name effort index usd tps estimated provisional; do
+  figures="Index $index"
+  [ "$index" = none ] && figures="Index not published"
   # Costs under a dime keep up to four decimals so they do not collapse to $0.00; trailing zeros
   # beyond the second decimal are dropped ($0.0045, $0.02).
-  cost=$(awk -v u="$usd" 'BEGIN { s = sprintf(u < 0.01 ? "%.4f" : u < 0.1 ? "%.3f" : "%.2f", u); while (s ~ /0$/ && length(s) - index(s, ".") > 2) sub(/0$/, "", s); printf "$%s per task", s }')
+  cost="cost per task not published"
+  [ "$usd" = none ] || cost=$(awk -v u="$usd" 'BEGIN { s = sprintf(u < 0.01 ? "%.4f" : u < 0.1 ? "%.3f" : "%.2f", u); while (s ~ /0$/ && length(s) - index(s, ".") > 2) sub(/0$/, "", s); printf "$%s per task", s }')
   [ "$estimated" = true ] && cost="$cost (estimated)"
   speed="$tps output tokens/s"
   [ "$tps" = none ] && speed="output speed not published"
-  benchmark="Benchmark $snapshot; Index $index, $cost, $speed."
+  basis=$snapshot
+  [ "$provisional" = true ] && basis="$snapshot, provisional"
+  benchmark="Benchmark $basis; $figures, $cost, $speed."
   if [ "$effort" = default ]; then
     agent=$id
     lead="Executor subagent on $name."
@@ -76,12 +83,13 @@ jq -r '.snapshot as $s
   | "# \($s.benchmark), snapshot \($s.date)",
     "",
     "Historical routing priors, not live measurements. Index is higher-is-better; cost is USD per",
-    "benchmark task; est. marks a cost the benchmark did not publish. Generated from models.json.",
+    "benchmark task; est. marks a cost the benchmark did not publish; (provisional) marks a model",
+    "whose figures the benchmark has announced it will re-run. Generated from models.json.",
     "",
     "| Model | Effort | Index | $ per task | Index per $ | Output tokens/s |",
     "|---|---|---:|---:|---:|---:|",
-    (.models[] | .name as $n | .efforts | to_entries[]
-      | "| \($n) | \(if .key == "default" then "n/a" else .key end) | \(.value.index) | \(.value.usd)\(if .value.usd_estimated then " est." else "" end) | \((.value.index / .value.usd * 10 | round) / 10) | \(.value.tps // "not published") |")
+    (.models[] | "\(.name)\(if .provisional then " (provisional)" else "" end)" as $n | .efforts | to_entries[]
+      | "| \($n) | \(if .key == "default" then "n/a" else .key end) | \(.value.index // "not published") | \(if .value.usd then "\(.value.usd)\(if .value.usd_estimated then " est." else "" end)" else "not published" end) | \(if .value.index and .value.usd then (.value.index / .value.usd * 10 | round) / 10 else "n/a" end) | \(.value.tps // "not published") |")
 ' "$models" > "$reference"
 
 echo "generated $(ls "$agents" | wc -l | tr -d ' ') agents in $agents and $reference"
