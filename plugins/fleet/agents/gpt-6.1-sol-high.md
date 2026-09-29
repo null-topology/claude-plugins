@@ -1,7 +1,7 @@
 ---
-name: gpt-6-sol-high
-description: Executor subagent on GPT-6 Sol at high reasoning effort. Use for tasks where interactions must be held in mind and easy-to-miss details noticed. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-09-29; Index 43, $0.37 per task, 96 output tokens/s. Follows the prompt literally; does not invent scope.
-model: gpt-6-sol
+name: gpt-6.1-sol-high
+description: Executor subagent on GPT-6.1 Sol at high reasoning effort. Use for tasks where interactions must be held in mind and easy-to-miss details noticed. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-09-29; Index 50, $0.32 per task, 66 output tokens/s. Follows the prompt literally; does not invent scope.
+model: gpt-6.1-sol
 effort: high
 ---
 

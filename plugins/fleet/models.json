@@ -62,15 +62,15 @@
       }
     },
     {
-      "id": "gpt-6-sol",
-      "name": "GPT-6 Sol",
+      "id": "gpt-6.1-sol",
+      "name": "GPT-6.1 Sol",
       "vendor": "OpenAI",
       "efforts": {
-        "low":    { "index": 34, "usd": 0.13, "tps": 92 },
-        "medium": { "index": 40, "usd": 0.25, "tps": 114 },
-        "high":   { "index": 43, "usd": 0.37, "tps": 96 },
-        "xhigh":  { "index": 44, "usd": 0.53, "tps": 101 },
-        "max":    { "index": 48, "usd": 1.06, "tps": 107 }
+        "low":    { "index": 42, "usd": 0.13, "tps": 74 },
+        "medium": { "index": 48, "usd": 0.21, "tps": 62 },
+        "high":   { "index": 50, "usd": 0.32, "tps": 66 },
+        "xhigh":  { "index": 51, "usd": 0.39, "tps": 64 },
+        "max":    { "index": 52, "usd": 0.72, "tps": 67 }
       }
     },
     {

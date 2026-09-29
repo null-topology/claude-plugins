@@ -7,12 +7,12 @@ description: Use when choosing or revising a sub-agent model and reasoning effor
 
 Choose a suitable model and reasoning effort for the assigned task. First satisfy its capability requirements; then compare appropriate alternatives using evidence about quality, latency, and avoidable rework. This skill guides selection without prescribing a new agent lifecycle, task taxonomy, or decision format.
 
-The fleet this skill selects from: GPT-6 Astra, Claude Fable 5.1 (top tier); Claude Opus 5.5, GPT-6 Sol (middle); GPT-6 Luna (bottom). Use the model and effort options exposed by the actual invocation tool; the agent descriptions there state each rung's role and are kept in agreement with this document.
+The fleet this skill selects from: GPT-6 Astra, Claude Fable 5.1 (top tier); Claude Opus 5.5, GPT-6.1 Sol (middle); GPT-6 Luna (bottom). Use the model and effort options exposed by the actual invocation tool; the agent descriptions there state each rung's role and are kept in agreement with this document.
 
 ## Selection policy
 
 - **Max is allowed only for GPT-6 Luna.** For every other model, consider an appropriate lower effort or another eligible model. Luna max is an option when the task needs it, not a default.
-- **Low is allowed only for GPT-6 Astra, GPT-6 Sol, Claude Opus 5.5, and Claude Fable 5.1.** Luna is excluded. Sol low stays within Sol's work limits under Fleet constraints. Permission to use low does not override a stricter requirement attached to the assigned work.
+- **Low is allowed only for GPT-6 Astra, GPT-6.1 Sol, Claude Opus 5.5, and Claude Fable 5.1.** Luna is excluded. Sol low stays within Sol's work limits under Fleet constraints. Permission to use low does not override a stricter requirement attached to the assigned work.
 - **Luna medium requires caution.** Prefer high unless the work is simple, fully specified, reversible, and independently checkable for correctness and completeness. Explain why medium is sufficient in the existing declaration. Format validation alone is not enough. Unclear requirements or weak verification are reasons to avoid medium.
 - Keep the existing task constraints: complex development requires at least Opus high; architecture requires Astra/Fable medium or above. These are capability requirements for the assigned work, not a taxonomy of agent roles. Do not infer cross-model developer equivalence from equal AA scores alone.
 - Use the model and effort options exposed by the actual invocation tool. This document supplies selection judgment rather than duplicating parameter validation.
@@ -22,11 +22,11 @@ The fleet this skill selects from: GPT-6 Astra, Claude Fable 5.1 (top tier); Cla
 
 These come from observed experience with this fleet. No benchmark exposes them, and they apply before any benchmark comparison.
 
-- **GPT-6 Sol is not for complex development.** It does not reliably anticipate the bottlenecks such work has to be designed around. Use Sol for review, research, and test work. A review curated by Sol at high or above, fanning findings out to micro-agents on Luna at xhigh or max, is a proven pattern; Sol at medium does not hold the curator role.
+- **GPT-6.1 Sol is not for complex development.** It does not reliably anticipate the bottlenecks such work has to be designed around. Use Sol for review, research, and test work. A review curated by Sol at high or above, fanning findings out to micro-agents on Luna at xhigh or max, is a proven pattern; Sol at medium does not hold the curator role.
 - **Claude Fable 5.1 draws on a separate capacity pool.** Prefer GPT-6 Astra when it is available, then Claude Opus 5.5 at high when that is enough, and take Fable when the work needs the top tier on an Anthropic model. This is a capacity constraint, not a price argument.
 - **On the top tier (Astra, Fable), effort tracks complexity, not size.** Both hold volume at every effort, so a large but straightforward task is a legitimate low. Raise effort for interacting parts, real decision points, and easy-to-miss details, not for file count or prompt length.
 - **Either vendor may be unavailable, and each ladder is complete on its own.** When one side is down, route within the other side without lowering the task's floors; a cross-vendor substitution below is a routing candidate for a live task, never a reason to treat a rung as redundant.
-- **Code review runs below the implementation rung.** Review of code written by a subagent goes to Claude Opus 5.5 one effort rung below the effort the code was written at (floor: low), or to GPT-6 Sol at that Opus review rung plus one (floor: medium, one rung above the Opus floor). The rule keys on the implementation effort alone, whichever model wrote the code (Opus, Astra, or Fable). Never review at the implementation rung or above, and never on Astra or Fable.
+- **Code review runs below the implementation rung.** Review of code written by a subagent goes to Claude Opus 5.5 one effort rung below the effort the code was written at (floor: low), or to GPT-6.1 Sol at that Opus review rung plus one (floor: medium, one rung above the Opus floor). The rule keys on the implementation effort alone, whichever model wrote the code (Opus, Astra, or Fable). Never review at the implementation rung or above, and never on Astra or Fable.
 
   | Code written at (any model) | Review on Opus | Review on Sol |
   |---|---|---|
@@ -65,7 +65,7 @@ Each cell: **Index / USD per AA task / output tokens per second**. All values be
 | Model | low | medium | high | xhigh | max — only Luna eligible |
 |---|---|---|---|---|---|
 | GPT-6 Luna | 21 / .0045 / 124 | 29 / .02 / 143 | 32 / .03 / 135 | 34 / .04 / 128 | 37 / .07 / 132 |
-| GPT-6 Sol | 34 / .13 / 92 | 40 / .25 / 114 | 43 / .37 / 96 | 44 / .53 / 101 | 48 / 1.06 / 107 |
+| GPT-6.1 Sol | 42 / .13 / 74 | 48 / .21 / 62 | 50 / .32 / 66 | 51 / .39 / 64 | 52 / .72 / 67 |
 | GPT-6 Astra | 46 / .82 / 46 | 50 / 1.54 / 45 | 51 / 1.73 / 49 | 52 / 2.31 / 51 | 53 / 3.26 / 52 |
 | Claude Opus 5.5 | 42 / .55 / 86 | 51 / 1.34 / 76 | 54 / 1.82 / 85 | 56 / 3.46 / 74 | 58 / 5.98 / not published |
 | Claude Fable 5.1 | 47 / 2.37 / 55 | 49 / 2.98 / 57 | 51 / 3.91 / 56 | 53 / 5.98 / 60 | 53 / 7.63 / 68 |
@@ -79,6 +79,8 @@ Preserve these caveats when using the data:
 - When AA version, model, price, fallback, or harness changes, refresh the comparable dataset as a whole. Until refreshed, retain old values with their date and reduced confidence; do not call them current.
 
 ## Benchmark substitutions
+
+GPT-6.1 Sol replaced GPT-6 Sol in the fleet on 2026-09-29. This section and the escalation path below still use GPT-6 Sol's figures and have not been recomputed for GPT-6.1 Sol; its own figures are in the table above.
 
 For comparable AA measurements, B dominates A on the benchmark's cost/Index axes when its Index is no lower and its API cost/task is no higher, with at least one strict improvement. That establishes neither subscription savings nor task-specific dominance. Apply the selection policy, the fleet constraints, and assigned constraints before considering any replacement.
 

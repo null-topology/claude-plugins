@@ -86,7 +86,7 @@ empty list refuses nothing.
     "builtin_agent_models": ["opus", "fable"]
   },
   "rules": {
-    "gpt-6-sol": {
+    "gpt-6.1-sol": {
       "gpt-6-luna": ["medium", "high", "xhigh", "max"],
       "claude-haiku-4-5": ["default"]
     }

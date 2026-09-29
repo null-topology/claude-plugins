@@ -27,11 +27,11 @@ whose figures the benchmark has announced it will re-run. Generated from models.
 | GPT-6 Astra | high | 51 | 1.73 | 29.5 | 49 |
 | GPT-6 Astra | xhigh | 52 | 2.31 | 22.5 | 51 |
 | GPT-6 Astra | max | 53 | 3.26 | 16.3 | 52 |
-| GPT-6 Sol | low | 34 | 0.13 | 261.5 | 92 |
-| GPT-6 Sol | medium | 40 | 0.25 | 160 | 114 |
-| GPT-6 Sol | high | 43 | 0.37 | 116.2 | 96 |
-| GPT-6 Sol | xhigh | 44 | 0.53 | 83 | 101 |
-| GPT-6 Sol | max | 48 | 1.06 | 45.3 | 107 |
+| GPT-6.1 Sol | low | 42 | 0.13 | 323.1 | 74 |
+| GPT-6.1 Sol | medium | 48 | 0.21 | 228.6 | 62 |
+| GPT-6.1 Sol | high | 50 | 0.32 | 156.3 | 66 |
+| GPT-6.1 Sol | xhigh | 51 | 0.39 | 130.8 | 64 |
+| GPT-6.1 Sol | max | 52 | 0.72 | 72.2 | 67 |
 | GPT-5.6 Terra | low | 27 | 0.14 | 192.9 | 71 |
 | GPT-5.6 Terra | medium | 30 | 0.18 | 166.7 | 79 |
 | GPT-5.6 Terra | high | 34 | 0.34 | 100 | 73 |
