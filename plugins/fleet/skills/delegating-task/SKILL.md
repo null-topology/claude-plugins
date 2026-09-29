@@ -112,6 +112,10 @@ result is a claim, `examples/bounded-edit.md` a code change inside a fixed write
 `examples/additional-context.md` a comparison that hands over reference files. Open one when
 unsure what a section should hold; do not copy its wording.
 
+The two vendors lean in opposite directions when a brief leaves something open. Before writing
+the brief, read section 4 of `../selecting-subagent-model/references/vendor-guide.md`: close
+the boundaries for an Anthropic agent and the gaps for an OpenAI one.
+
 Last check: could a fresh agent name the result, the allowed area and actions, what it may
 claim, how to verify, and where to stop, without guessing?
 
