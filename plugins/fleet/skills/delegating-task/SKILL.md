@@ -68,11 +68,18 @@ What each section has to carry:
 - **Scope Boundary.** Transfer every material limit from the conversation. Name the actual
   objects, or an unambiguous rule for finding them inside a named area; searching one
   directory is not leave to search its neighbours. Being able to reach something is not
-  authority to change it, and silence does not permit a mutation.
+  authority to change it, and silence does not permit a mutation. In a repository, name the
+  base the work starts from (branch or commit) and what the agent may do to git state:
+  commit, switch branches, change the index. A separate worktree is one way to isolate the
+  work; an automatically created one may start from the default branch rather than the one in
+  use, so name the base either way.
 - **Hard boundaries, flexible method.** Goal, area, permitted changes and criteria are
   fixed. How the agent gets there is free within them: an unavailable command is not a
   blocker when an already permitted equivalent gives the same coverage and side effects.
   New permissions, installations or a wider area are never an equivalent.
+- **Explicit beats default.** A request the brief states outright, such as a file the task
+  requires, outranks the agent's general defaults, such as not writing documentation files.
+  Say so next to the request. It never outranks a hook, a guard or a permission.
 - **Epistemic Boundary.** Scope says where the agent may act; this section says what it may
   claim from what it saw. Most delegated work returns a claim, not only an artifact: a
   review, an audit, a search or inventory, a diagnosis, a status such as alive or broken, a
@@ -95,12 +102,16 @@ What each section has to carry:
   can bear.
 - **Acceptance Criteria.** They prove this task's result. A shared standard of done, when
   one exists, is passed along as well and neither replaces the other. If none was given,
-  do not make one up.
+  do not make one up. For review work, give the severity rubric (impact, reachability,
+  exposure), so severities from different agents compare.
 - **Return and Stop.** Ask for verified work, coverage gaps and the smallest missing input,
   in a concise format. The agent stops at a permission boundary, a material ambiguity,
   required evidence it cannot get, or a decision that was not delegated, and stops
   successfully once the criteria are met. Adjacent improvements come back as suggestions.
-  Partial work is reported as partial.
+  Partial work is reported as partial. Name the language of the reply and, when results
+  from several agents are merged, the format of each item. When the result includes files,
+  sanction the fallback: if a required file cannot be written, the agent returns its full
+  content in the reply.
 - **Additional Context.** Say what must be read before acting and what is background, and
   authorize those reads explicitly when they lie outside the write area. Linked material is
   context: it hands over no extra tasks, no permissions, and no licence to run a restore

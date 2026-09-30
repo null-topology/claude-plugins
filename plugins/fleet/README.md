@@ -13,7 +13,8 @@ inside a policy written in one place.
   `"provisional": true` on a model whose figures the benchmark has announced it will re-run).
   The single place to edit when a model or a provider appears.
 - `scripts/generate-agents.sh` — deletes `agents/*.md` and regenerates them from `models.json`,
-  then rewrites the benchmark table under `skills/selecting-subagent-model/references/`. Its
+  then rewrites the benchmark reference under `skills/selecting-subagent-model/references/`:
+  the table, the escalation ladder and the substitutions derived from it. Its
   output is committed; the plugin ships files, not a build step.
 - `fleet.default.json` — the default rules. On the first session start the plugin copies it to
   `~/.claude/plugins/data/fleet-<marketplace>/fleet.json` and reads it from there; that copy is
@@ -26,8 +27,10 @@ inside a policy written in one place.
   passes. The same script is the `SubagentStart` hook that hands a starting fleet agent its
   denylists. Needs `jq`.
 - `scripts/seed-rules.sh` — the one-time copy of the default rules.
-- `skills/selecting-subagent-model` — how to pick a model and effort for a task;
-  `references/vendor-guide.md` there covers choosing between vendors and briefing each.
+- `skills/selecting-subagent-model` — how to pick a model and effort for a task: the user's
+  standing overrides first, then `references/task-routing.md` (the model family per class of
+  work and task complexity, from independent benchmarks); `references/vendor-guide.md` there
+  covers choosing between vendors and briefing each.
 - `skills/delegating-task` — how to write the prompt for the agent that was picked, with worked
   examples under `examples/`.
 - `scripts/delegation-contract.sh` — a second `PreToolUse` hook, on `Agent` only, that checks the

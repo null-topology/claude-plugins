@@ -1,159 +1,135 @@
 ---
 name: selecting-subagent-model
-description: Use when choosing or revising a sub-agent model and reasoning effort for an assigned task. Covers task suitability, uncertainty, verification, latency, and benchmark comparisons under subscription-based execution.
+description: Use when choosing or revising a sub-agent model and reasoning effort for an assigned task, and when the user states which models to use or avoid for some work. Covers the user's standing overrides, the per-class routing table, security work and account access, vendor tendencies, and benchmark comparisons under subscription-based execution.
 ---
 
 # Selecting a sub-agent model and reasoning effort
 
-Choose a suitable model and reasoning effort for the assigned task. First satisfy its capability requirements; then compare appropriate alternatives using evidence about quality, latency, and avoidable rework. This skill guides selection without prescribing a new agent lifecycle, task taxonomy, or decision format.
+Pick a model family for the kind of work from measured evidence, set the effort from the task,
+and apply what the user has said about their own fleet. This skill carries data and the rules for
+reading it. The only judgment in it is marked as such: a starred cell in the routing table. How a
+user wants their fleet used differs between users and is kept as their overrides, not here.
 
-The fleet this skill selects from: GPT-6 Astra, Claude Fable 5.1 (top tier); Claude Opus 5.5, GPT-6.1 Sol (middle); GPT-6 Luna (bottom). Use the model and effort options exposed by the actual invocation tool; the agent descriptions there state each rung's role and are kept in agreement with this document.
+The fleet: Anthropic — Claude Fable 5.1, Claude Opus 5.5, Claude Sonnet 5.5, Claude Haiku 4.5;
+OpenAI — GPT-6 Astra, GPT-6.1 Sol, GPT-5.6 Terra, GPT-6 Luna. Use the model and effort options the
+invocation tool actually exposes; the guard's rules decide which pairs a caller may spawn.
 
-## Selection policy
+## Order of selection
 
-- **Max is allowed only for GPT-6 Luna.** For every other model, consider an appropriate lower effort or another eligible model. Luna max is an option when the task needs it, not a default.
-- **Low is allowed only for GPT-6 Astra, GPT-6.1 Sol, Claude Opus 5.5, and Claude Fable 5.1.** Luna is excluded. Sol low stays within Sol's work limits under Fleet constraints. Permission to use low does not override a stricter requirement attached to the assigned work.
-- **Luna medium requires caution.** Prefer high unless the work is simple, fully specified, reversible, and independently checkable for correctness and completeness. Explain why medium is sufficient in the existing declaration. Format validation alone is not enough. Unclear requirements or weak verification are reasons to avoid medium.
-- Keep the existing task constraints: complex development requires at least Opus high; architecture requires Astra/Fable medium or above. These are capability requirements for the assigned work, not a taxonomy of agent roles. Do not infer cross-model developer equivalence from equal AA scores alone.
-- Use the model and effort options exposed by the actual invocation tool. This document supplies selection judgment rather than duplicating parameter validation.
-- If no available pair satisfies the assigned constraints, report the mismatch through the existing workflow. Do not silently lower the required capability.
+1. **User overrides.** Apply every stored override that names the model, the effort or the kind of
+   work (next section). They come before everything below.
+2. **The task's own requirements.** A model, an effort or a minimum the task states explicitly.
+3. **The routing table.** Map the work to a class and a column in `references/task-routing.md`;
+   the cell names a family. For security work, read the account rule below first.
+4. **The effort.** Set it from the task: interacting parts, real decision points, easy-to-miss
+   details and the cost of a mistake raise it. The table names families only; the effort at which a
+   model was measured does not carry over.
+5. **Compare pairs when the cell is thin or the class is General.** `references/benchmark.md` has
+   the general Index, cost and speed per model and effort, the escalation ladder and the
+   substitutions. Compare a higher effort on one model with another model at a lower effort; the
+   choice is the pair.
+6. **The vendor and the brief.** When the cell's vendor is unavailable, take the Fallback column.
+   `references/vendor-guide.md` covers what each vendor's tendencies cost a task and how to brief
+   each.
+7. **State the choice**: model, effort and a one-line reason, in the orchestration's existing
+   format. Name material uncertainty: a thin or starred cell, a conflict with an override.
 
-## Fleet constraints
+## User overrides
 
-These come from observed experience with this fleet. No benchmark exposes them, and they apply before any benchmark comparison.
+The user decides how their fleet is used: a model not to use for some work, one to prefer, effort
+levels to avoid, what their subscription can sustain. Such a preference outranks the table.
 
-- **GPT-6.1 Sol is not for complex development.** It does not reliably anticipate the bottlenecks such work has to be designed around. Use Sol for review, research, and test work. A review curated by Sol at high or above, fanning findings out to micro-agents on Luna at xhigh or max, is a proven pattern; Sol at medium does not hold the curator role.
-- **Claude Fable 5.1 draws on a separate capacity pool.** Prefer GPT-6 Astra when it is available, then Claude Opus 5.5 at high when that is enough, and take Fable when the work needs the top tier on an Anthropic model. This is a capacity constraint, not a price argument.
-- **On the top tier (Astra, Fable), effort tracks complexity, not size.** Both hold volume at every effort, so a large but straightforward task is a legitimate low. Raise effort for interacting parts, real decision points, and easy-to-miss details, not for file count or prompt length.
-- **Either vendor may be unavailable, and each ladder is complete on its own.** When one side is down, route within the other side without lowering the task's floors; a cross-vendor substitution below is a routing candidate for a live task, never a reason to treat a rung as redundant.
-- **Code review runs below the implementation rung.** Review of code written by a subagent goes to Claude Opus 5.5 one effort rung below the effort the code was written at (floor: low), or to GPT-6.1 Sol at that Opus review rung plus one (floor: medium, one rung above the Opus floor). The rule keys on the implementation effort alone, whichever model wrote the code (Opus, Astra, or Fable). Never review at the implementation rung or above, and never on Astra or Fable.
+- When the user states one ("do not use X for Y", "use X for Z", "never above high on X"), persist
+  it at once, in their words and with the date, wherever later runs in this environment will read
+  it: a memory store, the user's or the project's standing instructions, a rules file they keep. If
+  nothing in the environment survives the session, tell the user the override lasts for this run
+  only.
+- Before selecting, read the overrides already stored. Apply them literally, to what they name,
+  without widening them.
+- When an override conflicts with the table, the override wins; mention the conflict once in the
+  stated choice so the user can revisit it.
+- An override narrows the choice; it cannot widen what the guard allows. A refused spawn stays
+  refused.
 
-  | Code written at (any model) | Review on Opus | Review on Sol |
-  |---|---|---|
-  | xhigh | high | xhigh |
-  | high | medium | high |
-  | medium | low | medium |
-  | low | low (floor) | medium (floor) |
+## Security work and account access
 
-- **Sol runs one effort rung above the equivalent Opus rung** for the work Sol is allowed to do (review, research, tests): Sol high stands in for Opus medium, Sol xhigh for Opus high. This is an observed equivalence for this fleet, not a benchmark reading.
+Anthropic models screen cyber-security requests. Unless the account has Anthropic's access for
+security work, a flagged request is refused or served by an older model, depending on the surface
+and its fallback setting (`references/vendor-guide.md`, section 1). For security review,
+vulnerability research and exploit-related work:
+
+- **The account has that access:** route by the table.
+- **It does not, or it is unknown:** prefer the OpenAI family in the row (the cell itself or the
+  Fallback column). Ask the user once whether the account has the access and persist the answer as
+  an override.
+- OpenAI models refuse security work too. Vals CyberBench counts GPT-6.1 Sol's provider refusals,
+  60 of 116 tasks, as failures ([Vals](https://www.vals.ai/models/openai_gpt-6.1-sol)). Check a
+  security result for refusals before reading a gap in it as an absence of findings.
 
 ## Subscription boundary
 
-Execution uses a subscription. The subscription plan and its effective economics are not visible from inside the session. Do not infer the plan, remaining allowance, marginal call price, quota consumption, or monetary savings from model names, tokens, or AA API prices.
+Execution uses a subscription whose plan and effective economics are not visible from inside the
+session. Do not infer the plan, the remaining allowance, the marginal price of a call or monetary
+savings from model names, tokens or API prices.
 
-AA cost/task is a historical comparative benchmark signal only. It is not the cost of a sub-agent invocation, a subscription budget, or a conversion into subscription usage. Do not calculate dollar objectives, failure probabilities, cache-write charges, or monetary error costs for routing. Do not claim a cheaper AA point saves subscription money or allowance.
+The benchmark's cost per task is a comparative signal from API prices. It is not the cost of a
+sub-agent invocation, a budget, or a conversion into subscription usage. Do not compute dollar
+objectives or claim that a cheaper point saves allowance. What the user's subscription sustains is
+theirs to say, as an override.
 
-Prefer sufficient capability, dependable completion, useful response time, and less avoidable rework. Respect limits actually supplied by the surrounding workflow without inventing hidden financial constraints.
+## Reading the figures
 
-## Decision process
-
-1. Read the assigned task and expected result. Identify the reasoning it requires and what can be independently verified. Judge the actual work, not an agent label, prompt length, or file count.
-2. Apply explicit task requirements, the fleet constraints, and the effort policy first. Benchmark advantages cannot override them.
-3. Assess complexity and uncertainty qualitatively: mechanical work versus nontrivial reasoning; complete inputs versus missing or contradictory evidence; local context versus interacting dependencies. Do not turn these observations into an invented weighted score or AA cutoff.
-4. Consider the consequences of an incorrect result and how likely the verification method is to expose it. Weak verification or costly mistakes favor a more capable eligible pair and stronger checking, not merely more retries.
-5. Prefer relevant observed performance on comparable work. Use the dated benchmark as a secondary comparison when local evidence is absent. A general intelligence score is neither task competence nor success probability.
-6. Compare a higher effort on the current model with a stronger model at lower permitted effort. Prefer the pair supported by task evidence; use benchmark substitutions below as candidates, not automatic replacements. Between vendors, use `references/vendor-guide.md`: set the effort first, then pick the vendor whose typical error the task can afford.
-7. Consider observed time to a usable, checked result. Output tokens/s alone omits reasoning latency, tools, and rework. When end-to-end timing is unknown, say so instead of manufacturing an estimate.
-8. State the chosen model and effort with a concise reason in the existing orchestration format. Explain material uncertainty or a non-obvious trade-off; do not create a separate decision contract or repeat information already recorded.
-
-## Benchmark reference and limitations
-
-Benchmark: **Artificial Analysis Intelligence Index v4.3.2**, reference date **2026-09-29**. Treat the values below as historical routing priors, not live measurements or availability guarantees. Independent verification of every entry is not established; retain the uncertainty and conflicts documented below. Only models present in the fleet are listed.
-
-Each cell: **Index / USD per AA task / output tokens per second**. All values belong to v4.3.2 only and are published measurements. Prohibited low/max entries and caution-only medium entries are retained as historical evidence, not routing permissions.
-
-| Model | low | medium | high | xhigh | max — only Luna eligible |
-|---|---|---|---|---|---|
-| GPT-6 Luna | 21 / .0045 / 124 | 29 / .02 / 143 | 32 / .03 / 135 | 34 / .04 / 128 | 37 / .07 / 132 |
-| GPT-6.1 Sol | 42 / .13 / 74 | 48 / .21 / 62 | 50 / .32 / 66 | 51 / .39 / 64 | 52 / .72 / 67 |
-| GPT-6 Astra | 46 / .82 / 46 | 50 / 1.54 / 45 | 51 / 1.73 / 49 | 52 / 2.31 / 51 | 53 / 3.26 / 52 |
-| Claude Opus 5.5 | 42 / .55 / 86 | 51 / 1.34 / 76 | 54 / 1.82 / 85 | 56 / 3.46 / 74 | 58 / 5.98 / not published |
-| Claude Fable 5.1 | 47 / 2.37 / 55 | 49 / 2.98 / 57 | 51 / 3.91 / 56 | 53 / 5.98 / 60 | 53 / 7.63 / 68 |
-
-Preserve these caveats when using the data:
-
-- **Anthropic safety fallback:** Fable 5.1 and Opus 5.5 are both measured with Anthropic's default fallback. For Fable, approximately 4% of output tokens across the v4.3 index came from Opus 4.8/Opus 5; the per-effort share is unknown, and no share is published for Opus 5.5. These measure fallback-enabled configurations, not the pure models; do not disable safeguards for comparison. If runtime fallback differs or is unknown, reduce comparability.
-- **Cache pricing is excluded from the benchmark cost comparison.** Cache-read rates are .25 USD/M for Fable, .20 USD/M for Opus 5.5 and 1.00 USD/M for Astra. These rates may narrow the gap at high cache hit rates, but cannot establish a win without full input/output/cache-write/cache-read accounting.
-- Speed and TTFT are rolling metrics, with reported snapshot variation of 10–15%. Complete per-variant TTFT is unavailable. Fable max has approximately 295 s and Astra max approximately 340 s to first token (v4.3 figures); Fable max adds no Index over xhigh, Astra max adds one point. Opus 5.5 max output speed is not published. Higher tokens/s does not guarantee a faster verified answer.
-- Non-reasoning cost is unpublished; quality scores are preliminary. Astra non-reasoning has a 45/48 conflict. Never replace missing values with zero.
-- When AA version, model, price, fallback, or harness changes, refresh the comparable dataset as a whole. Until refreshed, retain old values with their date and reduced confidence; do not call them current.
-
-## Benchmark substitutions
-
-GPT-6.1 Sol replaced GPT-6 Sol in the fleet on 2026-09-29. This section and the escalation path below still use GPT-6 Sol's figures and have not been recomputed for GPT-6.1 Sol; its own figures are in the table above.
-
-For comparable AA measurements, B dominates A on the benchmark's cost/Index axes when its Index is no lower and its API cost/task is no higher, with at least one strict improvement. That establishes neither subscription savings nor task-specific dominance. Apply the selection policy, the fleet constraints, and assigned constraints before considering any replacement.
-
-The historical measured frontier includes Luna low through max, Sol medium through max, Astra low, and Opus 5.5 medium through max. The eligible set differs: Luna low, Sol max and Opus max are prohibited, Luna medium is caution-only, and task constraints may remove other points. Unknown latency or conflicting evidence cannot establish dominance on those dimensions.
-
-| Pair to replace | Preferred substitute to evaluate | Snapshot basis |
-|---|---|---|
-| Sol low | Luna max **or** Luna xhigh | 37/.07 or 34/.04 instead of 34/.13 |
-| Opus low | Sol high | 43/.37 instead of 42/.55; only for work Sol is allowed to do (review, research, tests) |
-| Sol max | Opus medium **or** Astra medium | Preserves or raises Index at a higher benchmark cost: 51/1.34 or 50/1.54 instead of 48/1.06; Sol max is prohibited anyway |
-| Sol max | Astra low **or** Sol xhigh | 46/.82 or 44/.53 loses 2 or 4 Index; allowed only if the floor still holds |
-| Astra medium / high | Opus medium | 51/1.34 instead of 50/1.54 and 51/1.73; the architecture floor names Astra/Fable, so check task constraints first |
-| Astra xhigh / max | Opus high | 54/1.82 instead of 52/2.31 and 53/3.26; Astra max is prohibited anyway |
-| Fable low / medium / high | Astra medium / medium / high, or Opus medium | ≥Index at lower cost and consistent with the Fable capacity priority; reassess cache, fallback, and specialization |
-| Fable xhigh | Opus high | 54/1.82 instead of 53/5.98; Astra xhigh (52/2.31) loses 1 Index |
-| Fable max | Fable xhigh | Same 53 at lower cost; max prohibited by policy |
-
-Do not choose a model merely from tokens/s or reject a suitable model merely because its benchmark API cost is higher. Prefer relevant evidence about quality, completion time, and rework. General benchmark dominance does not establish task-specific suitability or subscription savings.
-
-## Recommended escalation path
-
-The frontier read from bottom to top as one ladder across both vendors. Each step is the cheapest measured point that reaches a higher Index than the step before it.
-
-| Step | Pair | Index / USD per AA task |
-|---:|---|---|
-| 1 | Luna low | 21 / .0045 |
-| 2 | Luna medium | 29 / .02 |
-| 3 | Luna high | 32 / .03 |
-| 4 | Luna xhigh | 34 / .04 |
-| 5 | Luna max | 37 / .07 |
-| 6 | Sol medium | 40 / .25 |
-| 7 | Sol high | 43 / .37 |
-| 8 | Sol xhigh | 44 / .53 |
-| 9 | Astra low | 46 / .82 |
-| 10 | Opus 5.5 medium | 51 / 1.34 |
-| 11 | Opus 5.5 high | 54 / 1.82 |
-| 12 | Opus 5.5 xhigh | 56 / 3.46 |
-| 13 | Opus 5.5 max | 58 / 5.98 |
-
-- Start at the lowest step whose capability the task needs, not at step 1, and skip steps when the work evidently needs more. Move up only after diagnosing a reasoning shortfall (see Revising a selection). The path orders candidates; it is not a sequence to walk.
-- The selection policy and the fleet constraints apply at every step. Luna low (step 1) is outside the low allowlist and Opus 5.5 max (step 13) outside the Luna-only max rule, so until the policy admits them the usable path runs from step 2 to step 12, and step 2 is caution-only.
-- Sol steps (6–8) take only the work Sol is allowed to do. Complex development enters at step 11 (Opus high). Architecture needs Astra/Fable medium or above, which is not on this path.
-- Sol max (48 / 1.06) is also on the frontier, between steps 9 and 10, and stays off the path because max is Luna-only.
-- Code review follows the review rule under Fleet constraints, not this path.
-- If a step's vendor is unavailable, route within the other vendor's ladder at an equal or higher Index, keeping the floors. The path is the preferred route, not the only one.
+- Artificial Analysis cost per task includes cache pricing at each model's measured typical cache
+  hit rate ([methodology](https://artificialanalysis.ai/methodology)). It remains an API-price
+  comparison.
+- Anthropic models are measured with Anthropic's default fallback, so their figures include answers
+  served by older models. For Fable 5.1 about 4% of output tokens across the v4.3 index came from
+  older models; no share is published per effort or for Opus 5.5. Do not disable safeguards to
+  compare.
+- Speed and time to first token are rolling measurements that vary 10–15% between snapshots.
+  Output tokens per second leaves out reasoning time, tool calls and rework; Fable max takes about
+  295 s and Astra max about 340 s to the first token (v4.3 figures). When end-to-end time for a task
+  is unknown, say so instead of estimating it.
+- `null` in `models.json` means not published, never zero. A model marked `provisional` has figures
+  the benchmark announced it will re-run.
+- The general Index is not task competence. The per-class table decides first; the Index compares
+  pairs within what the table leaves open.
+- When the benchmark version, a model, a price, the fallback or the harness changes, refresh the
+  whole snapshot; until then keep old values with their date and call them dated.
 
 ## Revising a selection
 
-- Diagnose an unsatisfactory result before changing the pair. Missing evidence or unavailable tools require better inputs or access, not extra reasoning effort.
-- When the reasoning itself is inadequate, compare a higher permitted effort with a more capable eligible model. Do not automatically walk every effort level or repeat an unchanged request expecting competence to improve.
-- Preserve the surrounding workflow's retry and stop rules. This skill does not create independent attempt counts, budgets, status enums, or approval flows.
-- A cheaper benchmark point is not sufficient reason to downgrade. Lower effort only when the assigned work and verification support it, preserving all task constraints. Luna medium still requires caution after successful higher-effort runs.
-- Use comparable observed outcomes to improve future choices. Do not invent numerical confidence or subscription savings from a small number of successes.
+- Diagnose an unsatisfactory result before changing the pair. Missing evidence or unavailable tools
+  need better inputs or access, not more reasoning effort.
+- When the reasoning itself fell short, compare a higher effort on the same model with a more
+  capable model. Do not walk every effort level or repeat an unchanged request expecting a better
+  answer.
+- Keep the surrounding workflow's retry and stop rules; this skill adds no attempt counts, budgets
+  or approval flows.
+- A cheaper benchmark point is not a reason to downgrade on its own; lower the pair only when the
+  work and its verification support it.
+- When the user reacts to a result with a standing preference ("not this model for that again"),
+  it is an override: persist it.
 
 ## Examples
 
-| Assigned situation | Selection judgment |
+| Situation | Selection |
 |---|---|
-| Simple extraction with a complete independent content check | Luna medium may be justified; otherwise prefer Luna high. Schema validity alone is insufficient |
-| Sol low proposed for an easy research or test task | Allowed; Sol's work limits still apply, and a code review on Sol keeps its medium floor |
-| Sol proposed for a feature that has to be designed around a bottleneck | Exclude Sol regardless of its Index; route to Astra or Fable, or Opus at high or above |
-| A review of a large change | Sol at high or above curating, findings fanned out to Luna xhigh/max micro-agents; not a single large reviewer |
-| Review of code a subagent wrote at Opus high (or Astra/Fable high) | Opus medium or Sol high; not Opus high, not the model that wrote it at the same effort, never Fable |
-| Sol max proposed | Evaluate Opus medium or Astra medium to preserve or improve benchmark Index; Astra low loses two Index points and Sol xhigh four. Apply task requirements first |
-| Fable proposed while Astra is available | Prefer Astra, then Opus high if that is enough; Fable when the work needs the top tier on an Anthropic model |
-| Large but straightforward top-tier task (many files, clear steps, no decision points) | Astra or Fable at low; size alone does not raise effort |
-| Complex development | Preserve the Opus high minimum; do not substitute Astra medium solely because of AA scores |
-| Architectural work | Preserve Astra/Fable medium minimum regardless of prompt length |
-| Only unsupported or below-floor pairs are available | Report the constraint through the existing orchestration workflow |
-| A result failed because an input file was absent | Obtain the missing input rather than increase effort to guess its contents |
-| A cache-heavy invocation | Do not compute subscription charges from API cache prices; use observed suitability and completion time |
-| Faster token output but no end-to-end timing | Treat completion-time advantage as unknown |
+| Summarise how a module handles retries | Codebase Q&A, Normal: `claude-fable-5-1`; Simple for a narrow lookup: `gpt-6-luna` |
+| A security review of a diff on an account without Anthropic's security access | The OpenAI family in the Security row: Astra; for a narrow, easily checked pass, Luna at xhigh or above (starred cell) |
+| The Hard cell's vendor is down | The Fallback column of the same row, at an effort set by the task |
+| The table says Astra; the user said earlier "no Astra for reviews" | The override wins: take the next family by the table's evidence and mention the conflict |
+| Writing tests | Not in the table: the General row, compared by pair in `benchmark.md` |
+| A cell rests on one source (see the evidence table) | Take it as a starting point, compare pairs in `benchmark.md`, say the evidence is thin |
+| A result failed because an input file was absent | Obtain the input; do not raise the effort to guess its contents |
+| A cache-heavy invocation | Do not compute subscription charges from API cache prices |
+| Faster token output but no end-to-end timing | Treat the completion-time advantage as unknown |
 
 ## Compact selection instructions
 
-Read the assigned task and acceptance criteria. Apply task constraints, the fleet constraints, the low allowlist, the Luna-only max rule, and caution for Luna medium. Judge complexity, uncertainty, verification, and consequences qualitatively; on the top tier let complexity, not size, set the effort. Prefer comparable task evidence; use AA figures only as dated secondary evidence. Compare model changes with effort changes, and choose between vendors with `references/vendor-guide.md`. Do not infer subscription economics. Express the choice in the existing orchestration format. Leave parameter validation and execution control to the invocation tools.
+Read the stored user overrides and apply them first. Apply the task's explicit requirements. Map
+the work to a class and a column in `references/task-routing.md`; for security work, check the
+account's access first. Set the effort from the task. When the cell is thin or the class is
+General, compare pairs in `references/benchmark.md`. Use the Fallback column when a vendor is
+unavailable and brief each vendor per `references/vendor-guide.md`. Persist every new preference
+the user states. State the choice in the existing orchestration format.

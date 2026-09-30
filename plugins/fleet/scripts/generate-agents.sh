@@ -1,7 +1,8 @@
 #!/bin/sh
 # Generates the fleet from models.json: deletes agents/*.md, writes one agent file
-# per model and effort in its place, and rewrites the benchmark table the selection
-# skill refers to. Run it after editing models.json and commit the output; the
+# per model and effort in its place, and rewrites the benchmark reference the selection
+# skill refers to: the table, the escalation ladder and the substitutions derived from
+# it. Run it after editing models.json and commit the output; the
 # plugin ships the generated files because agent definitions are read from disk,
 # not built at runtime.
 #
@@ -91,5 +92,36 @@ jq -r '.snapshot as $s
     (.models[] | "\(.name)\(if .provisional then " (provisional)" else "" end)" as $n | .efforts | to_entries[]
       | "| \($n) | \(if .key == "default" then "n/a" else .key end) | \(.value.index // "not published") | \(if .value.usd then "\(.value.usd)\(if .value.usd_estimated then " est." else "" end)" else "not published" end) | \(if .value.index and .value.usd then (.value.index / .value.usd * 10 | round) / 10 else "n/a" end) | \(.value.tps // "not published") |")
 ' "$models" > "$reference"
+
+# The ladder: every measured point, cheapest first (ties: higher Index first); a point joins when its
+# Index beats every cheaper point. A point off the ladder is substituted by the first ladder step whose
+# Index is at least as high, which by construction costs no more.
+jq -r '
+  [.models[] | .name as $n | .efforts | to_entries[]
+    | select(.value.index != null and .value.usd != null)
+    | {pair: (if .key == "default" then $n else "\($n) \(.key)" end), index: .value.index, usd: .value.usd}]
+  | sort_by(.usd, -.index) as $points
+  | (reduce $points[] as $p ([]; if length == 0 or $p.index > .[-1].index then . + [$p] else . end)) as $ladder
+  | "",
+    "## Escalation ladder",
+    "",
+    "Every measured point, cheapest first; a point is a step when its Index beats every cheaper point.",
+    "A point off the ladder is dominated on this benchmark: some step reaches at least its Index for no",
+    "more cost per task. The general Index is not task competence; the per-class table decides first.",
+    "",
+    "| Step | Model and effort | Index | $ per task |",
+    "|---:|---|---:|---:|",
+    ($ladder | to_entries[] | "| \(.key + 1) | \(.value.pair) | \(.value.index) | \(.value.usd) |"),
+    "",
+    "## Substitutions",
+    "",
+    "Each point off the ladder, with the cheapest step whose Index is at least as high.",
+    "",
+    "| Point | Index / $ per task | Substitute on this benchmark | Index / $ per task |",
+    "|---|---|---|---|",
+    ($points[] | . as $p | select(any($ladder[]; . == $p) | not)
+      | ([$ladder[] | select(.index >= $p.index)][0]) as $s
+      | "| \($p.pair) | \($p.index) / \($p.usd) | \($s.pair) | \($s.index) / \($s.usd) |")
+' "$models" >> "$reference"
 
 echo "generated $(ls "$agents" | wc -l | tr -d ' ') agents in $agents and $reference"
