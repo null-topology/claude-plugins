@@ -1,6 +1,6 @@
 ---
 name: gpt-6.1-sol-medium
-description: Executor subagent on GPT-6.1 Sol at medium reasoning effort. Use for tasks of moderate complexity, with a few interacting parts and shallow decision points. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-09-30; Index 48, $0.21 per task, 61 output tokens/s. Follows the prompt literally; does not invent scope.
+description: "Executor subagent on GPT-6.1 Sol at medium reasoning effort. Use for tasks of moderate complexity, with a few interacting parts and shallow decision points. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-10-08; Index 48, $0.21 per task, 50 output tokens/s. Follows the prompt literally; does not invent scope."
 model: gpt-6.1-sol
 effort: medium
 ---

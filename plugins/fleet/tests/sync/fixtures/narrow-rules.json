@@ -1,0 +1,37 @@
+{
+  "main": {
+    "fleet": {
+      "gpt-6-astra": ["low", "medium"],
+      "claude-fable-5-1": ["low", "medium", "high", "xhigh"],
+      "claude-opus-5-5": ["low", "medium", "high", "xhigh"],
+      "claude-sonnet-5-5": ["low", "medium", "high", "xhigh"],
+      "gpt-6.1-sol": ["low", "medium", "high", "xhigh", "max"],
+      "gpt-6-luna": ["low", "medium", "high", "xhigh", "max"]
+    },
+    "builtin_agent_models": ["opus", "fable"]
+  },
+  "rules": {
+    "claude-fable-5-1": {
+      "claude-opus-5-5": ["low", "medium", "high", "xhigh"],
+      "gpt-6.1-sol": ["low", "medium", "high", "xhigh"],
+      "gpt-6-luna": ["low", "medium", "high", "xhigh", "max"]
+    },
+    "gpt-6-astra": {
+      "claude-opus-5-5": ["low", "medium", "high", "xhigh"],
+      "gpt-6.1-sol": ["low", "medium", "high", "xhigh"],
+      "gpt-6-luna": ["low", "medium", "high", "xhigh", "max"]
+    },
+    "claude-opus-5-5": {
+      "gpt-6.1-sol": ["low", "medium", "high", "xhigh"],
+      "gpt-6-luna": ["low", "medium", "high", "xhigh", "max"]
+    },
+    "gpt-6.1-sol": {
+      "gpt-6-luna": ["low", "medium", "high", "xhigh", "max"]
+    },
+    "gpt-6-luna": {
+      "gpt-6-luna": ["low", "medium", "high", "xhigh", "max"]
+    }
+  },
+  "disallowed_skills": ["code-review", "ultrareview", "simplify", "security-review"],
+  "disallowed_commands": ["sudo", "doas"]
+}

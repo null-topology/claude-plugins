@@ -63,7 +63,7 @@ def main():
         fixture = Path(temporary) / "fleet"
         (fixture / "agents").mkdir(parents=True)
         (fixture / "scripts").mkdir()
-        for filename in ("subagent-guard.sh", "delegation-contract.sh"):
+        for filename in ("subagent-guard.sh", "fleet-rules.sh", "delegation-contract.sh"):
             shutil.copyfile(root / "scripts" / filename, fixture / "scripts" / filename)
         for name, model, effort in [("chief-high", "fixture-chief", "high"),
                                     ("worker-low", "fixture-worker", "low"),
@@ -160,7 +160,7 @@ def main():
                 ("broken/main non-Agent call passes", invocation(tool="Bash", command="printf ok"), 0)]:
             result = run_guard(data, broken)
             check(name, result.returncode == code and not result.stdout
-                  and (code == 0 or "not valid JSON" in result.stderr), result.stderr)
+                  and (code == 0 or "rules file is invalid" in result.stderr), result.stderr)
 
         generation = Path(temporary) / "generation"
         (generation / "scripts").mkdir(parents=True)

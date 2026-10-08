@@ -54,11 +54,14 @@ def main():
     for tool in ("jq", "awk", "cat"):
         if not shutil.which(tool):
             parser.error("Missing test dependency: " + tool)
-    # The hook inspects only calls whose target has a definition under <root>/agents.
+    # The hook inspects only calls whose target the guard treats as a fleet agent: a definition
+    # under <root>/agents, a name in <root>/models.json whose file the sync removed, or the prefix.
     fixture_root = Path(tempfile.mkdtemp(prefix="fleet-contract-root-"))
     atexit.register(shutil.rmtree, fixture_root, True)
     (fixture_root / "agents").mkdir()
     (fixture_root / "agents/fixture-worker.md").write_text("---\nname: fixture-worker\n---\nFixture.\n")
+    (fixture_root / "models.json").write_text(
+        '{"models": [{"id": "fixture-pruned", "efforts": {"high": {}}}]}\n')
     bare_command = [shell] + args.shell[1:] + [str(hook)]
     command = bare_command + [str(fixture_root)]
 
@@ -93,6 +96,13 @@ def main():
         Case("target/non-string type not inspected", typed("bare text", 7)),
         Case("target/bare fleet name inspected", typed("bare text", "fixture-worker"), 2, "Missing: Objective."),
         Case("target/prefixed fleet name inspected", typed("bare text", FLEET_TYPE), 2, "Missing: Objective."),
+        Case("target/pruned but permitted fleet agent still inspected",
+             typed("do it", "fleet:fixture-pruned-high"), 2, "Missing: Objective."),
+        Case("target/pruned fleet agent by bare name still inspected",
+             typed("do it", "fixture-pruned-high"), 2, "Missing: Objective."),
+        Case("target/unknown fleet-prefixed type inspected", typed("do it", "fleet:no-such-agent"), 2,
+             "Missing: Objective."),
+        Case("target/fleet-prefixed path not inspected", typed("bare text", "fleet:../agents/fixture-worker")),
         Case("format/reordered", payload(brief(order=list(reversed(HEADINGS))))),
         Case("format/CRLF", payload(brief().replace("\n", "\r\n"))),
         Case("format/BOM", payload("\ufeff" + brief())),
@@ -203,6 +213,16 @@ def main():
                                 capture_output=True, timeout=10)
         if result.returncode != 2 or "FLEET_DELEGATION_ERROR:" not in result.stderr:
             failures.append(("configuration/plugin root " + label, "expected a configuration error", result.stderr))
+
+    # Without the shared library the hook cannot tell a fleet agent, so it reports a fault.
+    with tempfile.TemporaryDirectory() as temporary:
+        lone = Path(temporary) / "delegation-contract.sh"
+        shutil.copy(hook, lone)
+        result = subprocess.run([shell] + args.shell[1:] + [str(lone), str(fixture_root)],
+                                input=payload(brief()), text=True, capture_output=True, timeout=10)
+        if result.returncode != 2 or "FLEET_DELEGATION_ERROR:" not in result.stderr:
+            failures.append(("configuration/missing rule library", "expected a configuration error",
+                             result.stderr))
 
     text = skill.read_text()
     try:

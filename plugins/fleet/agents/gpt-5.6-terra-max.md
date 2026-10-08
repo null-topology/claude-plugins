@@ -1,6 +1,6 @@
 ---
 name: gpt-5.6-terra-max
-description: Executor subagent on GPT-5.6 Terra at max reasoning effort. Use when xhigh was not enough; this is the model's reasoning ceiling. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-09-30; Index 42, $1.40 per task, 93 output tokens/s. Follows the prompt literally; does not invent scope.
+description: "Executor subagent on GPT-5.6 Terra at max reasoning effort. Use when xhigh was not enough; this is the model's reasoning ceiling. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-10-08; Index 42, $1.40 per task, 108 output tokens/s. Follows the prompt literally; does not invent scope."
 model: gpt-5.6-terra
 effort: max
 ---

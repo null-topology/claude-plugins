@@ -42,13 +42,18 @@ fi
 tool=$(printf '%s' "$payload" | jq -r '.tool_name') || error 'Could not read tool_name.'
 [ "$tool" = Agent ] || exit 0
 
-# A fleet type is one with a definition under agents/, the same test the guard uses.
+# A fleet type is one the guard treats as a fleet agent (fleet-rules.sh): a definition under
+# agents/; a name in models.json, since the sync removes the definitions the rules cannot reach;
+# or this plugin's prefix.
 [ -n "$plugin_root" ] && [ -d "$plugin_root/agents" ] ||
     error 'The plugin root, holding an agents directory, is required as the first argument.'
+case $0 in */*) here=${0%/*} ;; *) here=. ;; esac
+[ -f "$here/fleet-rules.sh" ] || error "The fleet rule library is missing ($here/fleet-rules.sh)."
+. "$here/fleet-rules.sh"
 requested=$(printf '%s' "$payload" | jq -r '.tool_input.subagent_type? | strings') || requested=
 bare=${requested##*:}
 case $bare in '' | */*) exit 0 ;; esac
-[ -f "$plugin_root/agents/$bare.md" ] || exit 0
+fleet_agent "$requested" || fleet_prefixed "$requested" || exit 0
 
 # Shell variables cannot preserve NUL; reject it before decoding the prompt.
 if ! printf '%s' "$payload" | jq -e '

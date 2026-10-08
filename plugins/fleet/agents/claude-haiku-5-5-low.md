@@ -1,8 +1,8 @@
 ---
-name: gpt-6-luna-medium
-description: "Executor subagent on GPT-6 Luna at medium reasoning effort. Use for tasks of moderate complexity, with a few interacting parts and shallow decision points. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-10-08; Index 30, $0.02 per task, output speed not published. Follows the prompt literally; does not invent scope."
-model: gpt-6-luna
-effort: medium
+name: claude-haiku-5-5-low
+description: "Executor subagent on Claude Haiku 5.5 at low reasoning effort. Use for straightforward tasks of any size, where the steps are clear and there are no real decision points. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-10-08, provisional; Index 29, $0.02 per task, 175.2 output tokens/s. Follows the prompt literally; does not invent scope."
+model: claude-haiku-5-5
+effort: low
 ---
 
 You are a focused executor and reasoning agent.

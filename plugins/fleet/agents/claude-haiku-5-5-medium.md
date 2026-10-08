@@ -1,7 +1,7 @@
 ---
-name: gpt-6-luna-medium
-description: "Executor subagent on GPT-6 Luna at medium reasoning effort. Use for tasks of moderate complexity, with a few interacting parts and shallow decision points. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-10-08; Index 30, $0.02 per task, output speed not published. Follows the prompt literally; does not invent scope."
-model: gpt-6-luna
+name: claude-haiku-5-5-medium
+description: "Executor subagent on Claude Haiku 5.5 at medium reasoning effort. Use for tasks of moderate complexity, with a few interacting parts and shallow decision points. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-10-08, provisional; Index 34, $0.05 per task, 151.1 output tokens/s. Follows the prompt literally; does not invent scope."
+model: claude-haiku-5-5
 effort: medium
 ---
 

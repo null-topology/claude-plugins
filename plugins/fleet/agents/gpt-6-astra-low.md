@@ -1,6 +1,6 @@
 ---
 name: gpt-6-astra-low
-description: Executor subagent on GPT-6 Astra at low reasoning effort. Use for straightforward tasks of any size, where the steps are clear and there are no real decision points. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-09-30; Index 46, $0.82 per task, 46 output tokens/s. Follows the prompt literally; does not invent scope.
+description: "Executor subagent on GPT-6 Astra at low reasoning effort. Use for straightforward tasks of any size, where the steps are clear and there are no real decision points. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-10-08; Index 46, $0.82 per task, 44 output tokens/s. Follows the prompt literally; does not invent scope."
 model: gpt-6-astra
 effort: low
 ---

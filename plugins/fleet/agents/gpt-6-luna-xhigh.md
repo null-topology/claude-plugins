@@ -1,6 +1,6 @@
 ---
 name: gpt-6-luna-xhigh
-description: Executor subagent on GPT-6 Luna at xhigh reasoning effort. Use for intricate tasks, where the reasoning is visibly tangled or a lower effort has already fallen short. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-09-30; Index 34, $0.04 per task, 131 output tokens/s. Follows the prompt literally; does not invent scope.
+description: "Executor subagent on GPT-6 Luna at xhigh reasoning effort. Use for intricate tasks, where the reasoning is visibly tangled or a lower effort has already fallen short. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-10-08; Index 35, $0.04 per task, 115 output tokens/s. Follows the prompt literally; does not invent scope."
 model: gpt-6-luna
 effort: xhigh
 ---

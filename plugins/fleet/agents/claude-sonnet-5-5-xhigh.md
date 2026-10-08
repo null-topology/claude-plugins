@@ -1,6 +1,6 @@
 ---
 name: claude-sonnet-5-5-xhigh
-description: Executor subagent on Claude Sonnet 5.5 at xhigh reasoning effort. Use for intricate tasks, where the reasoning is visibly tangled or a lower effort has already fallen short. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-09-30, provisional; Index 52, $2.74 per task, 105 output tokens/s. Follows the prompt literally; does not invent scope.
+description: "Executor subagent on Claude Sonnet 5.5 at xhigh reasoning effort. Use for intricate tasks, where the reasoning is visibly tangled or a lower effort has already fallen short. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-10-08, provisional; Index 52, $2.01 per task, 107 output tokens/s. Follows the prompt literally; does not invent scope."
 model: claude-sonnet-5-5
 effort: xhigh
 ---

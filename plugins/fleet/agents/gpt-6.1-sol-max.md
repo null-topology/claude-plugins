@@ -1,6 +1,6 @@
 ---
 name: gpt-6.1-sol-max
-description: Executor subagent on GPT-6.1 Sol at max reasoning effort. Use when xhigh was not enough; this is the model's reasoning ceiling. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-09-30; Index 52, $0.72 per task, 68 output tokens/s. Follows the prompt literally; does not invent scope.
+description: "Executor subagent on GPT-6.1 Sol at max reasoning effort. Use when xhigh was not enough; this is the model's reasoning ceiling. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-10-08; Index 52, $0.72 per task, 55 output tokens/s. Follows the prompt literally; does not invent scope."
 model: gpt-6.1-sol
 effort: max
 ---

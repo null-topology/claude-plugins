@@ -1,6 +1,6 @@
 ---
 name: gpt-6.1-sol-xhigh
-description: Executor subagent on GPT-6.1 Sol at xhigh reasoning effort. Use for intricate tasks, where the reasoning is visibly tangled or a lower effort has already fallen short. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-09-30; Index 51, $0.39 per task, 64 output tokens/s. Follows the prompt literally; does not invent scope.
+description: "Executor subagent on GPT-6.1 Sol at xhigh reasoning effort. Use for intricate tasks, where the reasoning is visibly tangled or a lower effort has already fallen short. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-10-08; Index 51, $0.39 per task, 53 output tokens/s. Follows the prompt literally; does not invent scope."
 model: gpt-6.1-sol
 effort: xhigh
 ---

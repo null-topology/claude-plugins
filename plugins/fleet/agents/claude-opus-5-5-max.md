@@ -1,6 +1,6 @@
 ---
 name: claude-opus-5-5-max
-description: Executor subagent on Claude Opus 5.5 at max reasoning effort. Use when xhigh was not enough; this is the model's reasoning ceiling. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-09-30; Index 58, $5.98 per task, 92 output tokens/s. Follows the prompt literally; does not invent scope.
+description: "Executor subagent on Claude Opus 5.5 at max reasoning effort. Use when xhigh was not enough; this is the model's reasoning ceiling. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-10-08; Index 58, $5.98 per task, 96 output tokens/s. Follows the prompt literally; does not invent scope."
 model: claude-opus-5-5
 effort: max
 ---

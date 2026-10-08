@@ -10,8 +10,8 @@ and apply what the user has said about their own fleet. This skill carries data 
 reading it. The only judgment in it is marked as such: a starred cell in the routing table. How a
 user wants their fleet used differs between users and is kept as their overrides, not here.
 
-The fleet: Anthropic — Claude Fable 5.1, Claude Opus 5.5, Claude Sonnet 5.5, Claude Haiku 4.5;
-OpenAI — GPT-6 Astra, GPT-6.1 Sol, GPT-5.6 Terra, GPT-6 Luna. Use the model and effort options the
+The fleet: Anthropic — Claude Fable 5.1, Claude Opus 5.5, Claude Sonnet 5.5, Claude Haiku 5.5,
+Claude Haiku 4.5 (retirement not before 2026-10-15); OpenAI — GPT-6 Astra, GPT-6.1 Sol, GPT-5.6 Terra, GPT-6 Luna. Use the model and effort options the
 invocation tool actually exposes; the guard's rules decide which pairs a caller may spawn.
 
 ## Order of selection

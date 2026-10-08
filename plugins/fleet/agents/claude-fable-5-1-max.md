@@ -1,6 +1,6 @@
 ---
 name: claude-fable-5-1-max
-description: Executor subagent on Claude Fable 5.1 at max reasoning effort. Use when xhigh was not enough; this is the model's reasoning ceiling. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-09-30; Index 53, $7.63 per task, 70 output tokens/s. Follows the prompt literally; does not invent scope.
+description: "Executor subagent on Claude Fable 5.1 at max reasoning effort. Use when xhigh was not enough; this is the model's reasoning ceiling. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-10-08; Index 53, $7.63 per task, 68 output tokens/s. Follows the prompt literally; does not invent scope."
 model: claude-fable-5-1
 effort: max
 ---
