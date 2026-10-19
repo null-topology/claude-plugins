@@ -1,0 +1,33 @@
+{
+  "name": "kiro-sidecar",
+  "version": "0.1.0",
+  "description": "Claude Code plugin that runs Kiro CLI agent sessions over the Agent Client Protocol.",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "devEngines": {
+    "runtime": {
+      "name": "node",
+      "version": ">=22.18.0"
+    }
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "check:dist": "node scripts/build.mjs && git diff --exit-code dist/",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test \"test/**/*.test.ts\""
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "1.9.0",
+    "@modelcontextprotocol/sdk": "1.32.1",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "esbuild": "0.28.2",
+    "typescript": "7.0.2"
+  }
+}

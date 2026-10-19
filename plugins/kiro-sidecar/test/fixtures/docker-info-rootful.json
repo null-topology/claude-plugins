@@ -1,0 +1,9 @@
+{
+  "_fixture": "synthetic: the shape a rootful Docker Engine on Linux reports, not captured from a rootful daemon",
+  "OSType": "linux",
+  "OperatingSystem": "Ubuntu 24.04 LTS",
+  "ServerVersion": "28.0.0",
+  "SecurityOptions": ["name=apparmor", "name=seccomp,profile=builtin", "name=cgroupns"],
+  "Labels": [],
+  "ServerErrors": null
+}

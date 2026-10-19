@@ -1,0 +1,28 @@
+{
+  "name": "kiro-sidecar",
+  "version": "0.1.0",
+  "description": "Runs Kiro CLI agent sessions over the Agent Client Protocol from Claude Code.",
+  "author": {
+    "name": "null-topology"
+  },
+  "license": "MIT",
+  "userConfig": {
+    "api_key": {
+      "type": "string",
+      "title": "Kiro API key",
+      "description": "The Kiro API token. Every Kiro session, in docker and in local mode, uses it; while it is not set, every tool refuses.",
+      "sensitive": true
+    },
+    "proxy": {
+      "type": "string",
+      "title": "Proxy URL",
+      "description": "Optional. Sets HTTP_PROXY, HTTPS_PROXY, http_proxy and https_proxy for Kiro. Docker mode gets no proxy unless this is set and refuses a loopback host such as 127.0.0.1 or localhost; local mode inherits the server's proxy variables, and this value replaces them.",
+      "sensitive": true
+    },
+    "no_proxy": {
+      "type": "string",
+      "title": "No-proxy list",
+      "description": "Optional. Sets NO_PROXY and no_proxy for Kiro. Empty leaves the image's own list in docker mode and the inherited one in local mode."
+    }
+  }
+}

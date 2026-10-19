@@ -1,0 +1,31 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "^mcp__plugin_kiro-sidecar_kiro__(start|send)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/dist/waiter.js", "--deadline-s", "3540"],
+            "asyncRewake": true,
+            "timeout": 3600
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "^(clear|resume|fork|compact)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/dist/context.js"],
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -27,6 +27,16 @@
       },
       "category": "productivity",
       "source": "./plugins/fleet"
+    },
+    {
+      "name": "kiro-sidecar",
+      "description": "Delegates work to Kiro CLI agent sessions over the Agent Client Protocol, in a Docker container or locally. Each call returns at once, and when a Kiro turn ends its result is pushed back into the conversation by a hook, so Claude can answer Kiro and keep one session going across many turns.",
+      "version": "0.1.0",
+      "author": {
+        "name": "null-topology"
+      },
+      "category": "development",
+      "source": "./plugins/kiro-sidecar"
     }
   ]
 }

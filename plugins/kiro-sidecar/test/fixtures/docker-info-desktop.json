@@ -1,0 +1,9 @@
+{
+  "_fixture": "synthetic: the shape Docker Desktop reports, not captured from a Docker Desktop daemon",
+  "OSType": "linux",
+  "OperatingSystem": "Docker Desktop",
+  "ServerVersion": "28.0.0",
+  "SecurityOptions": ["name=seccomp,profile=unconfined", "name=cgroupns"],
+  "Labels": ["com.docker.desktop.address=unix:///var/run/docker-cli.sock"],
+  "ServerErrors": null
+}

@@ -1,0 +1,9 @@
+{
+  "_fixture": "captured from a rootless Docker Engine 29.9.0 on Linux, trimmed to the fields the plugin reads",
+  "OSType": "linux",
+  "OperatingSystem": "Debian GNU/Linux 13 (trixie)",
+  "ServerVersion": "29.9.0",
+  "SecurityOptions": ["name=seccomp,profile=builtin", "name=rootless", "name=cgroupns"],
+  "Labels": [],
+  "ServerErrors": null
+}

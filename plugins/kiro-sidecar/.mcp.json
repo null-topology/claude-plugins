@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "kiro": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/dist/server.js"],
+      "env": {
+        "KIRO_SIDECAR_API_KEY": "${user_config.api_key}",
+        "KIRO_SIDECAR_PROXY": "${user_config.proxy}",
+        "KIRO_SIDECAR_NO_PROXY": "${user_config.no_proxy}"
+      }
+    }
+  }
+}
