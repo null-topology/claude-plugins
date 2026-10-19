@@ -30,10 +30,14 @@ installed by strangers, so the rules below are about shipping something others c
 
 ## Hooks
 
-- POSIX `sh`, invoked as `sh "${CLAUDE_PLUGIN_ROOT}/scripts/<name>.sh"` so the user's login shell
-  is irrelevant. No bashisms: no `[[`, `local`, arrays, `mapfile`, process substitution `<( )`.
-  Portable across BSD and GNU userlands: no `tac`, no `date -d` without a BSD fallback. Test under
-  `/bin/sh`, `dash`, `bash` and `zsh` before committing.
+- POSIX `sh` by default, invoked as `sh "${CLAUDE_PLUGIN_ROOT}/scripts/<name>.sh"` so the user's
+  login shell is irrelevant. No bashisms: no `[[`, `local`, arrays, `mapfile`, process
+  substitution `<( )`. Portable across BSD and GNU userlands: no `tac`, no `date -d` without a BSD
+  fallback. Test under `/bin/sh`, `dash`, `bash` and `zsh` before committing.
+- Another runtime is allowed when the plugin already requires it for its main component: a plugin
+  whose MCP server runs on Node may write its hooks in Node too, invoked as
+  `node "${CLAUDE_PLUGIN_ROOT}/dist/<name>.js"` from a self-contained bundle. The plugin's README
+  lists that runtime under its requirements; every other rule in this section still applies.
 - Only tools present on a base system (`sed`, `awk`, `grep`, `find`, `stat`, `date`, coreutils or
   busybox). Anything else, `jq` included, is optional: detect it, degrade to what still works
   without it, and say so both to the user (`systemMessage`) and to the model
