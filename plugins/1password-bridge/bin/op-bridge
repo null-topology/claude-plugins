@@ -1,0 +1,4 @@
+#!/bin/sh
+# op-bridge: the 1password-bridge command line. SessionStart puts this directory on PATH for the
+# session's Bash commands; `op-bridge redeem <ticket>` prints the ticket's value once it is approved.
+exec node "$(dirname "$0")/../dist/cli.js" "$@"

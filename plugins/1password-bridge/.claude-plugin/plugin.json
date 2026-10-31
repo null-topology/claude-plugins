@@ -1,0 +1,31 @@
+{
+  "name": "1password-bridge",
+  "version": "0.2.0",
+  "description": "Hands 1Password fields to Claude Code commands through one-use tickets, each use approved in a window that shows the command, and masks secret values in Bash output.",
+  "author": {
+    "name": "null-topology"
+  },
+  "license": "MIT",
+  "userConfig": {
+    "idle_window_minutes": {
+      "type": "number",
+      "title": "Access window (minutes)",
+      "description": "Minutes after the last fields, issue_tickets or redeem until the broker drops its cached 1Password clients. The next 1Password operation reconnects and may make the 1Password app ask for authorization again. Tickets and masks are kept regardless.",
+      "default": 60,
+      "min": 5,
+      "max": 720
+    },
+    "accounts": {
+      "type": "string",
+      "title": "1Password accounts",
+      "description": "Optional. Comma-separated account names or UUIDs, used when the op CLI is not installed to list them."
+    },
+    "language": {
+      "type": "string",
+      "title": "Window language",
+      "description": "Language of the approval window.",
+      "options": ["en", "uk"],
+      "default": "en"
+    }
+  }
+}

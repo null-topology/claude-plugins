@@ -1,0 +1,33 @@
+{
+  "name": "1password-bridge",
+  "version": "0.2.0",
+  "description": "Claude Code plugin that hands 1Password fields to single approved commands through one-use tickets.",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "devEngines": {
+    "runtime": {
+      "name": "node",
+      "version": ">=22.18.0"
+    }
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "check:dist": "node scripts/build.mjs && git diff --exit-code dist/",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test \"test/**/*.test.ts\""
+  },
+  "dependencies": {
+    "@1password/sdk": "0.5.0",
+    "@modelcontextprotocol/sdk": "1.32.1",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "esbuild": "0.28.2",
+    "typescript": "7.0.2"
+  }
+}
