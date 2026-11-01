@@ -13,7 +13,7 @@
 import type { Socket } from 'node:net';
 import type { Writable } from 'node:stream';
 import { BrokerError, brokerSocketPath, connectSocket } from '../mcp/broker-client.ts';
-import { isSessionId, resolveStateDir, type Environment } from '../paths.ts';
+import { isSessionId, type Environment } from '../paths.ts';
 import { encodeAck, encodeLine, lineReader, parseResponse, TICKET_ID_PATTERN, type AckOp } from '../protocol.ts';
 import { PROTOCOL_VERSION } from '../version.ts';
 
@@ -31,6 +31,7 @@ export const EXIT_CODES = {
   field_gone: 19,
   broker_down: 20,
   not_delivered: 21,
+  not_set_up: 22,
 } as const;
 
 /**
@@ -42,6 +43,13 @@ export const EXIT_CODES = {
 export const OTHER_FAILURE_EXIT = 1;
 
 export const USAGE = 'usage: op-bridge redeem <ticket>';
+
+/**
+ * OP_BRIDGE_STATE_DIR is missing from the shell: the SessionStart hook that
+ * ran for this session was an older version's, or none ran.
+ */
+const NOT_SET_UP_MESSAGE =
+  "OP_BRIDGE_STATE_DIR is not set, so this shell lacks the setup of the plugin's SessionStart hook (the session started or was cleared while an older version was loaded); nothing was sent and the ticket is unchanged: ask the user to run /reload-plugins and then /clear, or to restart the session";
 
 /** Nobody answers on the socket, or the connection closed with no answer line. */
 const BROKER_DOWN_MESSAGE = 'The 1password-bridge broker is not reachable; if it stopped, its tickets are gone: call issue_tickets for a new one';
@@ -114,9 +122,12 @@ export async function runCli(argv: readonly string[], io: CliIo): Promise<number
   if (io.stdoutDiscarded()) {
     return failed('usage', 'stdout is closed or /dev/null, so the value would be lost; nothing was sent: capture it with "$(op-bridge redeem <ticket>)"');
   }
+  // Bash commands never get CLAUDE_PLUGIN_DATA, so a default state directory would hold no broker
+  // and the failure would read as broker_down. Such a shell also lacks the exit trap.
+  const stateDir = io.env['OP_BRIDGE_STATE_DIR'];
+  if (stateDir === undefined || stateDir === '') return failed('not_set_up', NOT_SET_UP_MESSAGE);
   let socket: Socket;
   try {
-    const stateDir = io.env['OP_BRIDGE_STATE_DIR'] || resolveStateDir(io.env);
     socket = await connectSocket(brokerSocketPath(stateDir, io.env));
   } catch (err) {
     // BrokerError `untrusted` names only the socket path and the failed check; nothing was sent.

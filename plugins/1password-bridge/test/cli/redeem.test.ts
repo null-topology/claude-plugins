@@ -279,6 +279,23 @@ describe('op-bridge redeem', () => {
     assert.equal(requests.length, 0);
   });
 
+  test('no OP_BRIDGE_STATE_DIR is not_set_up, exit 22, without a connection', LIMIT, async () => {
+    const { requests } = await broker(async () => {});
+    const envs: Record<string, string>[] = [{ CLAUDE_CODE_SESSION_ID: SESSION }, { CLAUDE_CODE_SESSION_ID: SESSION, OP_BRIDGE_STATE_DIR: '' }];
+    for (const env of envs) {
+      assert.deepEqual(await cli(['redeem', TICKET], { env }), {
+        code: EXIT_CODES.not_set_up,
+        stdout: '',
+        errors: [
+          "op-bridge: not_set_up: OP_BRIDGE_STATE_DIR is not set, so this shell lacks the setup of the plugin's SessionStart hook (the session started or was cleared while an older version was loaded); nothing was sent and the ticket is unchanged: ask the user to run /reload-plugins and then /clear, or to restart the session",
+        ],
+      });
+    }
+    await ioTurn();
+    assert.equal(connections.length, 0);
+    assert.equal(requests.length, 0);
+  });
+
   test('a closed or /dev/null stdout is refused with exit 2, without a connection', LIMIT, async () => {
     const { requests } = await broker(async (_req, _lines, socket) => {
       socket.destroy();

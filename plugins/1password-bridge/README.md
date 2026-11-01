@@ -92,6 +92,7 @@ stderr, without the value, and exits with its own code:
 | 19 | `field_gone` | the field no longer resolves; the ticket is voided |
 | 20 | `broker_down` | the broker's socket is not reachable; if the broker stopped, its tickets are gone |
 | 21 | `not_delivered` | writing to stdout failed; the ticket is given back, and stays usable while its 10 minutes last and it was not released |
+| 22 | `not_set_up` | the shell has no `OP_BRIDGE_STATE_DIR`: the SessionStart hook that ran for this session was an older version's, or none ran; nothing was sent and the ticket is unchanged (see [Update](#update)) |
 
 ### Masking
 
@@ -206,7 +207,9 @@ claude plugin marketplace update null-topology
 claude plugin update 1password-bridge@null-topology
 ```
 
-Then restart every running Claude Code session.
+Then restart every running Claude Code session. A `/clear` alone in a session that was running
+before the update may still run the old version's SessionStart hook, and its redeems fail with
+`not_set_up`; `/reload-plugins` followed by `/clear` sets the session up as well.
 
 ## What it injects
 
@@ -301,6 +304,12 @@ a value.
 - **The broker's socket is yours.** While the broker runs, any process running as you can call
   `fields` on its socket and read item metadata (titles, types, no values). A redeem still needs
   a running command on the session's list and your approval in the window.
+- **Auto mode.** The auto mode classifier does not know about the approval window, and its default
+  Credential Exploration rule may block `fields`, `issue_tickets` or a redeem command. To allow
+  them, add the four MCP tools (`mcp__plugin_1password-bridge_op__accounts`, `…__fields`,
+  `…__issue_tickets`, `…__release`) to `permissions.allow`, and add to `autoMode.allow` an entry
+  that names this plugin's use as a Credential Exploration false positive, keeping `"$defaults"`
+  first in that list. `claude auto-mode critique` reviews such a rule.
 - **Windows** exist on macOS (JXA) and on Linux with zenity only.
 - **Other sessions.** A process of another session that reads this session's transcript is out of
   scope.

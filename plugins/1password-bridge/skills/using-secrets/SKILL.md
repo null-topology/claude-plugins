@@ -80,6 +80,7 @@ PW="$(op-bridge redeem tkt_…)" && PGPASSWORD="$PW" psql -h db.internal -U app 
 | `field_gone` (19) | The field no longer resolves. Run `fields` again, and ask the user if it moved. |
 | `broker_down` (20) | The broker is not reachable and its tickets may be gone. Issue a new ticket once; if it repeats, tell the user. |
 | `not_delivered` (21) | Writing stdout failed. The ticket stays usable while its 10 minutes last and it is not released: rerun with the value captured in `"$(…)"`; a new window opens. |
+| `not_set_up` (22) | This shell lacks the plugin's session setup: an older version's SessionStart hook ran for this session. Nothing was sent and the ticket is unchanged. Do not retry: tell the user to run `/reload-plugins` and then `/clear`, or to restart the session. |
 | `usage` (2) | Bad arguments (check the ticket id), or stdout is closed or `/dev/null`: capture the value in `"$(…)"`. The ticket is unchanged. |
 | other (1) | Read the message. A missing window backend, a 1Password refusal or an untrusted socket is the user's to fix: tell them. |
 
@@ -123,5 +124,8 @@ PW="$(op-bridge redeem tkt_…)" && PGPASSWORD="$PW" psql -h db.internal -U app 
   out of files; offer to pass it through the environment of the command that needs it, and leave
   the choice to them. They can write the file themselves.
 - An error points at the setup: hooks, the window, 1Password authorization, the socket.
+- The auto mode classifier denies a plugin tool or a redeem command (Credential Exploration, for
+  example). Do not look for another way to the value; tell the user, who can add an exception
+  (the plugin's README, Limits).
 - Bash output keeps coming back withheld.
 - A warning says a value appeared unmasked.

@@ -8,7 +8,6 @@ import { tmpdir } from "node:os";
 import { dirname, join as join2 } from "node:path";
 
 // src/paths.ts
-import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 
 // src/version.ts
@@ -18,18 +17,6 @@ var PROTOCOL_VERSION = 2;
 var STATE_DIR_NAME = "1password-bridge";
 var MAX_SOCKET_PATH_BYTES = 100;
 var SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
-function resolveStateDir(env = process.env) {
-  const pluginData = env.CLAUDE_PLUGIN_DATA;
-  if (pluginData !== void 0 && pluginData !== "") {
-    return resolve(pluginData);
-  }
-  const xdgState = env.XDG_STATE_HOME;
-  if (xdgState !== void 0 && isAbsolute(xdgState)) {
-    return join(xdgState, STATE_DIR_NAME);
-  }
-  const home = env.HOME !== void 0 && env.HOME !== "" ? env.HOME : homedir();
-  return join(home, ".local", "state", STATE_DIR_NAME);
-}
 function isSessionId(value) {
   return SESSION_ID_PATTERN.test(value);
 }
@@ -334,10 +321,12 @@ var EXIT_CODES = {
   voided: 18,
   field_gone: 19,
   broker_down: 20,
-  not_delivered: 21
+  not_delivered: 21,
+  not_set_up: 22
 };
 var OTHER_FAILURE_EXIT = 1;
 var USAGE = "usage: op-bridge redeem <ticket>";
+var NOT_SET_UP_MESSAGE = "OP_BRIDGE_STATE_DIR is not set, so this shell lacks the setup of the plugin's SessionStart hook (the session started or was cleared while an older version was loaded); nothing was sent and the ticket is unchanged: ask the user to run /reload-plugins and then /clear, or to restart the session";
 var BROKER_DOWN_MESSAGE = "The 1password-bridge broker is not reachable; if it stopped, its tickets are gone: call issue_tickets for a new one";
 var PROTOCOL_MESSAGE = "The broker sent an answer op-bridge does not understand";
 function exitFor(code) {
@@ -380,9 +369,10 @@ async function runCli(argv, io) {
   if (io.stdoutDiscarded()) {
     return failed("usage", 'stdout is closed or /dev/null, so the value would be lost; nothing was sent: capture it with "$(op-bridge redeem <ticket>)"');
   }
+  const stateDir = io.env["OP_BRIDGE_STATE_DIR"];
+  if (stateDir === void 0 || stateDir === "") return failed("not_set_up", NOT_SET_UP_MESSAGE);
   let socket;
   try {
-    const stateDir = io.env["OP_BRIDGE_STATE_DIR"] || resolveStateDir(io.env);
     socket = await connectSocket(brokerSocketPath(stateDir, io.env));
   } catch (err) {
     if (err instanceof BrokerError && err.code === "untrusted") return failed("untrusted", err.message);
