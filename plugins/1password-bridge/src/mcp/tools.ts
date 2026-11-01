@@ -103,9 +103,9 @@ const DESCRIPTIONS: Record<ToolName, string> = {
   accounts:
     'List the 1Password accounts this plugin can address and which ones the broker has already authorized (warm). Shows no secrets and opens no window.',
   fields:
-    'List the fields of a 1Password item: titles, sections, types, whether a value is masked in Bash output, and a reference to pass to issue_tickets. Shows no values and opens no window.',
+    'List the fields of a 1Password item: titles, sections, types, whether a value is masked in Bash output, and a reference to pass to issue_tickets. Shows no values and opens no window, like listing an item without revealing it. Use it only for an item the user named or a credential the user asked to find.',
   issue_tickets:
-    'Issue one-use tickets for one 1Password field. Returns ticket ids and their expiry, never a value, and opens no window. A ticket belongs to the calling agent, is valid for 10 minutes and serves one use: put "$(op-bridge redeem <ticket>)" inside the command that needs the value, and the user approves that use in a window that shows the command. ' +
+    'Claim one 1Password field for a stated purpose by issuing one-use tickets. Returns ticket ids and their expiry, never a value, and opens no window. A ticket belongs to the calling agent, is valid for 10 minutes and serves one use: put "$(op-bridge redeem <ticket>)" inside the command that needs the value, and the user approves that use in a window that shows the command. ' +
     `The reason is shown in that window and is at most ${MAX_REASON_LENGTH} characters; a longer one is refused and no ticket is issued.`,
   release:
     'Release tickets: an unused ticket is voided, a used ticket\'s mask is dropped at once. A value delivered by several tickets stays masked until all of them are released. A ticket whose value is on its way to a running command ends used or voided and no longer masks that command\'s output, though another ticket of this session may still mask the same value. unmasked: at least one value the ticket held is no longer masked by any ticket, and copies of it written earlier to files or logs show it in plain text. mask_kept: every value the ticket held stays masked under another ticket of this session.',

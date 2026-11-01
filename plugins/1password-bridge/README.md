@@ -309,7 +309,10 @@ a value.
   them, add the four MCP tools (`mcp__plugin_1password-bridge_op__accounts`, `…__fields`,
   `…__issue_tickets`, `…__release`) to `permissions.allow`, and add to `autoMode.allow` an entry
   that names this plugin's use as a Credential Exploration false positive, keeping `"$defaults"`
-  first in that list. `claude auto-mode critique` reviews such a rule.
+  first in that list. Keep the entry to credentials the user asked for and to redeems visible on
+  the command line (a `$(op-bridge redeem …)` substitution, or a ticket id passed to a script): a
+  lookup on the agent's own initiative stays Credential Exploration. `claude auto-mode critique`
+  reviews such a rule.
 - **Windows** exist on macOS (JXA) and on Linux with zenity only.
 - **Other sessions.** A process of another session that reads this session's transcript is out of
   scope.

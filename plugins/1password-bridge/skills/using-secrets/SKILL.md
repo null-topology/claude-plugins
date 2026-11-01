@@ -10,6 +10,9 @@ read what comes back, and which answers belong to the user.
 
 ## Get a ticket
 
+- Look up only a credential the user asked for: an item they named, or one they asked you to find
+  ("find the Cloudflare token"). A lookup on your own initiative is credential exploration, which
+  auto mode may block: when the work needs a secret the user did not mention, ask them first.
 - You need the vault and the item. No tool searches 1Password: use what the user named, and ask
   when they named nothing or the name is ambiguous. `fields` with `op://<vault>/<item>` lists the
   fields with ready refs; `accounts` helps when more than one account exists.
@@ -39,6 +42,9 @@ PW="$(op-bridge redeem tkt_…)" && PGPASSWORD="$PW" psql -h db.internal -U app 
   a prefix assignment `X="$(…)" cmd` and an inline `"…$(op-bridge redeem …)…"` argument run the
   command, or the next one, with an empty value when the redeem fails. Export afterwards when a
   child process needs it: `X="$(…)" && export X && ./deploy.sh`.
+- Never write a ticket id or `op-bridge redeem` into a script or any other file: the classifier
+  and the user see only the command line. When a script must redeem by itself, pass the ticket id
+  as an argument (`./deploy.sh tkt_…`), so the command shows which ticket it uses.
 - Redeem once per command and reuse the variable.
 - Give the Bash call a long `timeout`, such as 600000: the command waits while the user reads the
   window, and a command the timeout moves to the background has its output read later, unmasked.

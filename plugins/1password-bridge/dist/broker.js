@@ -1863,7 +1863,7 @@ import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 
 // src/version.ts
-var VERSION = "0.2.1";
+var VERSION = "0.2.2";
 var PROTOCOL_VERSION = 2;
 
 // src/paths.ts

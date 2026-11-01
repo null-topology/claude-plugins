@@ -110,18 +110,18 @@ describe('0.1.0 leftovers', () => {
   });
 });
 
-describe('release 0.2.1', () => {
-  test('the version is 0.2.1 everywhere, the marketplace entry included', () => {
+describe('release 0.2.2', () => {
+  test('the version is 0.2.2 everywhere, the marketplace entry included', () => {
     const manifest = readJson<{ version: string; description: string }>('.claude-plugin/plugin.json');
     const market = readJson<{ plugins: { name: string; version: string; description: string }[] }>('../../.claude-plugin/marketplace.json');
     const entry = market.plugins.find((p) => p.name === '1password-bridge');
     const lock = readJson<{ version: string; packages: Record<string, { version?: string }> }>('package-lock.json');
-    assert.equal(VERSION, '0.2.1');
-    assert.equal(PACKAGE.version, '0.2.1');
-    assert.equal(manifest.version, '0.2.1');
-    assert.equal(entry?.version, '0.2.1');
-    assert.equal(lock.version, '0.2.1');
-    assert.equal(lock.packages['']?.version, '0.2.1');
+    assert.equal(VERSION, '0.2.2');
+    assert.equal(PACKAGE.version, '0.2.2');
+    assert.equal(manifest.version, '0.2.2');
+    assert.equal(entry?.version, '0.2.2');
+    assert.equal(lock.version, '0.2.2');
+    assert.equal(lock.packages['']?.version, '0.2.2');
     for (const text of [manifest.description, PACKAGE.description, entry?.description ?? '']) {
       assert.match(text, /ticket/, text);
       assert.doesNotMatch(text, /environment variable/, text);

@@ -41,7 +41,7 @@
     {
       "name": "1password-bridge",
       "description": "Hands 1Password fields to Claude Code commands through one-use tickets, each use approved in a window that shows the command, and masks secret values in Bash output. A safety net against accidental exposure, not a barrier against the agent.",
-      "version": "0.2.1",
+      "version": "0.2.2",
       "author": {
         "name": "null-topology"
       },
