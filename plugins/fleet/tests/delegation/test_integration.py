@@ -175,7 +175,7 @@ def main():
             ("main/relative effort higher refused", invocation(effort="higher"), None, 2, "effort 'higher' is relative"),
             ("main/relative effort lower refused", invocation(effort="lower"), None, 2, "effort 'lower' is relative"),
             ("main/off-ladder effort refused", invocation(effort="xhigh"), None, 2,
-             "effort 'xhigh' is not a level of 'fixture-worker'. Its levels: low, high."),
+             "effort 'xhigh' is not a level of 'fixture-worker'. The levels available here: low."),
             ("main/default is not a level of a laddered model", invocation(effort="default"), None, 2,
              "is not a level of 'fixture-worker'"),
             ("main/ladder-less model with an effort refused", invocation(subagent_type="fleet:plain"), None, 2,
@@ -275,6 +275,113 @@ def main():
             check(name, result.returncode == code and not result.stdout
                   and (code == 0 or "rules file is invalid" in result.stderr), result.stderr)
 
+        # ---- review reproductions -------------------------------------------------------------
+        # Each case is a reproduction from the 0.10.0 review, run on a copy of the plugin's own
+        # agents and shipped rules. Every one of them gave another exit code before the fix.
+        real = Path(temporary) / "real"
+        (real / "scripts").mkdir(parents=True)
+        for filename in ("subagent-guard.sh", "fleet-rules.sh"):
+            shutil.copyfile(root / "scripts" / filename, real / "scripts" / filename)
+        shutil.copytree(root / "agents", real / "agents")
+        shutil.copyfile(root / "fleet.default.json", real / "fleet.default.json")
+        if (root / ".claude-plugin/plugin.json").is_file():
+            (real / ".claude-plugin").mkdir()
+            shutil.copyfile(root / ".claude-plugin/plugin.json", real / ".claude-plugin/plugin.json")
+        review_rules = Path(temporary) / "review-rules.json"
+
+        def review(raw, rules_text=None, extra_env=None):
+            """Runs the guard of the copy on a raw payload, with rules_text as FLEET_RULES (the shipped
+            rules when None)."""
+            run_env = dict(env, **(extra_env or {}))
+            if rules_text is not None:
+                review_rules.write_text(rules_text)
+                run_env["FLEET_RULES"] = str(review_rules)
+            return subprocess.run(shell + [str(real / "scripts/subagent-guard.sh"), str(real), ""], input=raw,
+                                  text=True, capture_output=True, timeout=10, env=run_env)
+
+        def agent_call(subagent_type, caller=None, **fields):
+            data = {"hook_event_name": "PreToolUse", "tool_name": "Agent",
+                    "tool_input": dict({"subagent_type": subagent_type, "prompt": brief()}, **fields)}
+            if caller:
+                data.update(agent_type=caller, agent_id="a1")
+            return json.dumps(data)
+
+        fable_bash = json.dumps({"hook_event_name": "PreToolUse", "tool_name": "Bash", "agent_type": "claude-fable-5-1",
+                                 "agent_id": "a1", "tool_input": {"command": "sudo ls"}})
+        wrong_rules = json.dumps({"main": {"fleet": {"novel-model": ["high"]}}, "rules": "wrong"})
+        newline_rules = json.dumps({"main": {"fleet": {"gpt-6-luna": ["max"], "claude-sonnet-5-5": ["high"]}},
+                                    "rules": {"claude-sonnet-5-5": {"gpt-6-luna": ["low\nmax"]}}})
+        luna_rules = json.dumps({"main": {"fleet": {"gpt-6-luna": ["low"]}},
+                                 "rules": {"gpt-6-luna": {"gpt-6-luna": ["high"]}}})
+        # A jq that fails (status 5) on the guard's first payload field: an unexpected failure.
+        failing = Path(temporary) / "failing-jq"
+        failing.mkdir()
+        (failing / "jq").write_text("#!/bin/sh\ncase \"$*\" in *hook_event_name*) exit 5 ;; esac\nexec '%s' \"$@\"\n"
+                                    % shutil.which("jq"))
+        (failing / "jq").chmod(0o755)
+        failing_env = {"PATH": "%s%s%s" % (failing, os.pathsep, env.get("PATH", ""))}
+        fable = real / "agents/claude-fable-5-1.md"
+        fable_text = fable.read_text()
+        fable.unlink()
+        review_cases = [
+            ("1/caller: empty rules, its definition gone: a bare fleet caller is refused",
+             review(fable_bash, ""), 2, "rules file is invalid"),
+            ("1/caller: truncated rules, its definition gone: a bare fleet caller is refused",
+             review(fable_bash, '{"main": {"fleet": {"claude-fable-5-1": ["high"]'), 2, "rules file is invalid"),
+        ]
+        fable.write_text(fable_text)
+        review_cases += [
+            ("1/target: rules with a section of the wrong type: a bare type is refused, not passed as built-in",
+             review(agent_call("novel-model", effort="high"), wrong_rules), 2, "could not be read"),
+            ("1/target: the prefixed spelling is refused too",
+             review(agent_call("fleet:novel-model", effort="high"), wrong_rules), 2, "could not be read"),
+            ("1/a built-in caller still passes once the rules were read",
+             review(fable_bash.replace('"claude-fable-5-1"', '"Explore"')), 0, ""),
+            ("2/a line break inside an effort entry is no pair of levels",
+             review(agent_call("fleet:gpt-6-luna", "fleet:claude-sonnet-5-5", effort="max"), newline_rules), 2,
+             'the effort entries "low\\nmax", which are not levels'),
+            ("3/a payload that is not JSON is refused", review("not json"), 2, "hook payload is not one JSON object"),
+            ("3/a tool_input that is not an object is refused", review('{"tool_input":"x"}'), 2,
+             "hook payload is not one JSON object"),
+            ("3/an Agent call whose tool_input is not an object is refused",
+             review('{"hook_event_name":"PreToolUse","tool_name":"Agent","tool_input":"x"}'), 2,
+             "hook payload is not one JSON object"),
+            ("3/an unexpected failure exits 2, not its own status",
+             review(agent_call("fleet:gpt-6-luna", effort="high"), None, failing_env), 2, "unexpected error (status 5)"),
+            ("4/another plugin's type is not a fleet target: a fleet caller cannot reach it",
+             review(agent_call("other:gpt-6-luna", "fleet:claude-fable-5-1", effort="high")), 2,
+             "'other:gpt-6-luna' is not a fleet agent"),
+            ("4/another plugin's type is not checked as a fleet target from the main session",
+             review(agent_call("other:gpt-6-luna", effort="high"), luna_rules), 0, ""),
+            ("5/a model override is refused while main.fleet is empty",
+             review(agent_call("fleet:gpt-6-luna", model="opus", effort="high")), 2, "carry their own model"),
+            ("7/an empty agent_id is the main session, whatever agent_type says",
+             review(json.dumps({"hook_event_name": "PreToolUse", "tool_name": "Agent",
+                                "agent_type": "fleet:claude-fable-5-1",
+                                "tool_input": {"subagent_type": "fleet:claude-fable-5-1", "effort": "high",
+                                               "prompt": brief()}})), 0, ""),
+            ("8/main: a missing effort lists the levels main.fleet allows",
+             review(agent_call("fleet:gpt-6-luna"), luna_rules), 2, "pass effort as one of low, the level"),
+            ("8/main: a relative effort lists the levels main.fleet allows",
+             review(agent_call("fleet:gpt-6-luna", effort="higher"), luna_rules), 2, "of 'gpt-6-luna' (low), the one"),
+            ("8/main: an off-level effort lists the levels main.fleet allows",
+             review(agent_call("fleet:gpt-6-luna", effort="ultra"), luna_rules), 2, "The levels available here: low."),
+            ("8/nested: a missing effort lists the levels the caller's row allows",
+             review(agent_call("fleet:gpt-6-luna", "fleet:gpt-6-luna"), luna_rules), 2,
+             "pass effort as one of high, the level"),
+            ("6/an effort entry 'lower' refuses calls to that model as a configuration error",
+             review(agent_call("fleet:gpt-6-luna", effort="low"), json.dumps({"main": {"fleet": {"gpt-6-luna": ["lower"]}}})),
+             2, 'the effort entries "lower", which are not levels'),
+            ("6/an effort entry 'ultra' refuses calls to that model as a configuration error",
+             review(agent_call("fleet:gpt-6-luna", effort="low"),
+                    json.dumps({"main": {"fleet": {"gpt-6-luna": ["low", "ultra"]}}})),
+             2, 'the effort entries "ultra", which are not levels'),
+        ]
+        for name, result, code, text in review_cases:
+            check("review/" + name, result.returncode == code and not result.stdout
+                  and (text in result.stderr if code else not result.stderr),
+                  "rc=%r stderr=%r" % (result.returncode, result.stderr))
+
         generation = Path(temporary) / "generation"
         (generation / "scripts").mkdir(parents=True)
         (generation / "templates").mkdir()
@@ -335,8 +442,37 @@ def main():
                   result.returncode == 3 and "gives 'fixture-model' both default and named levels" in result.stderr
                   and sorted(p.name for p in (generation / "agents").glob("*.md")) == before,
                   (result.returncode, result.stderr))
+            # Effort entries outside the six words, and ids that differ only in case, are configuration
+            # errors: exit 3, agents/ unchanged, the message names the model and the word or the ids.
+            for label, doc, text in [
+                    ("an effort entry 'lower'", {"main": {"fleet": {"fixture-model": ["lower"]}}},
+                     'gives the model "fixture-model" the effort "lower", which is not a level'),
+                    ("an effort entry 'ultra'", {"main": {"fleet": {"fixture-model": ["low", "ultra"]}}},
+                     'gives the model "fixture-model" the effort "ultra", which is not a level'),
+                    ("ids that differ only in case", {"main": {"fleet": {"Fixture-Model": ["low"], "fixture-model": ["low"]}}},
+                     'mentions the models "Fixture-Model" and "fixture-model", whose ids differ only in case')]:
+                bad_rules = Path(temporary) / "bad-generation.json"
+                bad_rules.write_text(json.dumps(doc))
+                for mode, arguments in (("--rules", ["--rules", str(bad_rules)]), ("full run", [])):
+                    if not arguments:
+                        shutil.copyfile(bad_rules, generation / "fleet.default.json")
+                    before = {p.name: p.read_text() for p in (generation / "agents").glob("*.md")}
+                    result = subprocess.run(shell + [str(generation / "scripts/generate-agents.sh")] + arguments,
+                                            text=True, capture_output=True, timeout=10, env=env)
+                    check("generator/%s, %s: exit 3, agents/ unchanged, says why" % (label, mode),
+                          result.returncode == 3 and text in result.stderr
+                          and {p.name: p.read_text() for p in (generation / "agents").glob("*.md")} == before,
+                          repr((result.returncode, result.stderr)))
+            (generation / "fleet.default.json").write_text(json.dumps({
+                "main": {"fleet": {"fixture-model": ["low", "high"], "fixture-plain": ["default"]}},
+                "rules": {"fixture-model": {"fixture-bare": ["medium", "low"]}}}))
+            # models.json is data only: a default rung beside named ones there is not an error.
+            models["models"][0]["efforts"]["default"] = {"index": 1, "usd": 1, "tps": 1}
+            (generation / "models.json").write_text(json.dumps(models))
             result = subprocess.run(shell + [str(generation / "scripts/generate-agents.sh")],
                                     text=True, capture_output=True, timeout=10, env=env)
+            check("generator/models.json: a default rung beside named ones is accepted", result.returncode == 0,
+                  result.stderr)
             for filename, model, levels in [("fixture-model.md", "fixture-model", "low or high"),
                                             ("fixture-plain.md", "fixture-plain", None)]:
                 text = (generation / "agents" / filename).read_text()

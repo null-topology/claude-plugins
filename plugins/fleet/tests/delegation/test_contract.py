@@ -98,6 +98,8 @@ def main():
         Case("target/fork not inspected", typed("bare text", "fork")),
         Case("target/missing type not inspected", typed("bare text", None)),
         Case("target/unknown plugin type not inspected", typed("bare text", "other:worker")),
+        Case("target/another plugin's type named like a fleet agent not inspected",
+             typed("bare text", "other:fixture-worker")),
         Case("target/path-like type not inspected", typed("bare text", "../agents/fixture-worker")),
         Case("target/non-string type not inspected", typed("bare text", 7)),
         Case("target/bare fleet name inspected", typed("bare text", "fixture-worker"), 2, "Missing: Objective."),

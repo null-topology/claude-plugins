@@ -54,6 +54,10 @@ This skill explicitly instructs you to set the Agent tool's `effort` parameter. 
   reference shows them for the shipped rules). Always pass it by name. Never pass a relative
   value (`lower`, `higher`), a level the description does not name, or no effort at all: the
   guard refuses each of them.
+- The description lists every level the rules give the model, from any caller. Your own row in
+  the rules (or `main.fleet`, from the main session) may allow fewer of them, and a level outside
+  it is refused for good. An effort refusal that asks you to correct the call lists the levels
+  available to you; pick from those.
 - A model without effort control (its description says the caller passes no effort, and its
   effort is `n/a` in `references/benchmark.md`; Claude Haiku 4.5 in the shipped rules) takes no
   `effort`: leave the parameter out. The guard refuses one.

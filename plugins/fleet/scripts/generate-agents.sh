@@ -37,9 +37,11 @@
 # happens before the install; 3 invalid input, nothing changed: a rules file that is not
 # exactly one JSON object (or null), that has a section of the wrong type for a query the
 # fleet or the closure needs (an allowlist that is a string, a number or a list where a
-# section belongs, for one), that mentions a model whose id cannot be an agent name, or that
-# gives a model "default" beside named levels; shipped rules that mention no model; a models
-# file that is missing or not of the shape models_valid describes; 64 usage; 75 another run
+# section belongs, for one), that mentions a model whose id cannot be an agent name, two models
+# whose ids differ only in case (one agent file on a case-insensitive file system), that gives a
+# model an effort entry other than low, medium, high, xhigh, max and default, or that gives a
+# model "default" beside named levels; shipped rules that mention no model; a models file that
+# is missing or not of the shape models_valid describes; 64 usage; 75 another run
 # held the lock for FLEET_SYNC_LOCK_WAIT seconds (default 20), or took it over, nothing
 # changed.
 #
@@ -87,13 +89,13 @@ fleet_unreadable() { [ -f "$out/unreadable" ] || printf '%s\n' "$1" > "$out/unre
 
 # models_valid <file>: the shape the renderer and the reference need. One JSON object with a
 # snapshot (benchmark and date strings) and a non-empty models array; each model with an id
-# usable as a file name, a non-empty string name and an efforts object keyed by known rungs, where
-# "default" (a model without effort control) stands alone, since a model with named levels takes
-# one on every call and a call cannot ask for "default"; per
+# usable as a file name, a non-empty string name and an efforts object keyed by known rungs; per
 # rung, index, usd and tps each a number or null, usd above zero (the reference divides by it),
 # and usd_estimated a boolean when present; provisional a boolean when present. This is the
 # format the benchmark data is written in; the rungs here are what was measured, not what the
-# fleet offers (the rules decide that). Invalid model input leaves agents/ and the reference as
+# fleet offers (the rules decide that, and only there does "default" beside named levels mean a
+# configuration error: here it is one more measured point). Invalid model input leaves agents/
+# and the reference as
 # they are.
 # The text reaches each agent's YAML frontmatter: the name and the snapshot strings go into the
 # description, which render quotes, but no quoting carries a control character or line break as
@@ -112,7 +114,7 @@ models_valid() {
           and (test("^(y|yes|n|no|true|false|on|off|null)$"; "i") | not))
         and (.name | text and length > 0)
         and boolean_if_present("provisional")
-        and (.efforts | type == "object" and ((has("default") | not) or length == 1)
+        and (.efforts | type == "object"
           and all(to_entries[];
           (.key | IN("low", "medium", "high", "xhigh", "max", "default"))
           and (.value | type == "object"
@@ -234,7 +236,7 @@ main_open=
 nonempty .main.fleet || main_open=1
 spawn_open=
 nonempty .rules || spawn_open=1
-fleet_read '[fleet_ids[] as $m | {id: $m, levels: fleet_levels($m)}] | tojson' || :
+fleet_read '[fleet_ids[] as $m | {id: $m, levels: fleet_levels($m), bad: fleet_bad($m)}] | tojson' || :
 fleet=${fleet_lines:-[]}
 if [ -f "$out/unreadable" ]; then
   echo "generate-agents.sh: rules file '$source_rules' could not be read: the query $(cat "$out/unreadable") failed, so a section has the wrong type; agents/ left as it is" >&2
@@ -250,6 +252,22 @@ bad=$(printf '%s\n' "$fleet" | jq -r '[.[].id | select((test("^[A-Za-z][A-Za-z0-
 if [ -n "$bad" ]; then
   # printf, not echo: some shells' echo expands the backslashes of the JSON quoting.
   printf '%s\n' "generate-agents.sh: rules file '$source_rules' mentions the model $bad, which cannot be an agent name: a model id starts with a letter, holds only letters, digits, '.', '_' and '-', and is not a word YAML reads as a boolean or null; agents/ left as it is" >&2
+  exit 3
+fi
+# Ids are file names: two that differ only in case are one file on a case-insensitive file system
+# (the macOS default), so one agent would overwrite the other.
+bad=$(printf '%s\n' "$fleet" | jq -r '[.[].id] | group_by(ascii_downcase) | map(select(length > 1))
+  | if length > 0 then .[0] | map(tojson) | join(" and ") else empty end')
+if [ -n "$bad" ]; then
+  printf '%s\n' "generate-agents.sh: rules file '$source_rules' mentions the models $bad, whose ids differ only in case: their agents would share one file on a case-insensitive file system; agents/ left as it is" >&2
+  exit 3
+fi
+# An effort entry is one of the six words (fleet_word): any other ("lower", "ultra", a string with
+# a line break, a number) is no level a call can pass, so the guard refuses every call to the model.
+bad=$(printf '%s\n' "$fleet" | jq -r '[.[] | select(.bad | length > 0)]
+  | if length > 0 then .[0] | "\(.id | tojson) the effort \(.bad[0] | tojson)" else empty end')
+if [ -n "$bad" ]; then
+  printf '%s\n' "generate-agents.sh: rules file '$source_rules' gives the model $bad, which is not a level: an effort entry is one of low, medium, high, xhigh, max, or default alone for a model without effort control; agents/ left as it is" >&2
   exit 3
 fi
 # "default" marks a model without effort control; beside named levels it leaves no way to check a

@@ -48,7 +48,8 @@ tool=$(printf '%s' "$payload" | jq -r '.tool_name') || error 'Could not read too
 # the sync removes the definitions the rules cannot reach; or this plugin's prefix. The rules file
 # is the guard's (FLEET_RULES, else <data-dir>/fleet.json when the data directory is given as the
 # second argument, else the shipped default); when it is missing or invalid, only a definition or
-# the prefix tells a fleet type, and the guard refuses the call on its own.
+# the prefix tells a fleet type, and the guard refuses the call on its own. A type with another
+# plugin's prefix is not a fleet type, whatever its name after the colon.
 [ -n "$plugin_root" ] && [ -d "$plugin_root/agents" ] ||
     error 'The plugin root, holding an agents directory, is required as the first argument.'
 case $0 in */*) here=${0%/*} ;; *) here=. ;; esac

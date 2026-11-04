@@ -13,7 +13,8 @@ Keep the brief proportional. It is output you generate, so compress method and e
 never the task's own facts: a path, an account, a decision already taken, a limit the user
 set. Pick the agent type and its effort with `fleet:selecting-subagent-model`; this skill only
 shapes the prompt. On the call, never pass a `model`; always pass the named `effort` chosen with
-`fleet:selecting-subagent-model`.
+`fleet:selecting-subagent-model`, or none for a model without effort control (its description
+says the caller passes no effort).
 
 ## Ready to hand over?
 

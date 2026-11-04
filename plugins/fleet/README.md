@@ -30,12 +30,15 @@ the guard that keeps them inside a policy written in one place.
   every agent and the reference into a staging directory before it touches anything. A models
   file that is not one JSON object with a snapshot and a non-empty `models` array, a figure
   (`index`, `usd`, `tps`) that is not a number or null, a `usd` of zero, a `provisional` or
-  `usd_estimated` that is not a boolean, an unknown effort rung, a `default` rung beside named
-  ones, an empty name, a name or snapshot string holding a control character or line break, or a
-  model id that does not start with a letter or that YAML would read as a boolean (`yes`, `off`,
-  `null`, ...) changes nothing (exit 3). So does a rules file that is invalid, that mentions a
-  model id of that last kind, that gives a model `default` beside named levels, or, for the full
-  run, that mentions no model; so does a failure while rendering (exit 1). The reference is
+  `usd_estimated` that is not a boolean, an unknown effort rung, an empty name, a name or
+  snapshot string holding a control character or line break, or a model id that does not start
+  with a letter or that YAML would read as a boolean (`yes`, `off`, `null`, ...) changes nothing
+  (exit 3). A `default` rung beside named ones in `models.json` is one more measured point, not
+  an error. A rules file changes nothing (exit 3) when it is invalid, mentions a model id of that
+  last kind or two model ids that differ only in case (one file on a case-insensitive file
+  system, the macOS default), gives a model an effort entry other than `low`, `medium`, `high`,
+  `xhigh`, `max` and `default`, gives a model `default` beside named levels, or, for the full
+  run, mentions no model; so does a failure while rendering (exit 1). The reference is
   installed last, with one rename, after the agents. Each agent's `description` is
   written as a double-quoted YAML string, so a name such as `Fable: 5.1`, `# one` or `*star`
   parses as written. Per the Claude Code subagents documentation, a plugin subagent whose
@@ -47,12 +50,16 @@ the guard that keeps them inside a policy written in one place.
   yours to edit and plugin updates never touch it. Every model id it mentions is described in
   `models.json`.
 - `scripts/subagent-guard.sh` — the guard, a `PreToolUse` hook on `Agent|Bash|Skill|Workflow`
-  declared once in the plugin's `hooks.json`. It tells the caller from the hook payload: a fleet
-  `agent_type` resolves to its definition or, when that file is gone, to a model the rules in
-  force mention, and its model is the row the rules are keyed by; a type with the plugin's
-  prefix that resolves to neither is refused. Otherwise an empty `agent_id` means the main
-  session (which may still carry an `agent_type` when the session runs as
-  `claude --agent <name>`); anything else is a built-in subagent and passes. An Agent call to a
+  declared once in the plugin's `hooks.json`. It tells the caller from the hook payload: an
+  empty `agent_id` means the main session, whatever `agent_type` says (the main session carries
+  one when it runs as `claude --agent <name>`). Otherwise a fleet `agent_type` resolves to its
+  definition or, when that file is gone, to a model the rules in force mention, and its model is
+  the row the rules are keyed by; a type with the plugin's prefix (`fleet:`) that resolves to
+  neither is refused, and a type with another plugin's prefix is not a fleet agent. Anything else
+  is a built-in subagent and passes, once the rules have been read: when they cannot be, a type
+  without a definition cannot be told from a fleet agent whose file is gone, and the call is
+  refused. A payload that is not one JSON object, or whose `tool_input` is not an object, is
+  refused, and the guard exits 0 or 2 on every path. An Agent call to a
   fleet agent, from the main session or from a fleet agent, must pass `effort` as a level the
   rules give that model (see [The call's effort](#the-calls-effort)). The same script is the
   `SubagentStart` hook that hands a starting fleet agent its denylists. Needs `jq`.
@@ -120,6 +127,15 @@ to it passes no `effort`.
    the rows of the callers that may start it (and give it a row of its own if it may start
    others). For an installed plugin, mention it in your own `fleet.json`: that file decides the
    fleet of your sessions.
+
+   Mind `main.fleet` when it is empty, as shipped: empty, it lets the main session start every
+   fleet model, and one entry turns it into an allowlist of that one model. To add a model
+   without narrowing the main session, either mention it only in `rules`, for example as a
+   caller key with an empty row (`"rules": {"new-model": {}}`: the main session may start it at
+   any named level, and it may start nothing) or in the rows of the callers that may start it, or
+   list every model the main session may start in `main.fleet`, the new one included. `rules`
+   works the same way: while it is empty every fleet agent may start every fleet model, and its
+   first entry narrows that too.
 2. Add its benchmark figures to `models.json` if you have them; without them its description is
    the plain one and the reference leaves it out. The shipped rules mention only models
    `models.json` describes.
@@ -134,13 +150,17 @@ The rules file in force is the only place that says which models the fleet has a
 efforts; there is no separate list. The fleet is every model the file mentions: the keys of
 `main.fleet`, the keys of `rules` (the callers) and the keys of every row of `rules`. Each gets
 one agent, named by its id; a model the file does not mention gets none and is refused as a
-target, even when `models.json` describes it. A model's levels are all the efforts listed for it
-anywhere in `main.fleet` and the rows:
+target, even when `models.json` describes it. An effort entry is one of the strings `low`,
+`medium`, `high`, `xhigh`, `max` and `default`, written exactly so. A model's levels are all the
+entries listed for it anywhere in `main.fleet` and the rows:
 
 - named levels (`low`, `medium`, ...): a call to it passes one of them;
 - `["default"]` alone: a model without effort control, a call passes no `effort`;
 - `default` beside named levels is a configuration error: the generator leaves `agents/` as it is
   (exit 3, and the sync says so) and the guard refuses every call to that model;
+- any other entry (`lower`, `higher`, `ultra`, a string holding a line break, a number) is a
+  configuration error the same way: it is never a level, and the error names the model and the
+  entry;
 - none at all (a model named only as a caller, or only with empty lists): it takes any named
   level, which a call can use only where the section that applies is empty and so allows every
   pair, in practice from the main session while `main.fleet` is empty.
@@ -221,11 +241,20 @@ authorized, and also when the section that applies is empty and so allows every 
 - a model the rules give no levels takes any named level (`low`, `medium`, `high`, `xhigh`,
   `max`), still by name and still refusing a missing or relative effort;
 - a model the rules give only `default` refuses any `effort`; the call leaves it out;
-- a model the rules give `default` beside named levels refuses every call as a configuration
-  error until the rules are fixed;
+- a model the rules give `default` beside named levels, or an effort entry that is not one of
+  the six words, refuses every call as a configuration error until the rules are fixed;
+- a fleet agent type given a `model` is refused before anything else, also while the section
+  that applies is empty;
 - the pair (model, the named level, or `default`) is then authorized exactly as before: against
   `main.fleet` from the main session, against the caller model's row in `rules` from a fleet
   agent.
+
+A refusal for a missing, relative or off-level effort, or for an effort given to a model that
+takes none, is one the caller corrects and calls again. When the section that applies
+(`main.fleet` from the main session, the caller's row from a fleet agent) lists the model, the
+refusal lists the levels that section allows, which may be fewer than the levels the agent's
+description names, so the corrected call does not land on a refusal of the pair. A level of the
+model that the section does not allow is refused for good.
 
 The caller's own effort plays no part: rules are keyed by the caller's model. Calls from a
 built-in subagent are not governed, as before.
@@ -244,7 +273,9 @@ An empty or whitespace-only file, a file with several documents, a top-level arr
 text that is not JSON are all invalid. An invalid file is refused the same way wherever the guard
 reads the rules: every checked call is refused with a message that the rules file is invalid, and
 a fleet agent that starts meanwhile gets the error shown to the user instead of its limits; the
-main session's calls other than `Agent` still pass. The guard, the generator and the sync share
+main session's calls other than `Agent` still pass. A subagent whose type has no definition and
+no other plugin's prefix (a built-in one, or a fleet agent whose file is gone) is refused too:
+without the rules the two cannot be told apart. The guard, the generator and the sync share
 this one test (`fleet_rules_valid` in `scripts/fleet-rules.sh`).
 
 The guard reads the rules file once per call: it copies the file to a private temporary file,
@@ -332,7 +363,8 @@ nothing.
   `agents/` as it is, and the notice says so. The sync runs again when the file changes. An
   editor saving the file can leave it briefly empty or half-written; that must not wipe the
   fleet. So does a valid rules file the fleet cannot be read from: a section of the wrong type, a
-  model id that cannot be an agent name, `default` beside named levels. A `models.json` that
+  model id that cannot be an agent name, two ids that differ only in case, an effort entry that
+  is not one of the six words, `default` beside named levels. A `models.json` that
   fails the generator's shape check leaves `agents/` as it is too; the notice says a fixed
   `models.json` is picked up at the next session start or rules change. A session whose record is behind the directory still gets a notice
   then, worded as "agents/ differs from the set this session loaded", since the directory does
@@ -345,7 +377,9 @@ nothing.
     row; as a target, its levels come from the same rules.
   - A type with the plugin's prefix that resolves neither way is refused, never passed as
     built-in. A type without the prefix whose definition is gone and whose model the rules no
-    longer mention cannot be told from a built-in agent and passes as one.
+    longer mention cannot be told from a built-in agent and passes as one. That holds only for
+    rules that were read: when the rules are invalid or a query on them fails, such a type is
+    refused instead. A type with another plugin's prefix is never a fleet agent.
 - **A git checkout loaded with `--plugin-dir`.** The plugin root is the checkout, and git tracks
   `agents/` there. The sync leaves the directory alone (filtering it would show up as deleted
   files) and watches nothing; seeding still runs.
@@ -380,8 +414,10 @@ a comment is empty.
 
 The hook is silent on success and never grants a permission: every other check still runs. A
 refusal starts with `FLEET_DELEGATION_INVALID` and lists what is missing, empty or duplicated; the
-caller fixes the brief from what it already knows and repeats the call, and this is the only
-refusal an agent may act on that way. `FLEET_DELEGATION_ERROR` marks a malformed payload or a
+caller fixes the brief from what it already knows and repeats the call. Two kinds of refusal may
+be acted on that way, and no others: `FLEET_DELEGATION_INVALID`, and the guard's refusals of a
+malformed effort (missing, relative, not a level of the model, or given to a model that takes
+none; see [The call's effort](#the-calls-effort)). `FLEET_DELEGATION_ERROR` marks a malformed payload or a
 missing dependency and is to be reported. The hook reads the prompt and nothing else: it opens no
 file the brief names, runs nothing, rewrites nothing and keeps no state.
 
@@ -412,7 +448,7 @@ never calls Python.
 - Plugin updates leave `fleet.json` alone, but `claude plugin uninstall` removes the plugin's
   data directory with it. Copy the file aside before uninstalling if the rules took work.
 - Built-in subagents (`general-purpose`, `Explore`, forked skills, ...) are not governed when they
-  are the caller: whatever they spawn or run passes. Spawning them is governed on the caller's
+  are the caller: whatever they spawn or run passes, while the rules file can be read. Spawning them is governed on the caller's
   side — `main.builtin_agent_models` for the main session, and a fleet subagent cannot reach
   them at all while `rules` is non-empty.
 - The benchmark figures in the agent descriptions and in the reference table are a dated
@@ -420,6 +456,11 @@ never calls Python.
 - The guard checks the effort a call names; the effort the subagent then runs at is the host's
   doing. A named call-time level was observed to override an agent's frontmatter effort and
   `lower`/`higher` to change nothing; that is the extent of what was observed.
+- Upgrading from 0.9.0: there an empty or denylist-only `fleet.json`, such as `{}`, allowed every
+  model of `models.json`. From 0.10.0 the fleet is the models the rules file mentions, so such a
+  file gives an empty fleet: the sync removes every agent and every call to a fleet agent is
+  refused. Mention the models you use (see [Adding a model](#adding-a-model)), or start again
+  from a copy of `fleet.default.json`.
 - Agent type names changed in 0.10.0 from `<model>-<effort>` to `<model>`. A session still
   holding a definition loaded from an older version is refused when it calls or is called by an
   old `fleet:` type (the old name resolves to nothing) until it reloads.

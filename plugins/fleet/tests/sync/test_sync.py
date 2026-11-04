@@ -73,8 +73,6 @@ SYNTHETIC_CASES = [
     ("empty main section allows every fleet model from main, a caller-only one too",
      {"main": {"fleet": {}}, "rules": {"m-a": {"m-b": ["low"]}, "m-c": {}}}, {"m-a", "m-b", "m-c"}),
     ("main lists a model with no efforts", {"main": {"fleet": {"m-a": []}}}, set()),
-    ("an effort word outside the usual names is a level the rules give",
-     {"main": {"fleet": {"m-a": ["low", "ultra"]}}, "rules": {"m-a": {"m-a": ["ultra"]}}}, {"m-a"}),
     ("the rules decide the levels: one models.json has no figures for still reaches",
      {"main": {"fleet": {"m-d": ["high"]}}}, {"m-d"}),
     ("default alone makes a model without effort control, whatever models.json measured",
@@ -91,7 +89,8 @@ NAMED_LEVELS = ["low", "medium", "high", "xhigh", "max"]
 def fleet_of(rules):
     """The fleet as the rules file gives it: every model it mentions (main.fleet keys, rules keys,
     the keys of every row), each with the union of the levels given for it, the named ones in
-    ladder order first; only plain lowercase words count, as only those can be passed."""
+    ladder order first, then "default"; only the six effort words count (any other entry is a
+    configuration error, which the cases here do not hold)."""
     rules = rules or {}
     main = (rules.get("main") or {}).get("fleet") or {}
     rows = rules.get("rules") or {}
@@ -100,8 +99,8 @@ def fleet_of(rules):
     fleet = {}
     for model in ids:
         given = list(dict.fromkeys(level for section in sections for level in (section.get(model) or [])
-                                   if isinstance(level, str) and re.fullmatch(r"[a-z]+", level)))
-        fleet[model] = [l for l in NAMED_LEVELS if l in given] + [l for l in given if l not in NAMED_LEVELS]
+                                   if level in NAMED_LEVELS + ["default"]))
+        fleet[model] = [l for l in NAMED_LEVELS + ["default"] if l in given]
     return fleet
 
 
@@ -138,8 +137,6 @@ MISSHAPEN_MODELS = (
     ("provisional not a boolean", lambda m: m["models"][1].update(provisional="true")),
     ("an effort that is not an object", lambda m: m["models"][2]["efforts"].update(default=5)),
     ("an unknown effort rung", lambda m: m["models"][3]["efforts"].update(ultra=figures(4))),
-    # A model with named levels takes one on every call; "default" beside them could not be asked for.
-    ("a default rung beside named ones", lambda m: m["models"][0]["efforts"].update(default=figures(4))),
     ("a model id that is a path", lambda m: m["models"][3].update(id="../m-d")),
     ("a model without a name", lambda m: m["models"][3].pop("name")),
     ("no snapshot", lambda m: m.pop("snapshot")),
@@ -403,6 +400,22 @@ def main():
             code, out, err = guard(synthetic_oracle, payload, mixed)
             check(f"parity/default beside named levels: the guard refuses the {where} call as a configuration error",
                   code == 2 and "both 'default' and named levels (high, default)" in err, (code, err))
+        # An effort entry that is not one of the six words is a configuration error too: the generator
+        # names the model and the word and changes nothing; the guard refuses every call to the model.
+        for word, shown in (("ultra", '"ultra"'), ("lower", '"lower"'), ("low\nmax", '"low\\nmax"')):
+            generate(synthetic_work)
+            word_state = snapshot(synthetic_work)
+            worded = base / "synthetic-word.json"
+            worded.write_text(json.dumps({"main": {"fleet": {"m-a": ["low", word]}}, "rules": {"m-a": {"m-a": ["low"]}}}))
+            code, out, err = generate(synthetic_work, worded)
+            check(f"parity/effort entry {shown}: the generator exits 3, changes nothing, names the model and the word",
+                  code == 3 and snapshot(synthetic_work) == word_state
+                  and f'gives the model "m-a" the effort {shown}, which is not a level' in err, (code, out, err))
+            for where, payload in (("main", main_call("fleet:m-a", effort="low")),
+                                   ("nested", nested_call("fleet:m-a", subagent_type="fleet:m-a", effort="low"))):
+                code, out, err = guard(synthetic_oracle, payload, worded)
+                check(f"parity/effort entry {shown}: the guard refuses the {where} call as a configuration error",
+                      code == 2 and f"the effort entries {shown}, which are not levels" in err, (code, err))
 
         real_oracle = make_root(base, "real-oracle")
         real_work = make_root(base, "real-work")
@@ -538,6 +551,13 @@ def main():
                 check(f"generator/models: {name}, {mode} run exits 3 and keeps every agent",
                       code == 3 and snapshot(bad_models) == models_state
                       and reference_state(bad_models) == models_reference, (code, out, err))
+        # models.json is data only: a default rung beside named ones is one more measured point.
+        (bad_models / "models.json").write_text(
+            json.dumps(altered(lambda m: m["models"][0]["efforts"].update(default=figures(4)))))
+        for mode, rules_arg in (("filtered", narrowed_rules), ("full", None)):
+            code, out, err = generate(bad_models, rules_arg)
+            check(f"generator/models: a default rung beside named ones is accepted, {mode} run exits 0",
+                  code == 0, (code, out, err))
 
         # Free text in a model name or the benchmark name reaches each agent's description as a quoted
         # scalar: every frontmatter parses as YAML and the description reads back as written. A name
@@ -1390,15 +1410,16 @@ def main():
 
         # ---- the guard decides on one read of the rules ----------------------------------------
         # The rules file changes between the guard's validity check and its queries. The stub runs
-        # the real jq; right after the validity call it replaces the original with text that is not
-        # JSON, or removes it. The guard queries the copy it checked, so the denylists still hold.
+        # the real jq; right after the validity call (fleet_rules_valid, told by its expression from the
+        # guard's check of the hook payload) it replaces the original with text that is not JSON, or
+        # removes it. The guard queries the copy it checked, so the denylists still hold.
         swap_dir = base / "jq-swap"
         swap_dir.mkdir()
         (swap_dir / "jq").write_text(
             "#!/bin/sh\n"
             f"'{shutil.which('jq')}' \"$@\"\n"
             "status=$?\n"
-            "case \"$*\" in *'length == 1 and'*)\n"
+            "case \"$*\" in *'type == \"object\" or type == \"null\"'*)\n"
             "  if [ \"${FLEET_TEST_SWAP:-}\" = remove ]; then rm -f \"$FLEET_TEST_SWAP_TARGET\"\n"
             "  else printf '{ not json' > \"$FLEET_TEST_SWAP_TARGET\"; fi ;;\n"
             "esac\n"
