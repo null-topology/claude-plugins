@@ -40,6 +40,9 @@ This plugin closes the gap from both sides:
 - **`/seamless:save`** keeps a living handoff document in the project (`.claude/handoffs/`),
   created as soon as a task has a scope and updated after each finished block of work.
 - **`/seamless:restore`** reads that document in a fresh session and continues from it.
+- **`/seamless:search`** answers questions about past work ("what did we work on a week ago",
+  "which tasks touched billing") from the handoff documents, when no better source holds the
+  answer, by reading file names, front matter and headings rather than whole files.
 - A **`SessionStart` hook** runs on `startup` and `clear` and hands the new session, before its
   first message: the startup directory, the handoff documents that exist for the project, and the
   standing rule to keep the handoff living. When the chain names a previous session (after
@@ -56,8 +59,8 @@ This plugin closes the gap from both sides:
   installed or reloaded while the session was already running. It costs one file check per
   prompt and speaks once, if ever (see "Sessions that predate the plugin" below).
 
-Both skills are model-invocable: their descriptions and the hook's context tell Claude when to use
-them, so in practice the handoff gets written and read without being asked for. After a restore
+All three skills are model-invocable: their descriptions and the hook's context tell Claude when
+to use them, so in practice the handoff gets written and read without being asked for. After a restore
 the hook also asks for one invocation of `/seamless:save` with nothing to write: a fresh session
 has not read the skill, and the rules on where the document lives, how it is named and what goes
 into it exist only there. Loading them once keeps later updates from being done by guesswork.
@@ -241,9 +244,54 @@ hold its own; when more than one directory has candidates, `restore` asks which 
 than guessing.
 
 Naming: `<YYYY-MM-DD>-<TICKET>-<slug>.md`, or `<YYYY-MM-DD>-<slug>.md` without a ticket. Date first
-so `ls` sorts chronologically; the date is the creation date and the filename never changes on
-update. Files in the older `handoff-<slug>-<date>.md` form are renamed one at a time when
-`restore` opens them; nothing is mass-renamed.
+so `ls` sorts chronologically. The date is the day the file covers; the ticket key and the slug
+stay the same for every daily file of a task. Files in the older `handoff-<slug>-<date>.md` form
+are renamed one at a time when `restore` or `save` opens them; nothing is mass-renamed.
+
+Contract: every document starts with YAML front matter, then one H1 and fixed H2 sections.
+
+```markdown
+---
+task: payment-retries
+ticket: ABC-123
+date: 2026-09-16
+started: 2026-09-14
+status: active            # active | frozen | done
+previous: 2026-09-15-ABC-123-payment-retries.md
+summary: Retry failed payments with backoff; worker merged, alerting still open
+---
+# Retry failed payments with exponential backoff in the payments worker
+## Current state
+## Decisions
+## Proven
+## Broken
+## Open
+## Plan
+## Next action
+## Suggested skills
+## References
+```
+
+`task` is a stable slug shared by the task's daily files, `date` equals the filename date,
+`started` is the task's first day, `previous` and `next` link the daily files, `summary` is one
+line on what the task is and where it stands; `repos` and `tags` are optional. Empty sections are
+left out; sub-topics go in H3. The point is cheap reading later: a session can filter handoffs by
+front matter and find its way through a large one by its headings alone.
+
+Rollover: a task keeps one file per day. Five tasks in a day give five files; one task over a
+week gives seven. Before the first update on a new day, `save` edits the latest file's front
+matter to `status: frozen` and `next: <new file>`, then writes today's file with the state carried
+forward and compacted, and from then on edits only that one. Freezing comes first on purpose: the
+hook lists a session's handoffs latest touch first, so freezing last would point the next session
+at the frozen file. `restore` follows `next` from a frozen file to the active one. A finished task
+gets `status: done`. Documents written before the contract are not converted; when one rolls
+over, it receives only the two freeze keys and the new file follows the contract.
+
+Search: `/seamless:search` looks for past work in the same directories `restore` uses. It matches
+file names first (date range, ticket key, slug words), then reads only the front matter, then
+only the headings, and finally just the sections it needs, walking a task's days through
+`previous` and `next`. It reports findings as `path:line` and treats a handoff as what its session
+believed at the time, to be checked against the present.
 
 Inside a sandboxed agent container (`AGENT_WORKING_DIR` set) the document goes to
 `$AGENT_WORKING_DIR/workspace/handoffs/`, which is bind-mounted from the host and survives the
@@ -278,7 +326,8 @@ plugins/seamless/
 │   └── user-prompt-onboard.sh        once per session that predates the plugin: the same sentence
 └── skills/
     ├── save/SKILL.md                 /seamless:save
-    └── restore/SKILL.md              /seamless:restore
+    ├── restore/SKILL.md              /seamless:restore
+    └── search/SKILL.md               /seamless:search
 
 ~/.claude/plugins/data/seamless-<marketplace>/
 ├── bridge/<key>=<session id>         left by /clear, consumed by the next start in the same process
