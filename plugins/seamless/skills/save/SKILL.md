@@ -44,11 +44,17 @@ covers** (local date, `date +%F`) and equals the `date` key of its front matter.
 ticket key when there is one, stay the same for every daily file of the task; only the date
 changes from one file to the next.
 
-Before creating a file, look for the task's existing handoff in the target directory: the same
-`task` key in the front matter, the same ticket key or slug in the filename, or, for files
-without front matter, the same topic under any naming. Continue that task, today's file or a
-rollover from its latest one, instead of starting a parallel one. The task's files stay in the
-directory where it started, even when the rules above would resolve to another one today.
+Before creating a file, look for the task's existing handoff in every handoff directory, not
+only in today's target: the ones the session-start context lists (under "kept by the previous
+session(s)" and "newest per directory"), and the ones step 1 of `seamless:restore` enumerates
+(the sandbox directory, `.claude/handoffs/` in the startup directory, its ancestors below `$HOME`
+and its descendants). A task's files stay in the directory where it started (the startup
+directory of an earlier session, a sub-project's `.claude/handoffs/`, the sandbox directory),
+so the match can be in any of them. A match is the same `task` key in the front matter, the same
+ticket key or slug in the filename, or, for files without front matter, the same topic under any
+naming. Continue that task, today's file or a rollover from its latest one, instead of starting
+a parallel one, and do it in the directory of the match: it overrides the target the rules above
+resolve to today. Only a task with no match anywhere starts in today's target directory.
 
 Write and edit handoff documents with the Write and Edit tools, not through shell commands: the
 session-start hook finds the documents a session kept by reading those tool calls in its
@@ -56,14 +62,27 @@ transcript, and keeps only the paths that still exist. A file created any other 
 listed for the next session, and neither is a file renamed after its last Write or Edit.
 
 **Files in the older `handoff-<slug>-<YYYY-MM-DD>.md` form** are renamed by this skill, one at a
-time, and only right before this session first edits that file with Write or Edit (an update on
-the day it covers, or the freeze of a rollover). Rename it to `<YYYY-MM-DD>-<slug>.md` (`git mv`
-when it is tracked, plain `mv` otherwise), keeping a ticket key such as `ABC-123` right after the
-date when the slug starts with one, then make that Edit to the new path in the same session and
-say that you renamed it. A rename without a following Edit breaks the chain: the transcript names
-only the old path, which no longer exists. Use the new name wherever another file's `previous` or
-`next` refers to it. Never rename a file you are not about to edit, and never mass-rename a
-directory.
+time, and only when this session is about to edit that file anyway (an update on the day it
+covers, or the freeze of a rollover). The new name is `<YYYY-MM-DD>-<slug>.md`, keeping a ticket
+key such as `ABC-123` right after the date when the slug starts with one. The rename is that
+edit, done in this order, so that the transcript names the surviving path at every moment:
+
+1. Read the old file.
+2. **Write** the new path with the old file's full content and the edit applied: on the freeze
+   of a rollover, the front matter block with `status: frozen` and `next` on top of the
+   untouched body; on an update the day it covers, the update. Do not `mv` or `git mv` first: a
+   `/clear` between a move and the edit would leave the transcript naming only the old path,
+   which no longer exists, and the file would drop out of the chain.
+3. Then remove the old path. When it is tracked by git (`git ls-files --error-unmatch <old>`
+   succeeds), run `rm -- <old> && git add -A -- <old> <new>`: that stages the removal and the new
+   file together, as `git mv` would, and works even when the old file has uncommitted changes.
+   Otherwise `rm -- <old>`.
+4. Say that you renamed it, and use the new name wherever another file's `previous` or `next`
+   refers to it.
+
+If both names exist (a session ended between steps 2 and 3), the new one holds the content:
+compare them, and finish step 3. Never rename a file you are not about to edit, and never
+mass-rename a directory.
 
 ## The contract
 

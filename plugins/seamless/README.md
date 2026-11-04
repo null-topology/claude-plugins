@@ -248,10 +248,12 @@ than guessing.
 Naming: `<YYYY-MM-DD>-<TICKET>-<slug>.md`, or `<YYYY-MM-DD>-<slug>.md` without a ticket. Date first
 so `ls` sorts chronologically. The date is the day the file covers; the ticket key and the slug
 stay the same for every daily file of a task. Files in the older `handoff-<slug>-<date>.md` form
-are renamed one at a time by `save`, right before its first Write or Edit of that file in the
-session; `restore` never renames. The order matters: the hook finds a session's handoffs through
-its Write and Edit calls and keeps only paths that still exist, so a file renamed after its last
-edit drops out of the chain. Nothing is mass-renamed.
+are renamed one at a time by `save`, only when it is about to edit that file anyway; `restore`
+never renames. The order matters: the hook finds a session's handoffs through its Write and Edit
+calls and keeps only paths that still exist, so `save` first writes the new path with Write (the
+old content plus the edit), and only then removes the old path (`rm` and `git add -A` on both
+paths when tracked). A `/clear` at any point leaves a Write to a path that exists. Nothing is
+mass-renamed.
 
 Contract: every document starts with YAML front matter, then one H1 and fixed H2 sections.
 
@@ -286,7 +288,10 @@ without opening the body), `repos` and `tags` are optional. Empty sections are l
 sub-topics go in H3. The point is cheap reading later: a session can filter handoffs by front
 matter and find its way through a large one by its headings alone. The skills read headings with
 an `awk` command that skips the front matter and fenced code blocks, so YAML and shell comments
-are not taken for headings.
+are not taken for headings. A fence may be indented by up to three spaces and is closed only by
+the same character (backtick or tilde) repeated at least as many times, so a `~~~` line inside a
+backtick block does not end it. The command avoids interval regexes and runs in macOS awk and
+mawk.
 
 Rollover: a task keeps one file per day. Five tasks in a day give five files; one task over a
 week gives seven. Before the first update on a new day, `save` edits the latest file's front
@@ -303,9 +308,14 @@ the contract.
 
 Restore without a chain: when no previous session is on record, the hook's per-directory list
 names only the newest file of each directory. `restore` treats those lines as pointers to
-directories, describes every handoff there by its front matter or H1, offers the active ones and
-asks which applies. Frozen entries in the "kept by the previous session(s)" list are followed to
-their successor rather than offered as separate candidates.
+directories, describes every handoff there by its front matter or H1, offers the active ones
+(and any frozen file whose `next` is missing, marked as such) and asks which applies. Files
+written before 0.5.0 are offered only when no active candidate matches; otherwise `restore` gives
+their count and the newest three. Frozen entries in the "kept by the previous session(s)" list
+are followed to their successor rather than offered as separate candidates. When that list is
+not empty the hook points at its first entry even if the file lies outside the directories it
+scans (for example under a pruned `.worktrees`), and it says "none found" only when both lists
+are empty.
 
 Search: `/seamless:search` looks for past work in the same directories `restore` uses. It matches
 file names first (date range, ticket key, slug words), then reads only the front matter, then
@@ -313,7 +323,10 @@ only the headings, and finally just the sections it needs, walking a task's days
 `previous` and `next`. Each pass decides what is read first, not what is dropped: when the earlier
 passes find nothing, or the question asks for everything, the front matter and headings of the
 remaining files are checked too. Files written before 0.5.0 are dated as they were then: one file
-from its filename date (the day it was created) to its last modification or its successor. It
+from its filename date (the day it was created) to its last modification or its successor, so a
+gap between the two is expected and raises no mtime warning. A ticket key matches only as a whole
+filename segment (`ABC-123` does not find `ABC-1234`), and front matter patterns are matched
+against the key lines alone, not against the path prefix. It
 reports findings as `path:line` and treats a handoff as what its session believed at the time,
 to be checked against the present. It answers questions; continuing a task is `restore`'s job.
 
@@ -334,9 +347,11 @@ not touch `.gitignore`.
 - **A process that dies between `/clear` and the next start** leaves a bridge nobody can match;
   it is deleted after an hour, and the next session there starts without a predecessor.
 - **mtime is not trusted alone.** `git checkout`, `clone` and `rsync` reset it. The date in the
-  filename is the reference; when the two disagree by more than two days the hook says so. A frozen
-  or done file is normally edited after the day it covers, so `restore` does not repeat the
-  warning for those.
+  filename is the reference. The warning is given (by the hook, `restore` and `search`) only for a
+  file whose front matter has `status: active` and a `date`, when the two disagree by more than
+  two days: such a file covers one day. A file without front matter spans its creation date to
+  its mtime, and a frozen or done file is normally edited after the day it covers, so a gap is
+  expected for those.
 - **Only Write/Edit/NotebookEdit calls count as edits.** Files changed through shell commands are
   not listed.
 - The previous session's last prompt is cut at 300 characters.

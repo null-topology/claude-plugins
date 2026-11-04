@@ -63,33 +63,48 @@ Names are `<YYYY-MM-DD>-[<TICKET>-]<slug>.md`; older files may be `handoff-<slug
     the file was created, and one file covered the task up to its last modification. It covers
     the span from its filename date to its mtime (`ls -l <file>`), or, when a later file
     supersedes it (its `next`, or a newer file of the same task naming it), up to that file's
-    date. Treat the mtime with care: `git checkout`, `clone` and `rsync` reset it.
-- **A ticket key**: match it in the name.
+    date. A gap between that filename date and the mtime is the span itself, not a sign of a
+    reset: do not warn about it.
+  - The date/mtime warning (`git checkout`, `clone` and `rsync` reset mtimes) applies only to a
+    file whose front matter has `status: active` and a `date`: it covers one day, so an mtime
+    more than two days after it may come from a reset. Mention it when you report such a file's
+    mtime; its date is the `date` key either way.
+- **A ticket key**: match it as a whole segment of the file name, never as a substring, so that
+  `ABC-123` does not find `2026-09-16-ABC-1234-retries.md`. In both name forms the key sits
+  between two dashes, or before `.md`:
+
+  ```sh
+  ls <dir> | grep -iE -- '-ABC-123(-|\.md$)'
+  ```
 - **A topic**: match slug words, trying synonyms and both singular and plural.
 
 When the names leave too many files, narrow by time first.
 
 ## 5. Front matter pass
 
-Print the front matter of each file, prefixed with its path and line number like `grep -Hn`, so
-that every match stays tied to its file. The block ends at the closing `---`, at the first line
-when the file has no front matter, and after 40 lines when the closing `---` is missing; CRLF
-line endings are stripped:
+Print the front matter lines of each file that match a pattern, prefixed with the file's path
+and line number like `grep -Hn`, so that every match stays tied to its file. The block ends at
+the closing `---`, at the first line when the file has no front matter, and after 40 lines when
+the closing `---` is missing; CRLF line endings are stripped. The pattern is matched inside awk
+against the front matter line alone, lowercased, never against the prefixed output: a word in a
+directory name would otherwise match every line of every file below it.
 
 ```sh
+re='<pattern>'
 for f in <dir>/*.md; do
   [ -f "$f" ] || continue
-  awk '{sub(/\r$/,"")} NR==1&&$0!="---"{exit} NR>1&&$0=="---"{exit} NR>40{exit} NR>1{print FILENAME":"NR":"$0}' "$f"
+  awk -v re="$re" '{sub(/\r$/,"")} NR==1&&$0!="---"{exit} NR>1&&$0=="---"{exit} NR>40{exit} NR>1&&tolower($0)~re{print FILENAME":"NR":"$0}' "$f"
 done
 ```
 
-Replace `<dir>/*.md` with the files of the current stage, and match keys on this output, never
-on whole files (a `ticket:` or `summary:` line in a body is not a key):
+Replace `<dir>/*.md` with the files of the current stage and set `re` to a lowercase extended
+regex (write `[.]` rather than `\.`: `awk -v` processes backslash escapes); match keys this way, never on whole files (a `ticket:` or `summary:` line in a body is
+not a key):
 
-- a ticket, exactly (`ABC-123` must not match `ABC-1234`):
-  `| grep -E ':[0-9]+:ticket: *"?ABC-123"? *(#.*)?$'`
-- every summary: `| grep -E ':[0-9]+:summary:'`
-- a word in any key (`task`, `summary`, `key_points`, `tags`, `repos`, ...): `| grep -i 'billing'`
+- the whole front matter: `re=''`
+- a ticket, exactly (`ABC-123` must not match `ABC-1234`): `re='^ticket: *"?abc-123"? *(#.*)?$'`
+- every summary: `re='^summary:'`
+- a word in any key (`task`, `summary`, `key_points`, `tags`, `repos`, ...): `re='billing'`
 
 Filter on `task`, `ticket`, `date`, `started`, `status`, `summary`, `key_points`, `repos` and
 `tags`. The `summary` line, with `key_points` when present, often answers a "what were we doing"
@@ -98,10 +113,30 @@ question on its own.
 ## 6. Heading pass
 
 List the headings with line numbers, skipping the front matter (whose YAML comments also start
-with `#`) and fenced code blocks (whose shell comments do too):
+with `#`) and fenced code blocks (whose shell comments do too). This is the command of
+`seamless:restore`: a fence opens on three or more backticks or tildes indented by at most three
+spaces and closes only on the same character, at least as long, followed by blanks only. It uses
+only `substr()`, `index()` and plain regexes, so it runs the same in macOS awk and mawk:
 
 ```sh
-awk '{sub(/\r$/,"")} NR==1&&$0=="---"{f=1;next} f{if($0=="---"||NR>40)f=0;next} /^(```|~~~)/{c=!c;next} !c&&/^#+ /{print NR": "$0}' <file>
+awk '
+{ sub(/\r$/, "") }
+NR == 1 && $0 == "---" { fm = 1; next }
+fm { if ($0 == "---" || NR > 40) fm = 0; next }
+{
+  s = $0; i = 0
+  while (i < 3 && substr(s, 1, 1) == " ") { s = substr(s, 2); i++ }
+  ch = substr(s, 1, 1); n = 0
+  if (ch == "`" || ch == "~") { while (substr(s, n + 1, 1) == ch) n++ }
+  rest = substr(s, n + 1)
+}
+fc != "" {
+  if (ch == fc && n >= fl && rest ~ /^[ \t]*$/) fc = ""
+  next
+}
+n >= 3 && !(ch == "`" && index(rest, "`")) { fc = ch; fl = n; next }
+/^#+ / { print NR ": " $0 }
+' <file>
 ```
 
 The H1, the first `# ` line printed, states the task; the H2 sections are `Current state`,

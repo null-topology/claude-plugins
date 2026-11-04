@@ -97,12 +97,21 @@ date_epoch() {
 
 describe_handoff_dir() {
   # One line per handoff directory: newest file, its mtime, the file count and a date-mismatch
-  # warning when the date in the filename and the mtime disagree by more than two days.
+  # warning when the date in the filename and the mtime disagree by more than two days. The
+  # warning is given only for a file with front matter, "status: active" and a "date" key: such a
+  # file covers one day, so a much later mtime points to a reset. A file without front matter
+  # (written before 0.5.0) spans its creation date to its mtime, and a frozen or done file is
+  # normally edited after the day it covers; for those a gap is expected.
   dh_newest=$(ls -t "$1"/*.md 2>/dev/null | head -1)
   [ -n "$dh_newest" ] || return 0
   dh_count=$(ls "$1"/*.md 2>/dev/null | wc -l | tr -d ' ')
   dh_line="  $dh_newest (modified $(mtime_human "$dh_newest"); $dh_count file(s) in this directory)"
-  dh_date=$(basename "$dh_newest" | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}' | head -1)
+  dh_fm=$(awk '{sub(/\r$/,"")} NR==1&&$0!="---"{exit} NR>1&&$0=="---"{exit} NR>40{exit} NR>1' "$dh_newest" 2>/dev/null)
+  dh_date=""
+  if printf '%s\n' "$dh_fm" | grep -qE '^status:[[:space:]]*"?active"?[[:space:]]*(#.*)?$' \
+     && printf '%s\n' "$dh_fm" | grep -qE '^date:[[:space:]]*"?[0-9]'; then
+    dh_date=$(basename "$dh_newest" | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}' | head -1)
+  fi
   if [ -n "$dh_date" ]; then
     dh_fepoch=$(date_epoch "$dh_date")
     dh_mepoch=$(mtime_epoch "$dh_newest")
@@ -506,22 +515,33 @@ $chain_handoffs
 EOF_CHAIN
 fi
 
-if [ -n "$(printf '%s' "$handoff_lines" | tr -d '[:space:]')" ]; then
+have_dir_lines=0
+[ -n "$(printf '%s' "$handoff_lines" | tr -d '[:space:]')" ] && have_dir_lines=1
+if [ "$have_dir_lines" -eq 1 ]; then
   ctx="$ctx
 Handoff documents (newest per directory, absolute paths):
 $(printf '%s' "$handoff_lines")"
-  if [ -n "$chain_handoffs" ]; then
-    ctx="$ctx
-Now: before asking the user what they were working on, read the first document listed under \"kept by the previous session(s)\" with the seamless:restore skill; other sessions may be running in this directory, so a newer file in the per-directory list is not necessarily this session's. Right after that, invoke the seamless:save skill once, even though there is nothing to write yet: that loads its rules (where the document lives, how it is named, when and what to write) into this session, which has not read them. Without that step the document gets edited by guesswork."
+fi
+
+# The chain decides what to read whether or not the per-directory scan covers the directory its
+# documents are in (a document under a pruned directory such as .worktrees is in the chain list
+# only). "None found" is said only when both lists are empty.
+if [ -n "$chain_handoffs" ]; then
+  if [ "$have_dir_lines" -eq 1 ]; then
+    neighbours=" other sessions may be running in this directory, so a newer file in the per-directory list is not necessarily this session's."
   else
-    if [ -n "$prev_id" ]; then
-      why="the previous session on record kept no handoff document"
-    else
-      why="this session has no predecessor on record"
-    fi
-    ctx="$ctx
-Now: $why, so none of the documents listed is known to be this session's, and other sessions may be working on them. Do not restore one on your own: if the user refers to earlier work, ask which document applies and restore only that one with the seamless:restore skill. Before any work, invoke the seamless:save skill once, even though there is nothing to write yet: that loads its rules (where the document lives, how it is named, when and what to write) into this session, which has not read them. Without that step the document gets edited by guesswork."
+    neighbours=" it is the document even though it lies outside the directories scanned for the per-directory list."
   fi
+  ctx="$ctx
+Now: before asking the user what they were working on, read the first document listed under \"kept by the previous session(s)\" with the seamless:restore skill;$neighbours Right after that, invoke the seamless:save skill once, even though there is nothing to write yet: that loads its rules (where the document lives, how it is named, when and what to write) into this session, which has not read them. Without that step the document gets edited by guesswork."
+elif [ "$have_dir_lines" -eq 1 ]; then
+  if [ -n "$prev_id" ]; then
+    why="the previous session on record kept no handoff document"
+  else
+    why="this session has no predecessor on record"
+  fi
+  ctx="$ctx
+Now: $why, so none of the documents listed is known to be this session's, and other sessions may be working on them. Do not restore one on your own: if the user refers to earlier work, ask which document applies and restore only that one with the seamless:restore skill. Before any work, invoke the seamless:save skill once, even though there is nothing to write yet: that loads its rules (where the document lives, how it is named, when and what to write) into this session, which has not read them. Without that step the document gets edited by guesswork."
 else
   ctx="$ctx
 Handoff documents: none found under the startup directory or its ancestors.
@@ -546,6 +566,9 @@ if [ "${handoff_count:-0}" -gt 0 ]; then
   if [ "$handoff_count" -eq 1 ]; then dirs_word="directory"; else dirs_word="directories"; fi
   if [ -n "$prev_id" ]; then next_step="resume"; else next_step="continue"; fi
   msg="seamless: $prev_summary, $handoff_count handoff $dirs_word listed. Send any message to $next_step."
+elif [ -n "$chain_handoffs" ]; then
+  kept_count=$(printf '%s\n' "$chain_handoffs" | grep -c . | tr -d ' ')
+  msg="seamless: $prev_summary, $kept_count handoff document(s) kept by it listed. Send any message to resume."
 else
   msg="seamless: $prev_summary, no handoff documents. Send any message to continue."
 fi

@@ -21,10 +21,31 @@ awk '{sub(/\r$/,"")} NR==1&&$0!="---"{exit} NR>1&&$0=="---"{exit} NR>40{exit} NR
 ```
 
 The headings with their line numbers, skipping the front matter (whose YAML comments also start
-with `#`) and fenced code blocks (whose shell comments do too):
+with `#`) and fenced code blocks (whose shell comments do too). A fence opens on a line of three
+or more backticks or tildes indented by at most three spaces, and closes only on a line of the
+same character, at least as long, with nothing after it but blanks; a `~~~` line inside a
+backtick fence, or a shorter run, leaves the block open. It uses only `substr()`, `index()` and
+plain regexes, so it runs the same in macOS awk and mawk:
 
 ```sh
-awk '{sub(/\r$/,"")} NR==1&&$0=="---"{f=1;next} f{if($0=="---"||NR>40)f=0;next} /^(```|~~~)/{c=!c;next} !c&&/^#+ /{print NR": "$0}' <file>
+awk '
+{ sub(/\r$/, "") }
+NR == 1 && $0 == "---" { fm = 1; next }
+fm { if ($0 == "---" || NR > 40) fm = 0; next }
+{
+  s = $0; i = 0
+  while (i < 3 && substr(s, 1, 1) == " ") { s = substr(s, 2); i++ }
+  ch = substr(s, 1, 1); n = 0
+  if (ch == "`" || ch == "~") { while (substr(s, n + 1, 1) == ch) n++ }
+  rest = substr(s, n + 1)
+}
+fc != "" {
+  if (ch == fc && n >= fl && rest ~ /^[ \t]*$/) fc = ""
+  next
+}
+n >= 3 && !(ch == "`" && index(rest, "`")) { fc = ch; fl = n; next }
+/^#+ / { print NR ": " $0 }
+' <file>
 ```
 
 The H1 is the first `# ` line it prints. Do not use `grep '^#'` or the file's first line for
@@ -45,11 +66,13 @@ in the per-directory list below it is not necessarily yours.
 **No chain, but a per-directory list.** If the context lists only `Handoff documents (newest per
 directory)`, each line is a pointer to a handoff directory, not a candidate: it names only the
 newest file there, which may be a neighbour's or a frozen day. It was built at startup from the
-real filesystem and covers every handoff directory that belongs to this project. List the
-handoff files in each of those directories (`ls <dir>/*.md`) and describe each one by its front
-matter (`status`, `task`, `summary`) or, without front matter, by its H1. Those are the
-candidates for step 2. Without the chain, nothing ties any of them to this session: other
-sessions may be running in the same directory and keeping them.
+real filesystem and covers the startup directory, its ancestors below `$HOME`, the sandbox
+directory, and descendants up to 7 levels deep outside the pruned directories (`.git`,
+`node_modules`, `worktrees`, `.worktrees`, `.terraform`, `vendor`). List the handoff files in
+each of those directories (`ls <dir>/*.md`) and describe each one by its front matter (`status`,
+`task`, `summary`, `next`) or, without front matter, by its H1. Those are the candidates for
+step 2. Without the chain, nothing ties any of them to this session: other sessions may be
+running in the same directory and keeping them.
 
 **No list.** Otherwise resolve the startup directory (the `Startup directory:` line of that
 context, else the primary working directory in the system prompt, else the first `cwd` in this
@@ -71,10 +94,12 @@ look for handoff files (`*.md`) in:
 Describe every file found as above.
 
 Within a directory, order by the date in the filename first and by mtime second. When the two
-disagree by more than two days on an `active` file or a file without front matter, say so:
-`git checkout`, `clone` and `rsync` reset mtimes, so an old document can look fresh. Do not raise
-it for `status: frozen` or `done` files: their last edit (the freeze, a correction of `next`)
-normally comes days after the date they cover.
+disagree by more than two days on a file whose front matter has `status: active` and a `date`,
+say so: such a file covers one day, and `git checkout`, `clone` and `rsync` reset mtimes, so an
+old document can look fresh. Do not raise it for any other file. A file without front matter was
+written before 0.5.0 and spans its creation date (the filename date) to its last modification, so
+a later mtime is expected; a `status: frozen` or `done` file is normally edited (the freeze, a
+correction of `next`) days after the date it covers.
 
 ## 2. Choose one
 
@@ -84,10 +109,19 @@ normally comes days after the date they cover.
   of a file without front matter. Read the one that matches.
 - **Otherwise** — do not pick by mtime or by depth, not even when only one directory has
   handoffs: the newest file there may belong to a session still running next to this one, and
-  any heuristic eventually picks wrong silently. Offer the `status: active` candidates and those
-  without front matter (path, filename date, mtime, `status` and `summary`, else the H1), leave
-  out frozen and done files, and ask the user which one applies. One question costs a line; a
+  any heuristic eventually picks wrong silently. Offer, with path, filename date, mtime, `status`
+  and `summary` (else the H1), and ask the user which one applies. One question costs a line; a
   wrong guess costs the session.
+  - the `status: active` candidates;
+  - every `status: frozen` file whose `next` is missing or names a file that does not exist in
+    its directory, marked "frozen, successor missing": the session that froze it probably ended
+    before it wrote the new file, so the task is still open there;
+  - the files without front matter (written before 0.5.0) only when no active candidate matches,
+    that is, when there is none or the user rejected all of them. Otherwise do not list them one
+    by one: give their count and the newest three by filename date, and offer the rest on
+    request.
+
+  Leave out the other frozen files and the done files.
 - A document that another handoff explicitly supersedes is not a candidate.
 
 ## 3. Follow `next` to the active file
@@ -114,8 +148,8 @@ range, starting with the current state, the open points and the next action. Fol
 references (plans, specs, tickets) and its `previous` file only when the next action needs them.
 
 Do not rename the file, even when it has the older `handoff-<slug>-<YYYY-MM-DD>.md` name: the
-rename belongs to `seamless:save`, right before its first edit of the file, so that the edit
-records the new path for the next session.
+rename belongs to `seamless:save`, which writes the new path with Write before it removes the old
+one, so that the transcript records the surviving path for the next session.
 
 Then report, briefly: what the work is, where it stopped, what is already proven, what is open and
 whose step it is. Continue from the document's next action. Treat facts it marks as verified as
