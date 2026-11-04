@@ -1,7 +1,7 @@
 {
   "name": "seamless",
   "version": "0.5.0",
-  "description": "Seamless sessions: /clear at any time and the next session carries on. A living handoff document, a skill that restores it, and a SessionStart hook that hands the fresh session the previous one's context.",
+  "description": "Seamless sessions: /clear at any time and the next session carries on. A living handoff document with a fixed front matter and heading contract, one file per task per day, a skill that restores it, a skill that searches past handoffs by name, front matter and headings, and a SessionStart hook that hands the fresh session the previous one's context.",
   "author": {
     "name": "null-topology"
   },

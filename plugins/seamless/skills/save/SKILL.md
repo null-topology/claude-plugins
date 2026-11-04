@@ -47,13 +47,23 @@ changes from one file to the next.
 Before creating a file, look for the task's existing handoff in the target directory: the same
 `task` key in the front matter, the same ticket key or slug in the filename, or, for files
 without front matter, the same topic under any naming. Continue that task, today's file or a
-rollover from its latest one, instead of starting a parallel one. If the existing file uses the
-older `handoff-<slug>-<YYYY-MM-DD>.md` form, rename it to the current form at this point
-(`git mv` when it is tracked, plain `mv` otherwise) and say so.
+rollover from its latest one, instead of starting a parallel one. The task's files stay in the
+directory where it started, even when the rules above would resolve to another one today.
 
-Write and edit handoff documents with the Write and Edit tools, not through shell commands or
-renames: the session-start hook finds the documents a session kept by reading those tool calls in
-its transcript, and a file created any other way is not listed for the next session.
+Write and edit handoff documents with the Write and Edit tools, not through shell commands: the
+session-start hook finds the documents a session kept by reading those tool calls in its
+transcript, and keeps only the paths that still exist. A file created any other way is not
+listed for the next session, and neither is a file renamed after its last Write or Edit.
+
+**Files in the older `handoff-<slug>-<YYYY-MM-DD>.md` form** are renamed by this skill, one at a
+time, and only right before this session first edits that file with Write or Edit (an update on
+the day it covers, or the freeze of a rollover). Rename it to `<YYYY-MM-DD>-<slug>.md` (`git mv`
+when it is tracked, plain `mv` otherwise), keeping a ticket key such as `ABC-123` right after the
+date when the slug starts with one, then make that Edit to the new path in the same session and
+say that you renamed it. A rename without a following Edit breaks the chain: the transcript names
+only the old path, which no longer exists. Use the new name wherever another file's `previous` or
+`next` refers to it. Never rename a file you are not about to edit, and never mass-rename a
+directory.
 
 ## The contract
 
@@ -70,15 +80,21 @@ date: 2026-09-16                  # the day this file covers; equals the filenam
 started: 2026-09-14               # first day of the task
 status: active                    # active | frozen | done
 previous: 2026-09-15-ABC-123-payment-retries.md   # previous day's file; absent on day one
-# next: 2026-09-17-ABC-123-payment-retries.md     # next day's file; added only when frozen
 summary: Retry failed payments with backoff; worker merged, alerting still open
+key_points:                       # optional: a few facts worth seeing without opening the body
+  - worker retries with exponential backoff, capped at 5 minutes
+  - alerting on exhausted retries still open
 repos: [services/payments]        # optional: paths or URLs of the perimeter
 tags: [payments, worker]          # optional
 ---
 ```
 
 - `summary` is one line: what the task is and where it stands. Rewrite it on every update.
-- `previous` and `next` hold file names in the same directory, not paths.
+- `key_points` is optional: a short YAML list of the facts a reader filtering by front matter
+  should see (decisions, results, what is still open). Keep it to a few items and keep it current.
+- `previous` and `next` hold file names in the same directory, not paths. `next` names the
+  following day's file and is added only when the file is frozen, or when a done task resumes on
+  a later day (see "Rollover").
 - Set `status: done` when the task is finished; a done file is not rolled over again.
 
 **One H1**, right after the front matter: the whole task in one line, so that the heading alone
@@ -103,23 +119,35 @@ Sub-topics go in H3 (and lower) inside these sections; no other H1 or H2.
 
 ## Rollover
 
-Before the first update of the day to a task whose latest file has a `date` before today:
+Before each update, find the task's latest file in its directory (the highest `date`, else the
+filename date). If today's file for the task already exists, because this or another session
+already rolled the task over today, edit that file and create no other. Otherwise, before the
+first update of the day to a task whose latest file has a `date` before today:
 
 1. **Freeze the old file first.** Edit its front matter: `status: frozen` and
    `next: <new file name>`. Change nothing else in it.
-2. **Then write the new file** `<today>-[<TICKET>-]<slug>.md` with the full contract: the same
-   `task`, `ticket` and `started`, `date` set to today, `status: active`, `previous` naming the old
-   file. Carry the current state forward and compact it: what is still true, still open and still
-   planned moves over; resolved history stays in the old file, reachable through `previous`.
+2. **Then write the new file** `<today>-[<TICKET>-]<slug>.md` in the same directory as the old
+   file, with the full contract: the same `task`, `ticket` and `started`, `date` set to today,
+   `status: active`, `previous` naming the old file. Carry the current state forward and compact
+   it: what is still true, still open and still planned moves over; resolved history stays in the
+   old file, reachable through `previous`.
 3. **From then on edit only the new file** that day.
 
 The order matters. The session-start hook lists the handoffs a session kept, latest touch first,
-and the next session restores the first one. Freezing the old file after writing the new one
-would make the frozen file the latest touch, and the next session would restore it.
+and the next session restores the first one. Freezing first leaves the new file as the latest
+touch, so the next session lands on it directly. Freezing last would put the frozen file first:
+the next session would land on it and have to follow its `next` to reach the new file. A reader
+can land on a frozen file in other ways too (an older list, a search, a link), and always
+follows `next` from it, which is why `status: frozen` and `next` are written in the same edit.
 
 Never edit a frozen file again, except to correct its `next`. A task that is `done` does not roll
-over; if the work resumes, set it back to `active` in a new file for that day with `previous`
-pointing to the done file.
+over. If the work resumes:
+
+- **The done file is dated today:** set it back to `status: active` and keep editing it. Its
+  name is the name of today's file for the task, so a new file would overwrite it.
+- **The done file is from an earlier day:** proceed as for a rollover. First edit the done file's
+  front matter to add `next: <new file name>`, as for a frozen file, and change nothing else; then
+  write today's file with `status: active` and `previous` naming the done file.
 
 **Files without front matter** (written before this contract) are not converted in bulk. Edit
 such a file as it is on the day it covers. When it rolls over, give the old file a new front

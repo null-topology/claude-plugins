@@ -62,23 +62,42 @@ json_escape() {
     | awk 'BEGIN { ORS = "" } { if (NR > 1) printf "\\n"; printf "%s", $0 }'
 }
 
+# The stat and date flavours are detected once and only that flavour is called. A "BSD || GNU"
+# chain does not work for stat: on GNU and busybox, "stat -f" means "file system status", succeeds
+# and prints a report that the fallback then appends to. "stat -c" exists only in GNU and busybox;
+# "date -j -f" only in BSD.
+if stat -c %Y / >/dev/null 2>&1; then stat_flavour=gnu; else stat_flavour=bsd; fi
+if date -j -f '%Y-%m-%d' 2000-01-01 '+%s' >/dev/null 2>&1; then date_flavour=bsd; else date_flavour=gnu; fi
+
 mtime_human() {
   # "YYYY-MM-DD HH:MM" for a file, on both BSD and GNU userlands.
-  stat -f '%Sm' -t '%Y-%m-%d %H:%M' "$1" 2>/dev/null || stat -c '%y' "$1" 2>/dev/null | cut -c1-16
+  if [ "$stat_flavour" = gnu ]; then
+    stat -c '%y' "$1" 2>/dev/null | cut -c1-16
+  else
+    stat -f '%Sm' -t '%Y-%m-%d %H:%M' "$1" 2>/dev/null
+  fi
 }
 
 mtime_epoch() {
-  stat -f '%m' "$1" 2>/dev/null || stat -c '%Y' "$1" 2>/dev/null
+  if [ "$stat_flavour" = gnu ]; then
+    stat -c '%Y' "$1" 2>/dev/null
+  else
+    stat -f '%m' "$1" 2>/dev/null
+  fi
 }
 
 date_epoch() {
   # Epoch for a YYYY-MM-DD string, on both BSD and GNU userlands.
-  date -j -f '%Y-%m-%d' "$1" '+%s' 2>/dev/null || date -d "$1" '+%s' 2>/dev/null
+  if [ "$date_flavour" = bsd ]; then
+    date -j -f '%Y-%m-%d' "$1" '+%s' 2>/dev/null
+  else
+    date -d "$1" '+%s' 2>/dev/null
+  fi
 }
 
 describe_handoff_dir() {
   # One line per handoff directory: newest file, its mtime, the file count and a date-mismatch
-  # warning when the date in the filename and the mtime disagree by more than a day.
+  # warning when the date in the filename and the mtime disagree by more than two days.
   dh_newest=$(ls -t "$1"/*.md 2>/dev/null | head -1)
   [ -n "$dh_newest" ] || return 0
   dh_count=$(ls "$1"/*.md 2>/dev/null | wc -l | tr -d ' ')
@@ -289,6 +308,9 @@ emit() {
   fi
   find "$data_dir/onboarded" -type f -mtime +30 -delete 2>/dev/null
   find "$data_dir/chain" -type f -mtime +90 -delete 2>/dev/null
+  # The cleanup above fails when a directory does not exist yet (a first run has no chain/);
+  # that is not a failure of the hook.
+  return 0
 }
 
 if [ "$source" = "resume" ] || [ "$source" = "compact" ]; then
@@ -323,10 +345,16 @@ fi
 prev=""
 [ -n "$prev_id" ] && prev=$(transcript_of "$prev_id")
 
-# --- handoff directories: startup dir, ancestors below $HOME, descendants --------------------------
+# --- handoff directories: sandbox, startup dir, ancestors below $HOME, descendants -----------------
 
 handoff_dirs=""
-[ -d "$start_dir/.claude/handoffs" ] && handoff_dirs="$start_dir/.claude/handoffs"
+# Inside a sandboxed agent container the save skill writes to $AGENT_WORKING_DIR/workspace/handoffs
+# (bind-mounted from the host), which is not a .claude/handoffs directory.
+if [ -n "${AGENT_WORKING_DIR:-}" ] && [ -d "$AGENT_WORKING_DIR/workspace/handoffs" ]; then
+  handoff_dirs="$AGENT_WORKING_DIR/workspace/handoffs"
+fi
+[ -d "$start_dir/.claude/handoffs" ] && handoff_dirs="$handoff_dirs
+$start_dir/.claude/handoffs"
 
 parent=$(dirname "$start_dir")
 while [ "$parent" != "/" ] && [ "$parent" != "$HOME" ] && [ "$parent" != "$(dirname "$parent")" ]; do
@@ -336,7 +364,7 @@ $parent/.claude/handoffs"
 done
 
 found_dirs=$(find "$start_dir" -maxdepth 7 \
-  \( -name .git -o -name node_modules -o -name worktrees -o -name .terraform -o -name vendor \) -prune \
+  \( -name .git -o -name node_modules -o -name worktrees -o -name .worktrees -o -name .terraform -o -name vendor \) -prune \
   -o -type d -path '*/.claude/handoffs' -print 2>/dev/null | sort)
 while IFS= read -r d; do
   [ -n "$d" ] || continue
@@ -346,6 +374,7 @@ $d"
 done <<EOF_FOUND
 $found_dirs
 EOF_FOUND
+handoff_dirs=$(printf '%s\n' "$handoff_dirs" | awk 'NF && !seen[$0]++')
 
 # --- assemble ------------------------------------------------------------------------------------
 
@@ -532,3 +561,4 @@ $ctx" ;;
 esac
 
 emit "$ctx" "$msg"
+exit 0

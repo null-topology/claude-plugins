@@ -59,8 +59,10 @@ This plugin closes the gap from both sides:
   installed or reloaded while the session was already running. It costs one file check per
   prompt and speaks once, if ever (see "Sessions that predate the plugin" below).
 
-All three skills are model-invocable: their descriptions and the hook's context tell Claude when
-to use them, so in practice the handoff gets written and read without being asked for. After a restore
+All three skills are model-invocable: their descriptions tell Claude when to use them, and the
+hook's context also points to `save` and `restore` (it does not mention `search`, which answers
+questions about past work and is triggered by its description alone), so in practice the handoff
+gets written and read without being asked for. After a restore
 the hook also asks for one invocation of `/seamless:save` with nothing to write: a fresh session
 has not read the skill, and the rules on where the document lives, how it is named and what goes
 into it exist only there. Loading them once keeps later updates from being done by guesswork.
@@ -246,7 +248,10 @@ than guessing.
 Naming: `<YYYY-MM-DD>-<TICKET>-<slug>.md`, or `<YYYY-MM-DD>-<slug>.md` without a ticket. Date first
 so `ls` sorts chronologically. The date is the day the file covers; the ticket key and the slug
 stay the same for every daily file of a task. Files in the older `handoff-<slug>-<date>.md` form
-are renamed one at a time when `restore` or `save` opens them; nothing is mass-renamed.
+are renamed one at a time by `save`, right before its first Write or Edit of that file in the
+session; `restore` never renames. The order matters: the hook finds a session's handoffs through
+its Write and Edit calls and keeps only paths that still exist, so a file renamed after its last
+edit drops out of the chain. Nothing is mass-renamed.
 
 Contract: every document starts with YAML front matter, then one H1 and fixed H2 sections.
 
@@ -259,6 +264,8 @@ started: 2026-09-14
 status: active            # active | frozen | done
 previous: 2026-09-15-ABC-123-payment-retries.md
 summary: Retry failed payments with backoff; worker merged, alerting still open
+key_points:               # optional
+  - alerting on exhausted retries still open
 ---
 # Retry failed payments with exponential backoff in the payments worker
 ## Current state
@@ -274,28 +281,46 @@ summary: Retry failed payments with backoff; worker merged, alerting still open
 
 `task` is a stable slug shared by the task's daily files, `date` equals the filename date,
 `started` is the task's first day, `previous` and `next` link the daily files, `summary` is one
-line on what the task is and where it stands; `repos` and `tags` are optional. Empty sections are
-left out; sub-topics go in H3. The point is cheap reading later: a session can filter handoffs by
-front matter and find its way through a large one by its headings alone.
+line on what the task is and where it stands; `key_points` (a short list of facts worth seeing
+without opening the body), `repos` and `tags` are optional. Empty sections are left out;
+sub-topics go in H3. The point is cheap reading later: a session can filter handoffs by front
+matter and find its way through a large one by its headings alone. The skills read headings with
+an `awk` command that skips the front matter and fenced code blocks, so YAML and shell comments
+are not taken for headings.
 
 Rollover: a task keeps one file per day. Five tasks in a day give five files; one task over a
 week gives seven. Before the first update on a new day, `save` edits the latest file's front
-matter to `status: frozen` and `next: <new file>`, then writes today's file with the state carried
-forward and compacted, and from then on edits only that one. Freezing comes first on purpose: the
-hook lists a session's handoffs latest touch first, so freezing last would point the next session
-at the frozen file. `restore` follows `next` from a frozen file to the active one. A finished task
-gets `status: done`. Documents written before the contract are not converted; when one rolls
-over, it receives only the two freeze keys and the new file follows the contract.
+matter to `status: frozen` and `next: <new file>`, then writes today's file in the same directory
+with the state carried forward and compacted, and from then on edits only that one; when today's
+file already exists, it edits that one instead. Freezing comes first on purpose: the hook lists a
+session's handoffs latest touch first, so the new file comes first; a reader who lands on a
+frozen file anyway follows its `next`. `restore` follows `next` from a frozen file to the active
+one. A finished task gets `status: done`. When a done task resumes the same day, the done file
+goes back to `active`; on a later day it gets a `next` and a new file continues it, so `restore`
+checks for such a file before calling a task finished. Documents written before the contract are
+not converted; when one rolls over, it receives only the two freeze keys and the new file follows
+the contract.
+
+Restore without a chain: when no previous session is on record, the hook's per-directory list
+names only the newest file of each directory. `restore` treats those lines as pointers to
+directories, describes every handoff there by its front matter or H1, offers the active ones and
+asks which applies. Frozen entries in the "kept by the previous session(s)" list are followed to
+their successor rather than offered as separate candidates.
 
 Search: `/seamless:search` looks for past work in the same directories `restore` uses. It matches
 file names first (date range, ticket key, slug words), then reads only the front matter, then
 only the headings, and finally just the sections it needs, walking a task's days through
-`previous` and `next`. It reports findings as `path:line` and treats a handoff as what its session
-believed at the time, to be checked against the present.
+`previous` and `next`. Each pass decides what is read first, not what is dropped: when the earlier
+passes find nothing, or the question asks for everything, the front matter and headings of the
+remaining files are checked too. Files written before 0.5.0 are dated as they were then: one file
+from its filename date (the day it was created) to its last modification or its successor. It
+reports findings as `path:line` and treats a handoff as what its session believed at the time,
+to be checked against the present. It answers questions; continuing a task is `restore`'s job.
 
 Inside a sandboxed agent container (`AGENT_WORKING_DIR` set) the document goes to
 `$AGENT_WORKING_DIR/workspace/handoffs/`, which is bind-mounted from the host and survives the
-container.
+container. The hook lists that directory next to the `.claude/handoffs/` ones, and `restore` and
+`search` look there too.
 
 Whether `.claude/handoffs/` is committed or ignored is your call per repository; the plugin does
 not touch `.gitignore`.
@@ -309,7 +334,9 @@ not touch `.gitignore`.
 - **A process that dies between `/clear` and the next start** leaves a bridge nobody can match;
   it is deleted after an hour, and the next session there starts without a predecessor.
 - **mtime is not trusted alone.** `git checkout`, `clone` and `rsync` reset it. The date in the
-  filename is the reference; when the two disagree by more than a day the hook says so.
+  filename is the reference; when the two disagree by more than two days the hook says so. A frozen
+  or done file is normally edited after the day it covers, so `restore` does not repeat the
+  warning for those.
 - **Only Write/Edit/NotebookEdit calls count as edits.** Files changed through shell commands are
   not listed.
 - The previous session's last prompt is cut at 300 characters.
