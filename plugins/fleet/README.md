@@ -1,14 +1,16 @@
 # fleet
 
-A fleet of executor subagents, one per model, with the reasoning effort passed on each call, plus
-the guard that keeps them inside a policy written in one place.
+A fleet of executor subagents, one per model, with the reasoning effort passed as a named level on
+each call (none for a model without effort control), plus the guard that keeps them inside a
+policy written in one place.
 
 ## What it ships
 
 - `agents/<model>.md` — the fleet, generated from the shipped rules (`fleet.default.json`): one
   file per model those rules mention, named by the model's id (`claude-opus-5-5`, `gpt-6.1-sol`,
   `claude-haiku-4-5`, ...). Each file fixes a model in its frontmatter and carries no effort: the
-  caller passes a named `effort` on every Agent call, and the guard checks it. No hooks, no rules
+  caller passes a named `effort` on every Agent call, except to a model without effort control,
+  which takes none, and the guard checks it. No hooks, no rules
   — those live elsewhere. The repository ships every agent of the shipped rules; an installed
   copy keeps only the ones your rules can reach (see [Registered agents](#registered-agents)).
 - `models.json` — benchmark data, nothing more: per model its id, name, vendor and a dated
@@ -54,8 +56,11 @@ the guard that keeps them inside a policy written in one place.
   empty `agent_id` means the main session, whatever `agent_type` says (the main session carries
   one when it runs as `claude --agent <name>`). Otherwise a fleet `agent_type` resolves to its
   definition or, when that file is gone, to a model the rules in force mention, and its model is
-  the row the rules are keyed by; a type with the plugin's prefix (`fleet:`) that resolves to
-  neither is refused, and a type with another plugin's prefix is not a fleet agent. Anything else
+  the row the rules are keyed by. A fleet caller whose model the rules in force no longer mention
+  (the rules changed while it ran) is refused whatever it calls, its definition on disk or not. A
+  type with the plugin's prefix (`fleet:`, compared trimmed and case-insensitively, so `Fleet:`
+  and ` FLEET:` are the same prefix) that resolves to neither is refused, and a type with another
+  plugin's prefix is not a fleet agent. Anything else
   is a built-in subagent and passes, once the rules have been read: when they cannot be, a type
   without a definition cannot be told from a fleet agent whose file is gone, and the call is
   refused. A payload that is not one JSON object, or whose `tool_input` is not an object, is
@@ -206,16 +211,23 @@ start a sol agent, and only a sol agent could start haiku, so the sync registers
   - `builtin_agent_models`: the `model` values it may pass to a built-in agent
     (`general-purpose`, `Explore`, `Plan`, ...). The Agent tool accepts only the aliases `sonnet`,
     `opus`, `haiku`, `fable`. A call without `model` runs on the session model and always passes.
+    The call's value must equal one entry exactly; every entry must be a string, and any other
+    entry (`null`, a number) is a configuration error that refuses every call with a `model`.
 - `rules` — fleet subagents: caller model → callee model → efforts the caller may request. A
   caller with no row may spawn nothing. Built-in agents are not fleet agents and are never
   reachable from a fleet subagent while this section is non-empty. The shipped default lets each
   model call the tiers below its own at every effort; trim it in your copy.
-- `disallowed_skills` — skills a fleet subagent may not invoke. The shipped entries fork the
+- `disallowed_skills` — skills a fleet subagent may not invoke, each compared with the call's
+  skill exactly. The shipped entries fork the
   session onto a model of their own choosing and spawn their own agents, which would lift the
   subagent above its tier; add any skill here for any reason.
-- `disallowed_commands` — commands a fleet subagent may not run from Bash, matched as whole words
-  in the command line. `claude` is listed because a nested session would start with none of these
-  rules.
+- `disallowed_commands` — commands a fleet subagent may not run from Bash. Each entry is matched
+  literally, as a whole word or phrase in the command line: `rm -rf` refuses `rm -rf x` and not
+  `rm -r x`, and a character such as `.` or `(` is itself, not a pattern. `claude` is listed
+  because a nested session would start with none of these rules.
+
+An entry of either denylist is a string; a `null` entry denies nothing, and any other entry (a
+number, a list) is a configuration error that refuses every call that reads that list.
 
 Regardless of the sections, a fleet subagent may never pass `model` to the Agent tool (the model
 belongs to the agent definition) and may not use `Workflow`. A refusal names what the caller may
@@ -254,7 +266,10 @@ takes none, is one the caller corrects and calls again. When the section that ap
 (`main.fleet` from the main session, the caller's row from a fleet agent) lists the model, the
 refusal lists the levels that section allows, which may be fewer than the levels the agent's
 description names, so the corrected call does not land on a refusal of the pair. A level of the
-model that the section does not allow is refused for good.
+model that the section does not allow is refused for good. Where the section allows the model no
+level at all (it lists the model with `[]` or not at all, or the caller has no row, while
+`main.fleet` or `rules` is non-empty), the call gets that final refusal straight away, whatever
+effort it passed, and no levels are offered.
 
 The caller's own effort plays no part: rules are keyed by the caller's model. Calls from a
 built-in subagent are not governed, as before.
@@ -464,5 +479,8 @@ never calls Python.
 - Agent type names changed in 0.10.0 from `<model>-<effort>` to `<model>`. A session still
   holding a definition loaded from an older version is refused when it calls or is called by an
   old `fleet:` type (the old name resolves to nothing) until it reloads.
-- The command check is word matching over the command line. It stops a cooperating agent from
-  drifting; it is not a security boundary.
+- The command check is literal word and phrase matching over the command line. It stops a
+  cooperating agent from drifting; it is not a security boundary.
+- A rules file of 0 bytes or holding only white space is invalid, not an empty fleet: the guard
+  refuses every checked call and the sync leaves `agents/` as it is, as for any invalid file (see
+  [The rules file](#the-rules-file)). An empty fleet is written `{}` or `null`.

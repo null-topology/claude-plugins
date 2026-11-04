@@ -1,6 +1,6 @@
 ---
 name: selecting-subagent-model
-description: Use when choosing or revising a sub-agent model and reasoning effort for an assigned task, which every Agent call to a fleet agent needs (its agent type and its named effort parameter), and when the user states which models to use or avoid for some work. Covers the user's standing overrides, the per-class routing table, security work and account access, vendor tendencies, and benchmark comparisons under subscription-based execution.
+description: Use when choosing or revising a sub-agent model and reasoning effort for an assigned task, which every Agent call to a fleet agent needs (its agent type, and its named effort parameter unless the model has no effort control and takes none), and when the user states which models to use or avoid for some work. Covers the user's standing overrides, the per-class routing table, security work and account access, vendor tendencies, and benchmark comparisons under subscription-based execution.
 ---
 
 # Selecting a sub-agent model and reasoning effort

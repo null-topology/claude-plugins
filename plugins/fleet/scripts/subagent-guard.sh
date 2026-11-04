@@ -11,7 +11,9 @@
 # `claude --agent <name>`). Otherwise the caller is a subagent: a fleet
 # agent_type resolves to a definition under agents/, or, when the file is gone,
 # to a model the rules in force mention; its model is the caller the rules
-# section is keyed by. A type with this plugin's prefix (fleet:) that resolves
+# section is keyed by, and must still be a model the rules in force mention,
+# or nothing it calls passes. A type with this plugin's prefix (fleet:, compared
+# trimmed and case-insensitively) that resolves
 # to neither is still a fleet agent and is refused; a type with another
 # plugin's prefix is not a fleet agent. Anything else is a built-in subagent,
 # which is not governed here and passes, but only once the rules have been
@@ -30,7 +32,8 @@
 # model as a configuration error. A refusal for a missing, relative or
 # off-level effort lists the levels the section that applies (main.fleet, or
 # the caller's row) gives the model, when it lists it, so that the corrected
-# call can pass. The (model, effort) pair is then authorized against the rules
+# call can pass; where a non-empty allowlist allows the model no level at all,
+# the call gets the final refusal of the pair instead. The (model, effort) pair is then authorized against the rules
 # as before. The caller's own effort is not needed: rules are keyed by the
 # caller's model. models.json plays no part here.
 #
@@ -97,7 +100,7 @@ field() {
 # A query on the rules that fails refuses the call: read as an empty list, a denylist of the
 # wrong type would let everything through.
 fleet_unreadable() {
-  refuse "the fleet rules ($rules_path) could not be read: the query $1 failed, so a section has the wrong type; fleet checks refuse everything until it is fixed."
+  refuse "the fleet rules ($rules_path) could not be read: the query $1 failed, so a section or an entry has the wrong type; fleet checks refuse everything until it is fixed."
 }
 
 # check_effort <requested-type>: the call's effort against the levels the rules give the model
@@ -110,6 +113,13 @@ fleet_unreadable() {
 # allows every pair. A model the rules give only "default" takes no effort at all, so a call
 # cannot set what the rules call "default"; "default" beside named levels is a configuration
 # error, and no call to that model passes until the rules are fixed.
+#
+# $2 is the section that applies (main.fleet, or the caller's row) and $3 the allowlist whose
+# emptiness opens every pair (main.fleet, or rules). Where that allowlist is non-empty and the
+# section allows the model no level (it lists the model with no level, or not at all, or the
+# caller has no row), no effort can pass: check_effort sets closed to 1 and returns without reading
+# the effort, so that the caller gives the final refusal of the pair instead of a correctable one
+# that would point to levels refused for good.
 check_effort() {
   # A value that is not a plain lowercase word is read as JSON text, so that no line break or other
   # character can be trimmed away into a level that matches.
@@ -132,6 +142,21 @@ default
     if [ "$fleet_levels" != default ]; then
       refuse "the fleet rules ($rules_path) give '$fleet_model' both 'default' and named levels ($levels): 'default' marks a model without effort control and stands alone, so the efforts of '$1' cannot be checked; nothing is allowed for it until the rules are fixed."
     fi
+    ;;
+  esac
+  closed=
+  if nonempty "$3"; then
+    efforts "$2" "$fleet_model"
+    if [ -z "$fleet_lines" ]; then
+      closed=1
+      return 0
+    fi
+  fi
+  case "
+$fleet_levels
+" in *"
+default
+"*)
     if [ -n "$effort" ]; then
       refuse "'$fleet_model' has no adjustable reasoning effort, so '$1' takes no effort parameter (requested '$effort'). Call it without effort."
     fi
@@ -146,8 +171,9 @@ default
     levels=$(printf '%s\n' "$ladder" | awk 'NF { printf "%s%s", (n++ ? ", " : ""), $0 }')
   fi
   # The levels a corrected call is pointed to: those the section that applies ($2) lists for the
-  # model, in ladder order, when it lists any; else the model's levels. Pointing to a level of the
-  # model that the section does not allow would turn a correctable refusal into a final one.
+  # model, in ladder order, when it lists any (it does unless the allowlist $3 is empty, see closed
+  # above); else, with every pair allowed, the model's levels. Pointing to a level of the model
+  # that the section does not allow would turn a correctable refusal into a final one.
   efforts "$2" "$fleet_model"
   offer=$(printf '%s\n' "$fleet_lines" | awk -v ladder="$(printf '%s ' $ladder)" '
     NF { listed[$0] = 1 }
@@ -256,9 +282,9 @@ if [ "$event" = SubagentStart ]; then
   resolve "$agent_type"
   [ "$kind" != other ] || exit 0
   require_rules
-  fleet_read '.disallowed_skills | list | join(", ")'
+  fleet_read '.disallowed_skills | denylist | join(", ")'
   skills=$fleet_lines
-  fleet_read '.disallowed_commands | list | join(", ")'
+  fleet_read '.disallowed_commands | denylist | map(select(length > 0)) | join(", ")'
   commands=$fleet_lines
   [ -n "$skills$commands" ] || exit 0
   context='Fleet limits for this agent (from the fleet rules in force now):'
@@ -293,7 +319,12 @@ if [ -z "$agent_id" ]; then
       refuse "fleet agent types carry their own model; '$requested' cannot be given '$model'. Pick the type that already runs on the model you need."
     fi
     # The effort is checked even when main.fleet allows everything: it is what the agent runs at.
-    check_effort "$requested" .main.fleet
+    check_effort "$requested" .main.fleet .main.fleet
+    if [ -n "$closed" ]; then
+      matrix .main.fleet
+      refuse "agent type '$requested' is not enabled for the main session at any effort. Enabled fleet agents (model: efforts):
+$fleet_lines"
+    fi
     nonempty '.main.fleet' || exit 0
     allowed .main.fleet "$fleet_model" "$rung" && exit 0
     matrix .main.fleet
@@ -306,9 +337,14 @@ $fleet_lines"
 
   [ -n "$model" ] || exit 0
   nonempty '.main.builtin_agent_models' || exit 0
-  fleet_read '.main | section | .builtin_agent_models | list | .[]'
-  printf '%s\n' "$fleet_lines" | grep -qx -e "$model" && exit 0
-  fleet_read '.main | section | .builtin_agent_models | list | join(", ")'
+  # Exact membership of the requested value, as JSON, in the list (allowlist: every entry a string,
+  # else the query fails and refuses), so no entry is split into lines that match on their own.
+  fleet_arg=$(printf '%s' "$payload" | jq -c '.tool_input.model') ||
+    refuse "the model of the call could not be read from the hook payload."
+  fleet_read '.main | section | .builtin_agent_models | allowlist | any(.[]; . == ($arg | fromjson))'
+  fleet_arg=
+  [ "$fleet_lines" = true ] && exit 0
+  fleet_read '.main | section | .builtin_agent_models | allowlist | map(tojson) | join(", ")'
   refuse "model '$model' is not enabled for built-in agents. Enabled: $fleet_lines"
 fi
 
@@ -330,6 +366,18 @@ case $kind in
 esac
 require_rules
 
+# A caller resolved from its definition on disk is a fleet agent only while its model is still in
+# the fleet: the rules in force may have dropped it since the definition was written or loaded
+# (a session keeps the definitions it loaded). Its calls are then governed by no row, and nothing
+# it calls passes. Rules that cannot be read refuse too (fleet_names returns 2).
+in_fleet=0
+fleet_names "$caller" || in_fleet=$?
+case $in_fleet in
+  0) ;;
+  1) refuse "agent type '$agent_type' runs on '$caller', which is no longer in the fleet rules in force ($rules_path); nothing it calls is allowed until the rules name that model again." ;;
+  *) fleet_unreadable fleet_ids ;;
+esac
+
 case "$tool" in
   Agent)
     model=$(field '.tool_input.model')
@@ -343,7 +391,13 @@ case "$tool" in
     resolve "$requested"
     if [ "$kind" = fleet ]; then
       target=1
-      check_effort "$requested" ".rules[\"$caller\"]"
+      check_effort "$requested" ".rules[\"$caller\"]" .rules
+      if [ -n "$closed" ]; then
+        matrix ".rules[\"$caller\"]"
+        [ -n "$fleet_lines" ] || refuse "no spawn rules exist for a $caller agent; it may not spawn anything."
+        refuse "agent type '$requested' is not available from a $caller agent at any effort. Available to you (model: efforts):
+$fleet_lines"
+      fi
     elif [ "$kind" = stray ]; then
       refuse "agent type '$requested' is not defined in this fleet: no definition under agents/, and the fleet rules in force do not mention such a model."
     fi
@@ -370,8 +424,12 @@ $row"
 
   Skill)
     skill=$(field '.tool_input.skill')
-    fleet_read '.disallowed_skills | list | .[]'
-    if [ -n "$fleet_lines" ] && printf '%s\n' "$fleet_lines" | grep -qx -e "$skill"; then
+    # Exact membership of the requested value, as JSON, in the denylist's string entries.
+    fleet_arg=$(printf '%s' "$payload" | jq -c '.tool_input.skill') ||
+      refuse "the skill of the call could not be read from the hook payload."
+    fleet_read '.disallowed_skills | denylist | any(.[]; . == ($arg | fromjson))'
+    fleet_arg=
+    if [ "$fleet_lines" = true ]; then
       refuse "skill '$skill' is not available from a fleet agent. This is not a reason to stop: carry on with the tools and the other skills you have, within the brief."
     fi
     ;;
@@ -381,14 +439,18 @@ $row"
     ;;
 
   Bash)
-    cmd=$(field '.tool_input.command')
-    fleet_read '.disallowed_commands | list | .[]'
-    for word in $fleet_lines; do
-      # Whole word only, so paths and names such as ~/.claude/ or claude-plugins pass.
-      if printf '%s' "$cmd" | grep -qE "(^|[^[:alnum:]_./-])${word}([^[:alnum:]_.-]|\$)"; then
-        refuse "'$word' is not available from a fleet agent. Report what needs it instead of working around it."
-      fi
-    done
+    # Each entry is matched literally, as a whole word or phrase, by command_hit in jq: no entry is
+    # read as a pattern or split into words, and a matcher that fails refuses (fleet_read).
+    fleet_arg=$(field '.tool_input.command')
+    fleet_read '.disallowed_commands | [command_hit($arg)] | if length > 0 then "hit " + .[0] else "none" end'
+    fleet_arg=
+    case $fleet_lines in
+      none) ;;
+      "hit "*)
+        word=${fleet_lines#hit }
+        refuse "'$word' is not available from a fleet agent. Report what needs it instead of working around it." ;;
+      *) refuse "the command could not be checked against the disallowed commands of the fleet rules ($rules_path)." ;;
+    esac
     ;;
 esac
 

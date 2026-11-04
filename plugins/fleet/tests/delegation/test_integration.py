@@ -201,7 +201,7 @@ def main():
              "effort 'ultra' is not a level of 'fixture-chief'. Its levels: low, medium, high, xhigh, max."),
             ("nested/caller-only model: a row that does not list it refuses it",
              invocation(caller="chief", subagent_type="fleet:chief", effort="high"), open_rules, 2,
-             "agent type 'fleet:chief' at effort 'high' is not available from a fixture-chief agent"),
+             "agent type 'fleet:chief' is not available from a fixture-chief agent at any effort"),
             ("main/default beside named levels is a configuration error",
              invocation(subagent_type="fleet:plain", effort=None), mixed_rules, 2,
              "give 'fixture-plain' both 'default' and named levels (low, default)"),
@@ -381,6 +381,121 @@ def main():
             check("review/" + name, result.returncode == code and not result.stdout
                   and (text in result.stderr if code else not result.stderr),
                   "rc=%r stderr=%r" % (result.returncode, result.stderr))
+
+        # ---- second review round ----------------------------------------------------------------
+        # Reproductions from the second 0.10.0 review, numbered by its items, on the same copy.
+        # Every case gave another exit code or another message on 5e1656f.
+        def luna_call(tool, **tool_input):
+            return json.dumps({"hook_event_name": "PreToolUse", "tool_name": tool, "agent_type": "fleet:gpt-6-luna",
+                               "agent_id": "a1", "tool_input": tool_input})
+
+        def main_builtin(model):
+            return agent_call("general-purpose", model=model)
+
+        luna_row = {"rules": {"gpt-6-luna": {}}}
+        null_effort = json.dumps({"main": {"fleet": {}}, "rules": {"gpt-6-luna": {"gpt-5.6-terra": [None]}}})
+        closed_main = json.dumps({"main": {"fleet": {"gpt-6-luna": ["low"], "gpt-5.6-terra": []}},
+                                  "rules": {"gpt-5.6-terra": {"gpt-6-luna": ["high"]}}})
+        closed_rows = json.dumps({"main": {"fleet": {"gpt-6-luna": ["low"]}},
+                                  "rules": {"gpt-6-luna": {"gpt-6-luna": ["low"], "claude-haiku-4-5": []},
+                                            "gpt-5.6-terra": {"gpt-6-luna": ["high"], "claude-haiku-4-5": ["default"]}}})
+        review2_cases = [
+            ("1/a null effort entry is a configuration error, not erased",
+             review(agent_call("fleet:gpt-5.6-terra", effort="low"), null_effort), 2,
+             "give 'gpt-5.6-terra' the effort entries null, which are not levels"),
+            ("1/a skill named \"null\" in disallowed_skills is refused",
+             review(luna_call("Skill", skill="null"), json.dumps(dict(luna_row, disallowed_skills=["null"]))), 2,
+             "skill 'null' is not available from a fleet agent"),
+            ("1/a command named \"null\" in disallowed_commands is refused",
+             review(luna_call("Bash", command="null --flag"), json.dumps(dict(luna_row, disallowed_commands=["null"]))),
+             2, "'null' is not available from a fleet agent"),
+            ("1/a null entry in a denylist denies nothing",
+             review(luna_call("Bash", command="ls"), json.dumps(dict(luna_row, disallowed_commands=[None]))), 0, ""),
+            ("1/a denylist entry that is neither a string nor null fails closed",
+             review(luna_call("Skill", skill="any"), json.dumps(dict(luna_row, disallowed_skills=[5]))), 2,
+             "could not be read"),
+            ("2/rules changed to {}: a running fleet agent cannot start a built-in agent",
+             review(agent_call("general-purpose", "fleet:gpt-6-luna"), "{}"), 2,
+             "runs on 'gpt-6-luna', which is no longer in the fleet rules in force"),
+            ("2/rules changed to {}: a running fleet agent cannot run Bash",
+             review(luna_call("Bash", command="ls"), "{}"), 2,
+             "runs on 'gpt-6-luna', which is no longer in the fleet rules in force"),
+            ("2/rules that drop the caller's model: its bare type is refused too",
+             review(luna_call("Bash", command="ls").replace('"fleet:gpt-6-luna"', '"gpt-6-luna"'),
+                    json.dumps({"main": {"fleet": {"gpt-6-astra": ["low"]}}})), 2,
+             "which is no longer in the fleet rules in force"),
+            ("2/rules whose fleet cannot be read: a caller with a definition is refused",
+             review(luna_call("Bash", command="ls"), json.dumps({"rules": {"gpt-6-luna": {}, "gpt-6-astra": "x"}})), 2,
+             "could not be read"),
+            ("3/an entry that is not a valid regex is matched literally: foo( is refused",
+             review(luna_call("Bash", command="foo( bar"), json.dumps(dict(luna_row, disallowed_commands=["foo("]))), 2,
+             "'foo(' is not available from a fleet agent"),
+            ("3/an entry is not a pattern: a.b does not refuse axb",
+             review(luna_call("Bash", command="axb"), json.dumps(dict(luna_row, disallowed_commands=["a.b"]))), 0, ""),
+            ("3/an entry is not split into words: 'rm -rf' does not refuse 'rm -r x'",
+             review(luna_call("Bash", command="rm -r x"), json.dumps(dict(luna_row, disallowed_commands=["rm -rf"]))),
+             0, ""),
+            ("3/a phrase entry is refused as a phrase",
+             review(luna_call("Bash", command="rm -rf x"), json.dumps(dict(luna_row, disallowed_commands=["rm -rf"]))),
+             2, "'rm -rf' is not available from a fleet agent"),
+            ("4/an allowlist entry holding a line break allows neither line",
+             review(main_builtin("opus"), json.dumps({"main": {"builtin_agent_models": ["sonnet\nopus"]}})), 2,
+             "model 'opus' is not enabled for built-in agents"),
+            ("4/a non-string allowlist entry is a configuration error",
+             review(main_builtin("opus"), json.dumps({"main": {"builtin_agent_models": ["opus", 5]}})), 2,
+             "could not be read"),
+            ("4/a listed model still passes", review(main_builtin("opus"),
+                                                     json.dumps({"main": {"builtin_agent_models": ["opus"]}})), 0, ""),
+            ("5/'Fleet:' is this plugin's prefix: a relative effort is refused",
+             review(agent_call("Fleet:gpt-6-luna", effort="lower")), 2, "effort 'lower' is relative"),
+            ("5/'FLEET:' is this plugin's prefix: a relative effort is refused",
+             review(agent_call("FLEET:gpt-6-luna", effort="lower")), 2, "effort 'lower' is relative"),
+            ("5/' fleet:' is this plugin's prefix: a relative effort is refused",
+             review(agent_call(" fleet:gpt-6-luna", effort="lower")), 2, "effort 'lower' is relative"),
+            ("5/'Fleet:' with a name that resolves to nothing is refused, not passed",
+             review(agent_call("Fleet:no-such-model", effort="low")), 2, "is not defined in this fleet"),
+            ("6/main: a model main.fleet lists with [] gets the final refusal, no levels offered",
+             review(agent_call("fleet:gpt-5.6-terra"), closed_main), 2,
+             "'fleet:gpt-5.6-terra' is not enabled for the main session at any effort"),
+            ("6/main: a model main.fleet does not list gets the final refusal, no levels offered",
+             review(agent_call("fleet:gpt-6-luna", effort="higher"),
+                    json.dumps({"main": {"fleet": {"gpt-5.6-terra": ["low"]}},
+                                "rules": {"gpt-5.6-terra": {"gpt-6-luna": ["high"]}}})), 2,
+             "'fleet:gpt-6-luna' is not enabled for the main session at any effort"),
+            ("6/nested: a model the caller's row lists with [] gets the final refusal",
+             review(agent_call("fleet:claude-haiku-4-5", "fleet:gpt-6-luna", effort="low"), closed_rows), 2,
+             "'fleet:claude-haiku-4-5' is not available from a gpt-6-luna agent at any effort"),
+            ("6/nested: a model the caller's row does not list gets the final refusal",
+             review(agent_call("fleet:gpt-5.6-terra", "fleet:gpt-6-luna"), closed_rows), 2,
+             "'fleet:gpt-5.6-terra' is not available from a gpt-6-luna agent at any effort"),
+            ("6/nested: a caller without a row gets the final refusal",
+             review(agent_call("fleet:gpt-6-luna", "fleet:gpt-6-astra"),
+                    json.dumps({"main": {"fleet": {"gpt-6-astra": ["low"]}},
+                                "rules": {"gpt-6-luna": {"gpt-6-luna": ["high"]}}})), 2,
+             "no spawn rules exist for a gpt-6-astra agent"),
+            ("6/a section that lists the model still offers its levels",
+             review(agent_call("fleet:gpt-6-luna", "fleet:gpt-5.6-terra"), closed_rows), 2,
+             "pass effort as one of high, the level"),
+        ]
+        for name, result, code, text in review2_cases:
+            check("review2/" + name, result.returncode == code and not result.stdout
+                  and (text in result.stderr if code else not result.stderr),
+                  "rc=%r stderr=%r" % (result.returncode, result.stderr))
+        # The correctable refusals must not be given where the section allows no level.
+        result = review(agent_call("fleet:gpt-5.6-terra"), closed_main)
+        check("review2/6/main: the final refusal names no effort to pass",
+              result.returncode == 2 and "pass effort" not in result.stderr and "Its levels" not in result.stderr,
+              result.stderr)
+        # SubagentStart hands the agent the denylists as written: an entry "null" is listed.
+        result = review(json.dumps(start("fleet:gpt-6-luna")),
+                        json.dumps(dict(luna_row, disallowed_skills=["null"], disallowed_commands=["null", None])))
+        try:
+            context = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
+        except (ValueError, KeyError, TypeError):
+            context = ""
+        check("review2/1/start: entries named \"null\" are listed, a null entry is not",
+              result.returncode == 0 and "Skills you cannot load: null." in context
+              and "Commands you cannot run: null." in context, repr((result.returncode, result.stdout, result.stderr)))
 
         generation = Path(temporary) / "generation"
         (generation / "scripts").mkdir(parents=True)

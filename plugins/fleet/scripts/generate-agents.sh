@@ -20,8 +20,10 @@
 # sees half a file), then deletes the rest, and prints one line per change: "added <name>",
 # "updated <name>" or "removed <name>". Nothing printed means nothing changed. The rule
 # readers are the guard's (fleet-rules.sh), so an agent is kept exactly when some call the
-# guard allows can reach it: when the rules allow its model at one of its levels. A rules
-# file that mentions no model empties agents/.
+# guard allows can reach it: when the rules allow its model at one of its levels. In this
+# mode a rules file that mentions no model ({}, null) empties agents/; the full run instead
+# refuses shipped rules that mention no model (exit 3), so the shipped fleet is never empty.
+# A rules file of 0 bytes or only white space is invalid in both modes (exit 3), not empty.
 #
 # A run is all or nothing up to its install. It takes a lock (agents/.sync.lock), copies
 # models.json and the rules file into a staging directory, checks the copies and reads

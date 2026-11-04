@@ -118,6 +118,12 @@ def main():
         Case("target/unknown fleet-prefixed type inspected", typed("do it", "fleet:no-such-agent"), 2,
              "Missing: Objective."),
         Case("target/fleet-prefixed path not inspected", typed("bare text", "fleet:../agents/fixture-worker")),
+        # The prefix is compared trimmed and case-insensitively (review round 2, item 5).
+        Case("target/'Fleet:' prefix inspected", typed("bare text", "Fleet:fixture-worker"), 2, "Missing: Objective."),
+        Case("target/'FLEET:' prefix inspected", typed("bare text", "FLEET:fixture-worker"), 2, "Missing: Objective."),
+        Case("target/' fleet:' prefix inspected", typed("bare text", " fleet:fixture-worker"), 2, "Missing: Objective."),
+        Case("target/'Fleet:' prefix of an unknown name inspected", typed("bare text", "Fleet:no-such-agent"), 2,
+             "Missing: Objective."),
         Case("format/reordered", payload(brief(order=list(reversed(HEADINGS))))),
         Case("format/CRLF", payload(brief().replace("\n", "\r\n"))),
         Case("format/BOM", payload("\ufeff" + brief())),

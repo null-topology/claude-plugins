@@ -71,22 +71,39 @@ def fleet_word: type == "string" and (. as $x | fleet_words | any(.[]; . == $x))
 def fleet_entries($m): (.main.fleet | section | .[$m]), (.rules | section | .[] | section | .[$m]) | list | .[];
 def fleet_levels($m): [fleet_entries($m) | select(fleet_word)] as $l
   | [fleet_words[] | select(. as $c | $l | any(.[]; . == $c))];
-def fleet_bad($m): [fleet_entries($m) | select(fleet_word | not)] | dedupe;'
+def fleet_bad($m): [fleet_entries($m) | select(fleet_word | not)] | dedupe;
+def denylist: list | if all(.[]; type == "string" or . == null) then map(strings)
+  else error("a denylist entry is not a string") end;
+def allowlist: list | if all(.[]; type == "string") then . else error("an allowlist entry is not a string") end;
+def literal: gsub("(?<c>[\\\\.^$|?*+()\\[\\]{}])"; "\\\(.c)");
+def command_hit($command): ("\n" + $command + "\n") as $c | first(denylist[] | select(length > 0)
+  | select(. as $w | $c | test("[^[:alnum:]_./-]" + ($w | literal) + "[^[:alnum:]_.-]"))) // empty;'
+# The name lists: denylist is a denylist (disallowed_skills, disallowed_commands) as its string
+# entries; a null entry denies nothing and is left out, and an entry of any other type fails the
+# query. allowlist is an allowlist (main.builtin_agent_models), whose entries must all be strings:
+# a null or another type there fails the query, since leaving it out could empty the list and so
+# allow everything. A name is compared with a requested value as one JSON string, never split into
+# lines or words. command_hit($command) is the first non-empty entry of a command denylist found in
+# $command as a whole word or phrase, matched literally (literal escapes every regex
+# metacharacter): before it the start of a line or a character other than a letter, a digit, "_",
+# ".", "/" or "-", after it the end of a line or a character other than a letter, a digit, "_", "."
+# or "-", so paths and names such as ~/.claude/ or claude-plugins do not match "claude".
 
 # fleet_read <expression>: runs a jq expression on the rules file ($rules) and sets fleet_lines to
-# its output, null lines dropped. The readers write their expressions with list and section, so
-# that a missing section or entry reads as empty and a failure means a section of the wrong type
-# or a file that could not be read: fleet_read then calls fleet_unreadable and returns 1, and a
-# failure never reads as an empty list. Call it in the current shell, not in $(...), so that
-# fleet_unreadable can end the caller. The expression reads $fleet_arg as $arg, so that a value
-# such as a model id reaches jq as data, not as program text.
+# its output, as written: no line of it is dropped, so every query emits only what it means (a
+# null it can meet is suppressed inside the query, with select or // empty). The readers write
+# their expressions with list and section, so that a missing section or entry reads as empty and a
+# failure means a section or an entry of the wrong type or a file that could not be read:
+# fleet_read then calls fleet_unreadable and returns 1, and a failure never reads as an empty
+# list. Call it in the current shell, not in $(...), so that fleet_unreadable can end the caller.
+# The expression reads $fleet_arg as $arg, so that a value such as a model id reaches jq as data,
+# not as program text.
 fleet_read() {
   if ! fleet_lines=$(jq -r --arg arg "${fleet_arg:-}" "$fleet_defs $1" "$rules" 2>/dev/null); then
     fleet_lines=
     fleet_unreadable "$1"
     return 1
   fi
-  fleet_lines=$(printf '%s\n' "$fleet_lines" | grep -v '^null$') || fleet_lines=
 }
 
 # nonempty <section>: the section holds at least one entry. One that cannot be read, a section of
@@ -189,9 +206,13 @@ fleet_agent() {
 }
 
 # fleet_prefixed <agent-type>: the type carries this plugin's prefix, as every agent the plugin
-# ships does. Such a type is a fleet agent even when fleet_agent cannot resolve it.
+# ships does. Such a type is a fleet agent even when fleet_agent cannot resolve it. The prefix (the
+# text before the first colon) is compared with the plugin name trimmed of white space and in ASCII
+# lower case, both sides, so that "Fleet:", "FLEET:" or " fleet:" is not taken for another
+# plugin's prefix and let through ungoverned.
 fleet_prefixed() {
   case $1 in *:*) ;; *) return 1 ;; esac
   plugin_name=$(jq -r '.name // empty' "$plugin_root/.claude-plugin/plugin.json" 2>/dev/null) || plugin_name=
-  [ "${1%%:*}" = "${plugin_name:-fleet}" ]
+  [ "$(jq -rn --arg p "${1%%:*}" --arg n "${plugin_name:-fleet}" \
+    'def norm: gsub("^\\s+|\\s+$"; "") | ascii_downcase; ($p | norm) == ($n | norm)' 2>/dev/null)" = true ]
 }
