@@ -55,13 +55,19 @@ def main():
         if not shutil.which(tool):
             parser.error("Missing test dependency: " + tool)
     # The hook inspects only calls whose target the guard treats as a fleet agent: a definition
-    # under <root>/agents, a model id in <root>/models.json whose file the sync removed, or the prefix.
+    # under <root>/agents, a model the rules in force mention whose file the sync removed (here the
+    # shipped default, as no data directory is given), or the prefix. models.json is benchmark data
+    # and names no fleet agent: fixture-described is described there and not mentioned in the rules.
     fixture_root = Path(tempfile.mkdtemp(prefix="fleet-contract-root-"))
     atexit.register(shutil.rmtree, fixture_root, True)
     (fixture_root / "agents").mkdir()
     (fixture_root / "agents/fixture-worker.md").write_text("---\nname: fixture-worker\n---\nFixture.\n")
+    (fixture_root / "fleet.default.json").write_text(
+        '{"main": {"fleet": {"fixture-worker": ["low"]}}, "rules": {"fixture-worker": {"fixture-pruned": ["high"]}}}\n')
     (fixture_root / "models.json").write_text(
-        '{"models": [{"id": "fixture-pruned", "efforts": {"high": {}}}]}\n')
+        '{"models": [{"id": "fixture-described", "efforts": {"high": {}}}]}\n')
+    other_rules = fixture_root / "other-rules.json"
+    other_rules.write_text('{"rules": {"fixture-other": {}}}\n')
     bare_command = [shell] + args.shell[1:] + [str(hook)]
     command = bare_command + [str(fixture_root)]
 
@@ -101,6 +107,12 @@ def main():
         Case("target/pruned fleet agent by bare name still inspected",
              typed("do it", "fixture-pruned"), 2, "Missing: Objective."),
         Case("target/a per-effort name of a listed model is not a fleet agent", typed("bare text", "fixture-pruned-high")),
+        Case("target/a model only models.json describes is not a fleet agent",
+             typed("bare text", "fixture-described")),
+        Case("target/the rules file in force decides: FLEET_RULES naming the model",
+             typed("bare text", "fixture-other"), 2, "Missing: Objective.", {"FLEET_RULES": str(other_rules)}),
+        Case("target/the rules file in force decides: the shipped default does not name it",
+             typed("bare text", "fixture-other")),
         Case("target/unknown fleet-prefixed type inspected", typed("do it", "fleet:no-such-agent"), 2,
              "Missing: Objective."),
         Case("target/fleet-prefixed path not inspected", typed("bare text", "fleet:../agents/fixture-worker")),
@@ -186,7 +198,8 @@ def main():
                           "FLEET_DELEGATION_ERROR:", {"PATH": str(broken)}))
         for index, case in enumerate(cases, 1):
             try:
-                env = dict(os.environ, **(case.env or {}))
+                env = {k: v for k, v in os.environ.items() if k != "FLEET_RULES"}
+                env.update(case.env or {})
                 result = subprocess.run(command, input=case.raw, text=True, capture_output=True,
                                         timeout=10, env=env)
                 errors = []

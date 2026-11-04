@@ -10,11 +10,15 @@ and apply what the user has said about their own fleet. This skill carries data 
 reading it. The only judgment in it is marked as such: a starred cell in the routing table. How a
 user wants their fleet used differs between users and is kept as their overrides, not here.
 
-The fleet: Anthropic — Claude Fable 5.1, Claude Opus 5.5, Claude Sonnet 5.5, Claude Haiku 5.5,
-Claude Haiku 4.5 (retirement not before 2026-10-15); OpenAI — GPT-6 Astra, GPT-6.1 Sol, GPT-5.6 Terra, GPT-6 Luna. Each model is
-one agent type, `fleet:<model id>` (`fleet:claude-opus-5-5`, `fleet:gpt-6.1-sol`, ...); the effort is
-a parameter of each call, not part of the type. Use the agent types the session actually lists; the
-guard's rules decide which model and effort pairs a caller may spawn.
+The fleet is the set of models the fleet rules file in force mentions (the user's `fleet.json`),
+and each model's levels are the efforts that file lists for it; `models.json` only supplies the
+benchmark figures. The shipped rules mention: Anthropic — Claude Fable 5.1, Claude Opus 5.5,
+Claude Sonnet 5.5, Claude Haiku 5.5, Claude Haiku 4.5 (retirement not before 2026-10-15); OpenAI —
+GPT-6 Astra, GPT-6.1 Sol, GPT-5.6 Terra, GPT-6 Luna. A user's rules may name fewer or other
+models. Each model is one agent type, `fleet:<model id>` (`fleet:claude-opus-5-5`,
+`fleet:gpt-6.1-sol`, ...); the effort is a parameter of each call, not part of the type. Use the
+agent types the session actually lists: each one's description names the levels its call may
+pass. The guard's rules decide which model and effort pairs a caller may spawn.
 
 ## Order of selection
 
@@ -28,8 +32,9 @@ guard's rules decide which model and effort pairs a caller may spawn.
    [Effort levels](#effort-levels)). The table names families only; the effort at which a model
    was measured does not carry over.
 5. **Compare pairs when the cell is thin or the class is General.** `references/benchmark.md` has
-   the general Index, cost and speed per model and effort, the escalation ladder and the
-   substitutions. Compare a higher effort on one model with another model at a lower effort; the
+   the general Index, cost and speed per model and effort of the shipped fleet, the escalation
+   ladder and the substitutions; the agent descriptions carry the same figures for the fleet the
+   session lists. Compare a higher effort on one model with another model at a lower effort; the
    choice is the pair.
 6. **The vendor and the brief.** When the cell's vendor is unavailable, take the Fallback column.
    `references/vendor-guide.md` covers what each vendor's tendencies cost a task and how to brief
@@ -44,12 +49,14 @@ guard's rules decide which model and effort pairs a caller may spawn.
 This skill explicitly instructs you to set the Agent tool's `effort` parameter. On the call:
 
 - `subagent_type` is `fleet:<model id>` of the chosen model.
-- `effort` is the named level you chose: `low`, `medium`, `high`, `xhigh` or `max`, one the model
-  lists in `references/benchmark.md`. Always pass it by name. Never pass a relative value
-  (`lower`, `higher`) and never leave it out: the guard refuses both, since neither is a level
-  the rules can check.
-- A model without effort control (its effort is `n/a` in `references/benchmark.md`, Claude Haiku
-  4.5 today) takes no `effort`: leave the parameter out. The guard refuses one.
+- `effort` is the named level you chose: `low`, `medium`, `high`, `xhigh` or `max`, one of the
+  levels the agent's description names (the levels the rules give that model; the benchmark
+  reference shows them for the shipped rules). Always pass it by name. Never pass a relative
+  value (`lower`, `higher`), a level the description does not name, or no effort at all: the
+  guard refuses each of them.
+- A model without effort control (its description says the caller passes no effort, and its
+  effort is `n/a` in `references/benchmark.md`; Claude Haiku 4.5 in the shipped rules) takes no
+  `effort`: leave the parameter out. The guard refuses one.
 - Never pass `model`: each fleet type carries its own.
 
 ## Effort levels

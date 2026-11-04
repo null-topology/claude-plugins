@@ -18,6 +18,7 @@ from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -45,32 +46,74 @@ SYNTHETIC_MODELS = {
         {"id": "m-d", "name": "Model D", "efforts": {"low": figures(3)}},
     ],
 }
-# One agent per model, named by its id.
+# The fleet is every model the rules mention, one agent per model, named by its id. These default
+# rules mention all four synthetic models, with an empty main.fleet: m-a at low, m-b at low and
+# high, m-c at default (no effort control), m-d at low. m-a and m-c get the levels the narrow
+# fixture below (SYNTHETIC_CASES[2]) gives them, so switching between the two adds or removes
+# agents and updates none.
+SYNTHETIC_DEFAULT = {"main": {"fleet": {}},
+                     "rules": {"m-a": {"m-a": ["low"], "m-b": ["low", "high"], "m-c": ["default"], "m-d": ["low"]},
+                               "m-b": {"m-c": ["default"]}}}
 EVERY_SYNTHETIC = {"m-a", "m-b", "m-c", "m-d"}
 
 # Rules shapes and what the guard lets anyone reach under each. The expectations are written out
-# so that the oracle is checked as well as the sync.
+# so that the oracle is checked as well as the sync. Index 2 and 5 are used as fixtures below.
 SYNTHETIC_CASES = [
-    ("empty object allows everything", {}, EVERY_SYNTHETIC),
-    ("null document reads as empty rules", None, EVERY_SYNTHETIC),
+    ("empty object mentions no model", {}, set()),
+    ("null document reads as empty rules, so no model", None, set()),
     ("main lists one pair, its row reaches a default rung",
      {"main": {"fleet": {"m-a": ["low"]}}, "rules": {"m-a": {"m-c": ["default"]}}}, {"m-a", "m-c"}),
-    ("empty rules section opens every spawn",
-     {"main": {"fleet": {"m-a": ["high"]}}, "rules": {}}, EVERY_SYNTHETIC),
-    ("caller model without a row reaches nothing",
+    ("empty rules section opens every spawn, to a model with no levels too",
+     {"main": {"fleet": {"m-a": ["high"], "m-b": []}}, "rules": {}}, {"m-a", "m-b"}),
+    ("caller model without a row reaches nothing; fleet models nothing reaches get no agent",
      {"main": {"fleet": {"m-a": ["low"]}}, "rules": {"m-b": {"m-d": ["low"]}}}, {"m-a"}),
     ("chain through a default rung",
      {"main": {"fleet": {"m-c": ["default"]}}, "rules": {"m-c": {"m-d": ["low"]}, "m-d": {"m-b": ["high"]}}},
      {"m-c", "m-d", "m-b"}),
-    ("empty main section allows every agent from main",
-     {"main": {"fleet": {}}, "rules": {"m-a": {}}}, EVERY_SYNTHETIC),
+    ("empty main section allows every fleet model from main, a caller-only one too",
+     {"main": {"fleet": {}}, "rules": {"m-a": {"m-b": ["low"]}, "m-c": {}}}, {"m-a", "m-b", "m-c"}),
     ("main lists a model with no efforts", {"main": {"fleet": {"m-a": []}}}, set()),
-    ("unknown effort is ignored",
+    ("an effort word outside the usual names is a level the rules give",
      {"main": {"fleet": {"m-a": ["low", "ultra"]}}, "rules": {"m-a": {"m-a": ["ultra"]}}}, {"m-a"}),
-    ("an effort the model does not have reaches nothing", {"main": {"fleet": {"m-d": ["high"]}}}, set()),
-    ("default listed for a model with named efforts reaches nothing",
-     {"main": {"fleet": {"m-a": ["default"]}}}, set()),
+    ("the rules decide the levels: one models.json has no figures for still reaches",
+     {"main": {"fleet": {"m-d": ["high"]}}}, {"m-d"}),
+    ("default alone makes a model without effort control, whatever models.json measured",
+     {"main": {"fleet": {"m-a": ["default"]}}}, {"m-a"}),
+    ("a model models.json does not describe is a fleet model",
+     {"main": {"fleet": {"m-x": ["low"]}}, "rules": {"m-x": {"m-y": ["default"]}}}, {"m-x", "m-y"}),
+    ("a model models.json describes but the rules do not mention gets no agent",
+     {"main": {"fleet": {"m-b": ["low"]}}}, {"m-b"}),
 ]
+
+NAMED_LEVELS = ["low", "medium", "high", "xhigh", "max"]
+
+
+def fleet_of(rules):
+    """The fleet as the rules file gives it: every model it mentions (main.fleet keys, rules keys,
+    the keys of every row), each with the union of the levels given for it, the named ones in
+    ladder order first; only plain lowercase words count, as only those can be passed."""
+    rules = rules or {}
+    main = (rules.get("main") or {}).get("fleet") or {}
+    rows = rules.get("rules") or {}
+    sections = [main] + [row or {} for row in rows.values()]
+    ids = list(dict.fromkeys(list(main) + list(rows) + [m for row in rows.values() for m in (row or {})]))
+    fleet = {}
+    for model in ids:
+        given = list(dict.fromkeys(level for section in sections for level in (section.get(model) or [])
+                                   if isinstance(level, str) and re.fullmatch(r"[a-z]+", level)))
+        fleet[model] = [l for l in NAMED_LEVELS if l in given] + [l for l in given if l not in NAMED_LEVELS]
+    return fleet
+
+
+def catalog_for(rules, models):
+    """Agent name to (model, efforts to probe): every fleet model with the efforts a call to it can
+    pass (any named level when the rules give none), plus every model models.json describes that
+    the rules do not mention, probed at its measured efforts, which the guard must refuse."""
+    catalog = {model: (model, levels or NAMED_LEVELS) for model, levels in fleet_of(rules).items()}
+    for model in models["models"]:
+        if model["id"] not in catalog:
+            catalog[model["id"]] = (model["id"], list(model.get("efforts") or {}) or NAMED_LEVELS)
+    return catalog
 
 NARROW_EXPECTED = {"gpt-6-astra", "claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "gpt-6.1-sol",
                    "gpt-6-luna"}
@@ -111,16 +154,6 @@ MISSHAPEN_MODELS = (
     ("a model id YAML reads as a boolean", lambda m: m["models"][3].update(id="yes")),
     ("a model id YAML reads as a number", lambda m: m["models"][3].update(id="10")),
 )
-
-
-def catalog_of(models):
-    """Agent name (the model id) to (model, rungs), the last entry with rungs winning as the
-    generator's last file does."""
-    names = {}
-    for model in models["models"]:
-        if model.get("efforts"):
-            names[model["id"]] = (model["id"], list(model["efforts"]))
-    return names
 
 
 def call_effort(rung):
@@ -181,7 +214,7 @@ def main():
         process.wait()
         return process.pid
 
-    def make_root(base, name, models=None, default_rules=None):
+    def make_root(base, name, models=None, default_rules=None, shipped_wider=False):
         root = base / name
         (root / "scripts").mkdir(parents=True)
         for script in SCRIPTS:
@@ -194,13 +227,22 @@ def main():
             shutil.copyfile(source / "models.json", root / "models.json")
         else:
             (root / "models.json").write_text(json.dumps(models))
-        if default_rules is None:
+        # The shipped rules go with the shipped models; synthetic models get rules that mention them.
+        if default_rules is None and models is None:
             shutil.copyfile(source / "fleet.default.json", root / "fleet.default.json")
+        elif default_rules is None or shipped_wider:
+            (root / "fleet.default.json").write_text(json.dumps(SYNTHETIC_DEFAULT))
         else:
             (root / "fleet.default.json").write_text(json.dumps(default_rules))
         code, _, err = generate(root)
         if code != 0:
             raise SystemExit("fixture generation failed: " + err)
+        if shipped_wider:
+            # The default rules a data directory is seeded from are written after the agents were
+            # generated from SYNTHETIC_DEFAULT, so the first sync narrows the full synthetic set. (A
+            # shipped plugin generates its agents from its own default; this stands for a user's
+            # fleet.json narrower than the shipped set.)
+            (root / "fleet.default.json").write_text(json.dumps(default_rules))
         return root
 
     def kept(root):
@@ -320,13 +362,12 @@ def main():
         base = Path(temporary)
 
         # ---- reachability parity with the guard -------------------------------------------
-        synthetic_oracle = make_root(base, "synthetic-oracle", SYNTHETIC_MODELS, {})
-        synthetic_work = make_root(base, "synthetic-work", SYNTHETIC_MODELS, {})
-        synthetic_catalog = catalog_of(SYNTHETIC_MODELS)
+        synthetic_oracle = make_root(base, "synthetic-oracle", SYNTHETIC_MODELS)
+        synthetic_work = make_root(base, "synthetic-work", SYNTHETIC_MODELS)
         for index, (name, rules, expected) in enumerate(SYNTHETIC_CASES):
             rules_file = base / f"synthetic-rules-{index}.json"
             rules_file.write_text(json.dumps(rules))
-            reach = oracle(synthetic_oracle, rules_file, synthetic_catalog, pool)
+            reach = oracle(synthetic_oracle, rules_file, catalog_for(rules, SYNTHETIC_MODELS), pool)
             generate(synthetic_work)
             before = reference_state(synthetic_work)
             code, out, err = generate(synthetic_work, rules_file)
@@ -335,25 +376,58 @@ def main():
                   (code, sorted(kept(synthetic_work)), err))
             check(f"parity/{name}: reference untouched", reference_state(synthetic_work) == before)
 
+        # The description follows the rules: m-d at high, a level models.json has no figure for, is
+        # described with that level, its models.json name and no benchmark sentence.
+        levels_file = base / "synthetic-levels.json"
+        levels_file.write_text(json.dumps({"main": {"fleet": {"m-d": ["high"]}}}))
+        code, out, err = generate(synthetic_work, levels_file)
+        described = frontmatter_of(synthetic_work / "agents/m-d.md").get("description", "") if code == 0 else ""
+        check("parity/an agent's description names the levels the rules give, with figures only where "
+              "models.json has them",
+              described == "Executor subagent on Model D. The caller passes a named effort on every Agent call: "
+                           "high, chosen with fleet:selecting-subagent-model; never lower or higher. Follows the "
+                           "prompt literally; does not invent scope.", (code, described, err))
+        # "default" beside named levels for one model: the generator refuses the rules file and the
+        # guard refuses every call to that model, from the main session and from a fleet agent.
+        generate(synthetic_work)
+        mixed_state = snapshot(synthetic_work)
+        mixed = base / "synthetic-mixed.json"
+        mixed.write_text(json.dumps({"main": {"fleet": {"m-c": ["default"], "m-a": ["low"]}},
+                                     "rules": {"m-a": {"m-c": ["high"]}}}))
+        code, out, err = generate(synthetic_work, mixed)
+        check("parity/default beside named levels: the generator exits 3, changes nothing, says why",
+              code == 3 and snapshot(synthetic_work) == mixed_state
+              and "gives 'm-c' both default and named levels" in err, (code, out, err))
+        for where, payload in (("main", main_call("fleet:m-c")),
+                               ("nested", nested_call("fleet:m-a", subagent_type="fleet:m-c", effort="high"))):
+            code, out, err = guard(synthetic_oracle, payload, mixed)
+            check(f"parity/default beside named levels: the guard refuses the {where} call as a configuration error",
+                  code == 2 and "both 'default' and named levels (high, default)" in err, (code, err))
+
         real_oracle = make_root(base, "real-oracle")
         real_work = make_root(base, "real-work")
         real_models = json.loads((source / "models.json").read_text())
-        real_catalog = catalog_of(real_models)
+        shipped_rules_doc = json.loads((source / "fleet.default.json").read_text())
+        real_catalog = catalog_for(shipped_rules_doc, real_models)
         for name, rules_file in (("narrow rules", narrow_rules), ("shipped default", source / "fleet.default.json")):
-            reach = oracle(real_oracle, rules_file, real_catalog, pool)
+            catalog = catalog_for(json.loads(rules_file.read_text()), real_models)
+            reach = oracle(real_oracle, rules_file, catalog, pool)
             generate(real_work)
             started = time.monotonic()
             code, out, err = generate(real_work, rules_file)
             elapsed = time.monotonic() - started
             check(f"parity/{name} over models.json: sync keeps what the guard reaches ({len(reach)} of "
-                  f"{len(real_catalog)}, {elapsed:.1f}s)", code == 0 and kept(real_work) == reach,
+                  f"{len(catalog)} probed, {elapsed:.1f}s)", code == 0 and kept(real_work) == reach,
                   (sorted(kept(real_work) ^ reach), err))
             if name == "narrow rules":
-                check("parity/narrow rules keep the expected agents", reach == NARROW_EXPECTED & set(real_catalog),
-                      sorted(reach ^ (NARROW_EXPECTED & set(real_catalog))))
+                check("parity/narrow rules keep the expected agents", reach == NARROW_EXPECTED,
+                      sorted(reach ^ NARROW_EXPECTED))
+            else:
+                check("parity/the shipped default reaches every model it mentions",
+                      reach == set(fleet_of(shipped_rules_doc)), sorted(reach ^ set(fleet_of(shipped_rules_doc))))
 
         # ---- generator --rules edge cases ----------------------------------------------------
-        root = make_root(base, "generator", SYNTHETIC_MODELS, {})
+        root = make_root(base, "generator", SYNTHETIC_MODELS)
         state = snapshot(root)
         reference = reference_state(root)
         for name, content in (("invalid JSON", "{\"main\": "), ("empty file", ""),
@@ -373,7 +447,7 @@ def main():
         # already refused false, a list, a string section and a string row; only "" and 0 are new for
         # it. Each case starts from a full set on its own root, so a run that changes agents/ on old
         # code cannot leak into the checks after it.
-        wrong_root = make_root(base, "wrong-typed", SYNTHETIC_MODELS, {})
+        wrong_root = make_root(base, "wrong-typed", SYNTHETIC_MODELS)
         wrong_state = snapshot(wrong_root)
         wrong_reference = reference_state(wrong_root)
         wrong_typed = [
@@ -415,6 +489,33 @@ def main():
         check("generator/rules: two sections that cannot be read: the message names the first failing query",
               code == 3 and snapshot(wrong_root) == wrong_state
               and "the query .main.fleet | size failed" in err, (code, out, err))
+        # A model id the rules mention becomes a file name and an unquoted YAML value: one that cannot
+        # be either is refused, filtered or not.
+        if snapshot(wrong_root) != wrong_state:
+            generate(wrong_root)
+            wrong_state = snapshot(wrong_root)
+        for name, model_id in (("a path", "../m-a"), ("a word YAML reads as a boolean", "yes"),
+                               ("a number", "10"), ("a line break", "m-a\nname: x")):
+            bad.write_text(json.dumps({"main": {"fleet": {"m-a": ["low"]}}, "rules": {"m-a": {model_id: ["low"]}}}))
+            code, out, err = generate(wrong_root, bad)
+            check(f"generator/rules: a model id that is {name}: exits 3, changes nothing, says why",
+                  code == 3 and snapshot(wrong_root) == wrong_state and "cannot be an agent name" in err
+                  and "\n" not in err.strip(), (code, out, err))
+        # Shipped rules that mention no model would ship an empty fleet; a rules file given to the
+        # sync that mentions none is a policy, and empties agents/.
+        none_root = make_root(base, "no-model", SYNTHETIC_MODELS)
+        none_state, none_reference = snapshot(none_root), reference_state(none_root)
+        (none_root / "fleet.default.json").write_text(json.dumps({"disallowed_commands": ["sudo"]}))
+        code, out, err = generate(none_root)
+        check("generator/shipped rules that mention no model: exits 3, changes nothing",
+              code == 3 and snapshot(none_root) == none_state and reference_state(none_root) == none_reference
+              and "mentions no model" in err, (code, out, err))
+        empty_rules = base / "no-model-rules.json"
+        empty_rules.write_text(json.dumps({"main": {"builtin_agent_models": ["opus"]}}))
+        code, out, err = generate(none_root, empty_rules)
+        check("generator/--rules naming no model empties agents/ and reports each removal",
+              code == 0 and kept(none_root) == set()
+              and sorted(out.split("\n")) == sorted([""] + [f"removed {n}" for n in EVERY_SYNTHETIC]), (code, out, err))
         code, _, _ = run(shell + [root / "scripts/generate-agents.sh", "--rule", "x"])
         check("generator/unknown argument is a usage error", code == 64, code)
         code, out, err = generate(root, "")
@@ -422,16 +523,13 @@ def main():
               code == 64 and snapshot(root) == state and reference_state(root) == reference, (code, out, err))
 
         # Invalid models input preserves the existing set, filtered or not.
-        bad_models = make_root(base, "bad-models", SYNTHETIC_MODELS, {})
+        bad_models = make_root(base, "bad-models", SYNTHETIC_MODELS)
         narrowed_rules = base / "narrowed-for-models.json"
         narrowed_rules.write_text(json.dumps(SYNTHETIC_CASES[2][1]))
         models_state = snapshot(bad_models)
         models_reference = reference_state(bad_models)
         bad_inputs = [("empty file", ""), ("two documents", "{} {}"), ("no models array", "{}"),
-                      ("empty models array", "{\"models\": []}"),
-                      ("models that render no agent",
-                       json.dumps({"snapshot": {"benchmark": "x", "date": "x"},
-                                   "models": [{"id": "m-x", "name": "X", "efforts": {}}]}))]
+                      ("empty models array", "{\"models\": []}")]
         bad_inputs += [(name, json.dumps(altered(change))) for name, change in MISSHAPEN_MODELS]
         for name, content in bad_inputs:
             (bad_models / "models.json").write_text(content)
@@ -453,6 +551,8 @@ def main():
                               for kind, rungs in (("w", "low"), ("v", "default"))]}
         awkward_root = make_root(base, "awkward", SYNTHETIC_MODELS)
         (awkward_root / "models.json").write_text(json.dumps(awkward))
+        (awkward_root / "fleet.default.json").write_text(json.dumps({"main": {"fleet": {
+            m["id"]: list(m["efforts"]) for m in awkward["models"]}}}))
         code, out, err = generate(awkward_root, timeout=30)
         bench = f'{awkward["snapshot"]["benchmark"]}, {awkward["snapshot"]["date"]}'
         mismatched = []
@@ -489,9 +589,17 @@ def main():
                 unparsed.append(path.name)
         check("generator/the shipped agents carry a quoted description that parses as YAML",
               bool(shipped) and not unquoted and not unparsed, (unquoted[:3], unparsed[:3]))
-        # One agent per model, named by its id, with no effort in its frontmatter: the effort is the
-        # call's. The shipped set and reference are what the generator renders from models.json.
-        model_ids = {m["id"] for m in real_models["models"] if m.get("efforts")}
+        # One agent per model the shipped rules mention, named by its id, with no effort in its
+        # frontmatter: the effort is the call's. The shipped set and reference are what the generator
+        # renders from fleet.default.json and models.json. Every id the shipped rules mention is
+        # described in models.json, and the reference lists only those models.
+        model_ids = set(fleet_of(shipped_rules_doc))
+        described_ids = {m["id"] for m in real_models["models"]}
+        shipped_reference = (source / REFERENCE).read_text()
+        listed = set(re.findall(r"`fleet:([^`]+)`", shipped_reference))
+        check("generator/the shipped rules mention only models that models.json describes, and the "
+              "reference lists exactly those",
+              model_ids <= described_ids and listed == model_ids, (sorted(model_ids - described_ids), sorted(listed)))
         with_effort = []
         for path in shipped:
             try:
@@ -501,7 +609,8 @@ def main():
             if not isinstance(parsed, dict) or "effort" in parsed or parsed.get("name") != path.stem \
                     or parsed.get("model") != path.stem:
                 with_effort.append(path.name)
-        check("generator/the shipped agents are one per model in models.json, named by its id, without an effort",
+        check("generator/the shipped agents are one per model the shipped rules mention, named by its id, "
+              "without an effort",
               {p.stem for p in shipped} == model_ids and not with_effort,
               (sorted({p.stem for p in shipped} ^ model_ids), with_effort))
         regenerated = make_root(base, "regenerated")
@@ -516,7 +625,7 @@ def main():
         (root / "agents" / ".m-a.md.99999").write_text("half")
         (root / "agents" / ".m-x.md.1").write_text("half")
         open_rules = base / "open.json"
-        open_rules.write_text("{}")
+        open_rules.write_text(json.dumps(SYNTHETIC_DEFAULT))
         code, out, err = generate(root, open_rules)
         check("generator/a filtered run removes leftover temporary files", code == 0 and no_temporaries(root), (code, err))
         (root / "agents" / ".m-a.md.99999").write_text("half")
@@ -603,8 +712,9 @@ def main():
                   and no_temporaries(failing) and not [p for p in reference_dir.iterdir() if p.name.startswith(".")],
                   (code, err))
         code, out, err = generate(failing, None, {"PATH": stub_path})
+        # m-d left models.json but not the rules, so it keeps its agent, now without figures.
         check("generator/the jq stub passes every call through when told to fail none",
-              code == 0 and kept(failing) == EVERY_SYNTHETIC - {"m-d"}
+              code == 0 and kept(failing) == EVERY_SYNTHETIC and "Benchmark" not in (failing / "agents/m-d.md").read_text()
               and "| 77 |" in (failing / REFERENCE).read_text(), (code, err))
 
         # The lock's age is refreshed once rendering is done, before the install; a run whose lock was
@@ -646,8 +756,11 @@ def main():
         set_b = {"snapshot": {"benchmark": "Bench B", "date": "2026-02-02"},
                  "models": [{"id": "m-b", "name": "Beta", "efforts": {"low": figures(15)}},
                             {"id": "m-c", "name": "Gamma", "efforts": {"default": figures(5)}}]}
+        # The rules mention all three models, so the agent set stays the same; which agents carry
+        # benchmark figures, and what the reference lists, tells the two files apart.
         model_sets = {"old": ({"m-a"}, set_a), "new": ({"m-b", "m-c"}, set_b)}
-        replaced = make_root(base, "replaced", set_a)
+        replaced = make_root(base, "replaced", set_a,
+                             {"main": {"fleet": {"m-a": ["low", "high"], "m-b": ["low"], "m-c": ["default"]}}})
         replaced_lock = replaced / "agents" / ".sync.lock"
         replaced_lock.mkdir()
         (replaced_lock / "pid").write_text(str(os.getpid()))
@@ -670,8 +783,10 @@ def main():
             stamp = f'{models["snapshot"]["benchmark"]}, {models["snapshot"]["date"]}'
             title = f'# {models["snapshot"]["benchmark"]}, snapshot {models["snapshot"]["date"]}\n'
             others = [m["name"] for other, (_, o) in model_sets.items() if other != label for m in o["models"]]
-            return (replaced_names == names
+            return (replaced_names == {"m-a", "m-b", "m-c"}
                     and all(f"Benchmark {stamp}" in (replaced / "agents" / f"{n}.md").read_text() for n in names)
+                    and not any("Benchmark" in (replaced / "agents" / f"{n}.md").read_text()
+                                for n in replaced_names - names)
                     and replaced_reference.startswith(title)
                     and all(f'| {m["name"]} |' in replaced_reference for m in models["models"])
                     and not any(name in replaced_reference for name in others))
@@ -691,7 +806,7 @@ def main():
 
         # ---- the hook: startup, idempotency, FileChanged ------------------------------------
         narrow = SYNTHETIC_CASES[2][1]
-        root = make_root(base, "hook", SYNTHETIC_MODELS, narrow)
+        root = make_root(base, "hook", SYNTHETIC_MODELS, narrow, shipped_wider=True)
         data = base / "hook-data"
         reference = reference_state(root)
         code, out, err = sync(root, data, session_start("startup"))
@@ -728,7 +843,7 @@ def main():
         check("sync/a kept file that differs is rewritten and counted as updated",
               (root / "agents" / name).read_bytes() == rendered and "0 added, 0 removed, 1 updated" in message(out), out)
 
-        seeded.write_text(json.dumps({}))
+        seeded.write_text(json.dumps(SYNTHETIC_DEFAULT))
         code, out, err = sync(root, data, file_changed(seeded))
         check("filechanged/rules edit syncs and asks for /reload-plugins",
               code == 0 and kept(root) == EVERY_SYNTHETIC and "2 added, 0 removed" in message(out)
@@ -775,7 +890,7 @@ def main():
         check("fallback/deleted data file syncs to the shipped default and watches both",
               code == 0 and kept(root) == {"m-a", "m-c"} and not seeded.exists()
               and out.get("watchPaths") == [str(seeded), str(root / "fleet.default.json")], (code, out, err))
-        seeded.write_text(json.dumps({}))
+        seeded.write_text(json.dumps(SYNTHETIC_DEFAULT))
         code, out, err = sync(root, data, file_changed(seeded, "add"))
         check("fallback/a recreated data file is picked up", code == 0 and kept(root) == EVERY_SYNTHETIC, (code, out))
 
@@ -794,19 +909,22 @@ def main():
         code, out, err = sync(root, data, file_changed(override), env)
         check("override/FLEET_RULES set: a change of the override file writes nothing",
               code == 0 and out is None and snapshot(root) == state, (code, out))
-        code, out, err = guard(root, main_call("fleet:m-a", effort="low"), override)
+        code, out, err = guard(root, main_call("fleet:m-b", effort="high"), override)
         check("override/the guard still applies FLEET_RULES to each call",
               code == 2 and "not enabled for the main session" in err, (code, err))
+        code, out, err = guard(root, main_call("fleet:m-a", effort="low"), override)
+        check("override/a listed agent whose model FLEET_RULES does not mention is refused",
+              code == 2 and "do not mention, so it is not a fleet model" in err, (code, err))
 
         # ---- per-session notices: every session watching the file hears of a change -----------
-        root = make_root(base, "sessions", SYNTHETIC_MODELS, narrow)
+        root = make_root(base, "sessions", SYNTHETIC_MODELS, narrow, shipped_wider=True)
         data = base / "sessions-data"
         code, out_a, err = sync(root, data, session_start("startup", "session-a"))
         code, out_b, err = sync(root, data, session_start("startup", "session-b"))
         check("sessions/the first startup is told of its sync, the second loads the synced set and is not",
               "2 removed" in message(out_a) and "systemMessage" not in out_b, (out_a, out_b))
         seeded = data / "fleet.json"
-        seeded.write_text(json.dumps({}))
+        seeded.write_text(json.dumps(SYNTHETIC_DEFAULT))
         code, out_a, err = sync(root, data, file_changed(seeded, session="session-a"))
         code, out_b, err = sync(root, data, file_changed(seeded, session="session-b"))
         check("sessions/one edit: the session whose run wrote agents/ is told",
@@ -824,7 +942,7 @@ def main():
         check("sessions/a clear with nothing new says nothing", "systemMessage" not in out_a, out_a)
         # A session with an out-of-date record that then sees an invalid rules file: agents/ was left
         # as it is, so the notice must not claim it follows the rules in force.
-        seeded.write_text(json.dumps({}))
+        seeded.write_text(json.dumps(SYNTHETIC_DEFAULT))
         code, out_a, err = sync(root, data, file_changed(seeded, session="session-a"))
         seeded.write_text("{ not json")
         code, out_b, err = sync(root, data, file_changed(seeded, session="session-b"))
@@ -860,14 +978,14 @@ def main():
         lock.mkdir(exist_ok=True)
         (lock / "pid").write_text(str(os.getpid()))
         state = snapshot(root)
-        seeded.write_text(json.dumps({}))
+        seeded.write_text(json.dumps(SYNTHETIC_DEFAULT))
         code, out, err = sync(root, data, file_changed(seeded, session="session-a"), {"FLEET_SYNC_LOCK_WAIT": "0"})
         check("busy/a held lock: agents/ untouched, the session is told the sync was skipped",
               code == 0 and snapshot(root) == state and "skipped, busy" in message(out), (code, out, err))
         shutil.rmtree(lock, ignore_errors=True)
 
         # ---- opting out, and a git checkout ----------------------------------------------------
-        root = make_root(base, "optout", SYNTHETIC_MODELS, narrow)
+        root = make_root(base, "optout", SYNTHETIC_MODELS, narrow, shipped_wider=True)
         data = base / "optout-data"
         state = snapshot(root)
         code, out, err = sync(root, data, session_start("startup"), {"FLEET_SYNC_AGENTS": "0"})
@@ -878,7 +996,7 @@ def main():
         checkout = base / "checkout"
         checkout.mkdir()
         run(["git", "init", "-q"], cwd=checkout)
-        root = make_root(checkout / "plugins", "fleet", SYNTHETIC_MODELS, narrow)
+        root = make_root(checkout / "plugins", "fleet", SYNTHETIC_MODELS, narrow, shipped_wider=True)
         data = base / "checkout-data"
         state = snapshot(root)
         code, out, err = sync(root, data, session_start("startup"))
@@ -925,7 +1043,7 @@ def main():
               and "git is not on PATH" not in context_of(out), (code, out, err))
 
         # ---- an active session keeps its record ------------------------------------------------
-        root = make_root(base, "activity", SYNTHETIC_MODELS, narrow)
+        root = make_root(base, "activity", SYNTHETIC_MODELS, narrow, shipped_wider=True)
         data = base / "activity-data"
         sync(root, data, session_start("startup", "session-c"))
         seeded = data / "fleet.json"
@@ -940,7 +1058,7 @@ def main():
               sorted(p.name for p in record.parent.iterdir()) if record.parent.is_dir() else None)
         if record.is_file():
             os.utime(record, (week_ago, week_ago))
-        seeded.write_text(json.dumps({}))
+        seeded.write_text(json.dumps(SYNTHETIC_DEFAULT))
         sync(root, data, file_changed(seeded, session="session-f"))
         code, out, err = sync(root, data, session_start("compact", "session-c"))
         check("activity/a week-old record survives its own session's next start and still yields the notice",
@@ -951,7 +1069,7 @@ def main():
         # ---- an invalid models.json ------------------------------------------------------------
         # ---- a record pruned meanwhile, or never written --------------------------------------
         # Such a session cannot know which set it loaded: another session may already have synced.
-        root = make_root(base, "pruned", SYNTHETIC_MODELS, narrow)
+        root = make_root(base, "pruned", SYNTHETIC_MODELS, narrow, shipped_wider=True)
         data = base / "pruned-data"
         seeded = data / "fleet.json"
         sync(root, data, session_start("startup", "session-p"))
@@ -962,7 +1080,7 @@ def main():
             os.utime(record_p, (month_ago, month_ago))
         sync(root, data, session_start("resume", "session-q"))
         pruned = not record_p.exists()
-        seeded.write_text(json.dumps({}))
+        seeded.write_text(json.dumps(SYNTHETIC_DEFAULT))
         code, out_q, err = sync(root, data, file_changed(seeded, session="session-q"))
         code, out_p, err = sync(root, data, file_changed(seeded, session="session-p"))
         code, again_p, again_err = sync(root, data, file_changed(seeded, session="session-p"))
@@ -998,7 +1116,7 @@ def main():
         # ---- /clear: a new session id, so normally no record ------------------------------------
         # The docs say "Running /clear starts a new session"; these payloads are synthetic. A clear
         # with no record compares with agents/ as found, like a startup.
-        root = make_root(base, "clear", SYNTHETIC_MODELS, narrow)
+        root = make_root(base, "clear", SYNTHETIC_MODELS, narrow, shipped_wider=True)
         data = base / "clear-data"
         seeded = data / "fleet.json"
         records = data / "sessions"
@@ -1010,7 +1128,7 @@ def main():
               and snapshot(root) == state and (records / "after-clear").is_file(), (code, out, err))
         # The session's own change, synced and reported before the next clear: the cleared session
         # finds agents/ already synced and, like a startup, is not told (the accepted residual).
-        seeded.write_text(json.dumps({}))
+        seeded.write_text(json.dumps(SYNTHETIC_DEFAULT))
         code, own, err = sync(root, data, file_changed(seeded, session="after-clear"))
         code_c, out_c, err_c = sync(root, data, session_start("clear", "after-second-clear"))
         code_s, out_s, err_s = sync(root, data, session_start("startup", "fresh-start"))
@@ -1026,7 +1144,7 @@ def main():
               code_c == 0 and "0 added, 2 removed, 0 updated" in message(out_c)
               and "0 added, 2 removed, 0 updated" in context_of(out_c), (code_c, out_c, err_c))
 
-        root = make_root(base, "models-notice", SYNTHETIC_MODELS, narrow)
+        root = make_root(base, "models-notice", SYNTHETIC_MODELS, narrow, shipped_wider=True)
         data = base / "models-notice-data"
         (root / "models.json").write_text("{}")
         state = snapshot(root)
@@ -1045,7 +1163,7 @@ def main():
             if found:
                 (nojq_bin / tool).symlink_to(found)
         nojq_env = {"PATH": str(nojq_bin)}
-        root = make_root(base, "nojq", SYNTHETIC_MODELS, narrow)
+        root = make_root(base, "nojq", SYNTHETIC_MODELS, narrow, shipped_wider=True)
         data = base / "nojq-data"
         state = snapshot(root)
         code, out, err = sync(root, data, session_start("startup", "nojq-session"), nojq_env)
@@ -1079,7 +1197,7 @@ def main():
         # ---- the guard with definition files gone ----------------------------------------------
         root = make_root(base, "guard")
         generate(root, narrow_rules)
-        gone = sorted(set(real_catalog) - kept(root))
+        gone = sorted(set(fleet_of(shipped_rules_doc)) - kept(root))
         check("guard/the narrow sync removed the unreachable files",
               gone == ["claude-haiku-4-5", "claude-haiku-5-5", "gpt-5.6-terra"], gone)
         # A definition a session loaded before a later sync removed it: claude-opus-5-5 has a row in the
@@ -1095,13 +1213,25 @@ def main():
             return code == 0, (code, err)
 
         shipped_rules = source / "fleet.default.json"
+        luna_less = base / "luna-less.json"
+        luna_less.write_text(json.dumps({"main": {"fleet": {"gpt-6.1-sol": ["high"]}}}))
+        # gpt-6.1-sol has the levels low (main) and high (luna's row); the main session may pass low only.
+        pair_rules = base / "pair-rules.json"
+        pair_rules.write_text(json.dumps({"main": {"fleet": {"gpt-6.1-sol": ["low"]}},
+                                          "rules": {"gpt-6-luna": {"gpt-6.1-sol": ["high"]}}}))
+        # The narrow rules mention claude-sonnet-5-5 only in main.fleet: it is a fleet model with a
+        # definition, but has no row. gpt-5.6-terra is described in models.json and has a shipped
+        # definition, but the narrow rules do not mention it, so it is not a fleet model under them.
         cases = [
-            ("removed caller is governed by its model, not passed as built-in",
+            ("removed caller whose model the rules mention is governed by its model, not passed as built-in",
+             refused(nested_call("fleet:claude-sonnet-5-5", subagent_type="fleet:gpt-6-luna", effort="low"),
+                     "no spawn rules exist for a claude-sonnet-5-5 agent")),
+            ("removed caller without a prefix whose model the rules mention is governed too",
+             refused(nested_call("claude-opus-5-5", subagent_type="fleet:claude-fable-5-1", effort="low"),
+                     "not available from a claude-opus-5-5 agent")),
+            ("removed caller whose model the rules do not mention: refused as a fleet agent they do not place",
              refused(nested_call("fleet:gpt-5.6-terra", subagent_type="fleet:gpt-6-luna", effort="low"),
-                     "no spawn rules exist for a gpt-5.6-terra agent")),
-            ("removed caller without a prefix is governed too",
-             refused(nested_call("gpt-5.6-terra", subagent_type="fleet:gpt-6-luna", effort="low"),
-                     "no spawn rules exist for a gpt-5.6-terra agent")),
+                     "the fleet rules in force do not mention its model")),
             ("removed caller's row allows what it lists",
              passed(nested_call("fleet:claude-opus-5-5", subagent_type="fleet:gpt-6-luna", effort="max"))),
             ("removed caller's row refuses what it does not list",
@@ -1110,12 +1240,18 @@ def main():
             ("removed caller's row refuses an effort it does not list for a listed model",
              refused(nested_call("fleet:claude-opus-5-5", subagent_type="fleet:gpt-6.1-sol", effort="max"),
                      "at effort 'max' is not available from a claude-opus-5-5 agent")),
-            ("removed target is checked against the caller's row",
-             refused(nested_call("fleet:gpt-6.1-sol", subagent_type="fleet:gpt-5.6-terra", effort="high"),
+            ("removed target whose model the rules mention is checked against the caller's row",
+             refused(nested_call("fleet:gpt-6.1-sol", subagent_type="fleet:claude-opus-5-5", effort="high"),
                      "not available from a gpt-6.1-sol agent")),
-            ("removed target: its effort is checked against its ladder in models.json",
+            ("removed target whose model the rules do not mention is not defined in this fleet",
+             refused(nested_call("fleet:gpt-6.1-sol", subagent_type="fleet:gpt-5.6-terra", effort="high"),
+                     "not defined in this fleet")),
+            ("removed target: its effort is checked against the levels the rules give it",
              refused(nested_call("fleet:gpt-6.1-sol", subagent_type="fleet:claude-opus-5-5"),
                      "needs a named effort")),
+            ("removed target: a level the rules do not give its model is refused, though models.json measured it",
+             refused(nested_call("fleet:claude-fable-5-1", subagent_type="fleet:claude-opus-5-5", effort="max"),
+                     "effort 'max' is not a level of 'claude-opus-5-5'. Its levels: low, medium, high, xhigh.")),
             ("removed caller: disallowed command refused",
              refused(nested_call("fleet:claude-opus-5-5", "Bash", command="sudo ls"), "'sudo' is not available")),
             ("removed caller: disallowed skill refused",
@@ -1126,20 +1262,26 @@ def main():
              refused(nested_call("fleet:no-such-model", "Bash", command="ls"), "no definition under agents/")),
             ("a per-effort name is not a fleet agent any more",
              refused(nested_call("fleet:claude-opus-5-5-high", "Bash", command="ls"), "no definition under agents/")),
-            ("main: removed agent outside main.fleet refused",
-             refused(main_call("fleet:gpt-5.6-terra", effort="high"), "not enabled for the main session")),
+            ("main: removed agent whose model the rules do not mention refused as not defined",
+             refused(main_call("fleet:gpt-5.6-terra", effort="high"), "not defined in this fleet")),
+            ("main: a kept definition whose model the rules do not mention is refused",
+             refused(main_call("fleet:gpt-6-luna", effort="low"), "do not mention, so it is not a fleet model",
+                     luna_less)),
             ("main: removed agent with a model parameter refused",
-             refused(main_call("fleet:gpt-5.6-terra", "opus", effort="high"), "fleet agent types carry their own model")),
+             refused(main_call("fleet:claude-opus-5-5", "opus", effort="high"), "fleet agent types carry their own model")),
             ("main: unknown fleet type refused, not taken for built-in",
              refused(main_call("fleet:no-such-model", effort="low"), "not defined in this fleet")),
             ("main: a per-effort name is refused as not defined",
              refused(main_call("fleet:gpt-6-luna-low"), "not defined in this fleet")),
             ("main: kept agent in main.fleet passes", passed(main_call("fleet:gpt-6.1-sol", effort="high"))),
             ("main: removed agent in main.fleet passes", passed(main_call("fleet:claude-opus-5-5", effort="high"))),
-            ("main: kept agent at an effort main.fleet does not list refused",
+            ("main: kept agent at a level no rule gives its model refused as off-level",
              refused(main_call("fleet:gpt-6-astra", effort="high"),
-                     "at effort 'high' is not enabled for the main session")),
-            # The call's effort against the target's ladder (models.json), main session and fleet caller.
+                     "effort 'high' is not a level of 'gpt-6-astra'. Its levels: low, medium.")),
+            ("main: a level the model has that main.fleet does not list refused as a pair",
+             refused(main_call("fleet:gpt-6.1-sol", effort="high"),
+                     "at effort 'high' is not enabled for the main session", pair_rules)),
+            # The call's effort against the levels the rules give the target, main session and fleet caller.
             ("main: a missing effort refused", refused(main_call("fleet:gpt-6-astra"), "needs a named effort")),
             ("main: a relative effort refused",
              refused(main_call("fleet:gpt-6-astra", effort="higher"), "effort 'higher' is relative")),
@@ -1153,12 +1295,22 @@ def main():
              refused(main_call("fleet:gpt-6-astra", effort="low\n"), "is not a level of 'gpt-6-astra'")),
             ("main: an effort that is not a string refused",
              refused(main_call("fleet:gpt-6-astra", effort=["low"]), "is not a level of 'gpt-6-astra'")),
-            ("main: a model without effort control refuses an effort",
-             refused(main_call("fleet:claude-haiku-4-5", effort="low"), "has no adjustable reasoning effort")),
-            ("main, empty main.fleet: the effort is still checked",
+            ("main: a model the rules give only default refuses an effort, its definition gone",
+             refused(main_call("fleet:claude-haiku-4-5", effort="low"), "has no adjustable reasoning effort",
+                     shipped_rules)),
+            # In the shipped rules gpt-6-astra is only a caller: no levels, so any named level, and
+            # only where the section allows every pair.
+            ("main, empty main.fleet: the effort of a caller-only model is still checked",
              refused(main_call("fleet:gpt-6-astra"), "needs a named effort", shipped_rules)),
-            ("main, empty main.fleet: a named level passes",
+            ("main, empty main.fleet: a caller-only model takes any named level",
              passed(main_call("fleet:gpt-6-astra", effort="xhigh"), shipped_rules)),
+            ("main, empty main.fleet: a caller-only model refuses a word that is not a named level",
+             refused(main_call("fleet:gpt-6-astra", effort="ultra"),
+                     "effort 'ultra' is not a level of 'gpt-6-astra'. Its levels: low, medium, high, xhigh, max.",
+                     shipped_rules)),
+            ("nested: a caller-only model is refused where the caller's row does not list it",
+             refused(nested_call("fleet:gpt-6-luna", subagent_type="fleet:gpt-6-astra", effort="high"),
+                     "at effort 'high' is not available from a gpt-6-luna agent", shipped_rules)),
             ("main, empty main.fleet: a model without effort control passes without one",
              passed(main_call("fleet:claude-haiku-4-5"), shipped_rules)),
             ("main, empty main.fleet: a model without effort control refuses one",
@@ -1229,8 +1381,12 @@ def main():
                       code == 2 and "rules file is invalid" in err, (code, out, err))
         null_rules = base / "guard-null-rules.json"
         null_rules.write_text("null")
-        code, out, err = guard(root, main_call("fleet:gpt-5.6-terra", effort="high"), null_rules)
-        check("guard/a null rules document still reads as empty rules", code == 0, (code, err))
+        # Empty rules mention no model: the fleet is empty, and the open allowlists still open the rest.
+        code, out, err = guard(root, main_call("general-purpose", "haiku"), null_rules)
+        check("guard/a null rules document still reads as empty rules: a built-in model passes", code == 0, (code, err))
+        code, out, err = guard(root, main_call("fleet:gpt-6.1-sol", effort="high"), null_rules)
+        check("guard/a null rules document mentions no model, so a fleet agent is refused",
+              code == 2 and "do not mention, so it is not a fleet model" in err, (code, err))
 
         # ---- the guard decides on one read of the rules ----------------------------------------
         # The rules file changes between the guard's validity check and its queries. The stub runs
@@ -1279,7 +1435,8 @@ def main():
                 ("a built-in model list that is a string", {"main": {"builtin_agent_models": "claude-opus-5-5"}},
                  main_call("general-purpose", "claude-haiku-4-5"))):
             typed = base / "guard-typed-rules.json"
-            typed.write_text(json.dumps(rules_doc))
+            # The caller's definition is gone, so the rules must mention its model for it to be placed.
+            typed.write_text(json.dumps(dict({"rules": {"claude-opus-5-5": {}}}, **rules_doc)))
             code, out, err = guard(root, payload, typed)
             check(f"guard/{what}: the failed query refuses the call",
                   code == 2 and "could not be read" in err, (code, out, err))

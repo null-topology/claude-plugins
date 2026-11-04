@@ -2,10 +2,11 @@
 # Validate the brief of an Agent call that targets a fleet agent, without
 # changing tool input or permissions. Calls to any other agent type pass: the
 # plugin governs only the agents it ships.
-# Usage: sh delegation-contract.sh <plugin-root> < hook-payload.json
+# Usage: sh delegation-contract.sh <plugin-root> [<data-dir>] < hook-payload.json
 set -eu
 
 plugin_root=${1:-}
+data_dir=${2:-}
 
 error() {
     printf '%s\n' "FLEET_DELEGATION_ERROR: $1" >&2
@@ -43,13 +44,19 @@ tool=$(printf '%s' "$payload" | jq -r '.tool_name') || error 'Could not read too
 [ "$tool" = Agent ] || exit 0
 
 # A fleet type is one the guard treats as a fleet agent (fleet-rules.sh): a definition under
-# agents/; a model id in models.json (one agent per model, named by its id), since the sync
-# removes the definitions the rules cannot reach; or this plugin's prefix.
+# agents/; a model the rules in force mention (one agent per fleet model, named by its id), since
+# the sync removes the definitions the rules cannot reach; or this plugin's prefix. The rules file
+# is the guard's (FLEET_RULES, else <data-dir>/fleet.json when the data directory is given as the
+# second argument, else the shipped default); when it is missing or invalid, only a definition or
+# the prefix tells a fleet type, and the guard refuses the call on its own.
 [ -n "$plugin_root" ] && [ -d "$plugin_root/agents" ] ||
     error 'The plugin root, holding an agents directory, is required as the first argument.'
 case $0 in */*) here=${0%/*} ;; *) here=. ;; esac
 [ -f "$here/fleet-rules.sh" ] || error "The fleet rule library is missing ($here/fleet-rules.sh)."
 . "$here/fleet-rules.sh"
+rules=$(fleet_rules_path)
+fleet_rules_ok=
+if fleet_rules_valid "$rules"; then fleet_rules_ok=1; fi
 requested=$(printf '%s' "$payload" | jq -r '.tool_input.subagent_type? | strings') || requested=
 bare=${requested##*:}
 case $bare in '' | */*) exit 0 ;; esac

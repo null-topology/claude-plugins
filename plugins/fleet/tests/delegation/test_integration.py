@@ -49,7 +49,7 @@ def main():
         handlers = contract_groups[0]["hooks"]
         check("configuration/sh without async or explicit permission allow",
               len(handlers) == 1 and handlers[0].get("type") == "command"
-              and handlers[0].get("command") == 'sh "${CLAUDE_PLUGIN_ROOT}/scripts/delegation-contract.sh" "${CLAUDE_PLUGIN_ROOT}"'
+              and handlers[0].get("command") == 'sh "${CLAUDE_PLUGIN_ROOT}/scripts/delegation-contract.sh" "${CLAUDE_PLUGIN_ROOT}" "${CLAUDE_PLUGIN_DATA}"'
               and not handlers[0].get("async", False))
     check("configuration/existing guard retained", any(g.get("matcher") == "Agent|Bash|Skill|Workflow"
           and any("subagent-guard.sh" in h.get("command", "") for h in g.get("hooks", [])) for g in groups))
@@ -65,22 +65,28 @@ def main():
         (fixture / "scripts").mkdir()
         for filename in ("subagent-guard.sh", "fleet-rules.sh", "delegation-contract.sh"):
             shutil.copyfile(root / "scripts" / filename, fixture / "scripts" / filename)
-        # One agent per model, named by its id; the efforts each model takes come from models.json.
+        # One agent per model, named by its id. The fleet and each model's levels come from the
+        # rules: fixture-forbidden has a definition and benchmark data but the rules do not mention
+        # it, so it is not a fleet model. models.json is benchmark data only; the guard never reads
+        # it, so its efforts here deliberately differ from the levels the rules give.
         for name in ("chief", "worker", "forbidden", "plain"):
             (fixture / "agents" / (name + ".md")).write_text(
                 "---\nname: %s\nmodel: fixture-%s\n---\nFixture.\n" % (name, name))
         figures = {"index": 1, "usd": 1, "tps": 1}
         (fixture / "models.json").write_text(json.dumps({
             "snapshot": {"benchmark": "synthetic-fixture", "date": "2026-09-21"},
-            "models": [{"id": "fixture-chief", "name": "Chief", "efforts": {"low": figures, "high": figures}},
-                       {"id": "fixture-worker", "name": "Worker", "efforts": {"low": figures, "high": figures}},
+            "models": [{"id": "fixture-chief", "name": "Chief", "efforts": {"low": figures}},
+                       {"id": "fixture-worker", "name": "Worker", "efforts": {"xhigh": figures, "max": figures}},
                        {"id": "fixture-forbidden", "name": "Forbidden", "efforts": {"high": figures}},
-                       {"id": "fixture-plain", "name": "Plain", "efforts": {"default": figures}}]}))
+                       {"id": "fixture-plain", "name": "Plain", "efforts": {"low": figures}}]}))
+        # fixture-worker's levels are low (main, chief's row) and high (plain's row): high is one of
+        # its levels that neither the main session nor a chief agent may pass.
         rules = {
             "main": {"fleet": {"fixture-chief": ["high"], "fixture-worker": ["low"], "fixture-plain": ["default"]},
                      "builtin_agent_models": ["allowed-alias"]},
             "rules": {"fixture-chief": {"fixture-worker": ["low"], "fixture-plain": ["default"]},
-                      "fixture-worker": {}},
+                      "fixture-worker": {},
+                      "fixture-plain": {"fixture-worker": ["high"]}},
             "disallowed_skills": ["forbidden-skill"],
             "disallowed_commands": ["sudo", "doas", "claude"],
         }
@@ -145,12 +151,24 @@ def main():
         def start(agent_type):
             return {"hook_event_name": "SubagentStart", "agent_id": "fixture-child", "agent_type": agent_type}
 
-        # The call's effort: a model with named levels needs one on its ladder, a model without
-        # effort control takes none; the (model, effort) pair is then authorized against the rules,
-        # from the main session (main.fleet) and from a fleet agent (its model's row). An open
-        # section (empty main.fleet, empty rules) still has the effort checked.
+        # The call's effort: a model with named levels in the rules needs one of them, a model the
+        # rules give only "default" takes none, a model they give no levels takes any named level;
+        # the (model, effort) pair is then authorized against the rules, from the main session
+        # (main.fleet) and from a fleet agent (its model's row). An open section (empty main.fleet,
+        # empty rules) still has the effort checked.
+        # main_open: main.fleet is empty, so the main session may start every fleet model; chief is
+        # named only as a caller, so the rules give it no levels and it takes any named level.
         open_rules = Path(temporary) / "open.json"
-        open_rules.write_text(json.dumps({"main": {"fleet": {}}, "rules": {}}))
+        open_rules.write_text(json.dumps({"main": {"fleet": {}}, "rules": {
+            "fixture-chief": {"fixture-worker": ["low", "high"]}, "fixture-worker": {}}}))
+        # spawn_open: rules is empty, so every fleet agent may start every fleet model.
+        spawn_open = Path(temporary) / "spawn-open.json"
+        spawn_open.write_text(json.dumps({"main": {"fleet": {"fixture-chief": ["high"], "fixture-worker": ["low"]}},
+                                          "rules": {}}))
+        # default beside named levels for one model: a configuration error.
+        mixed_rules = Path(temporary) / "mixed.json"
+        mixed_rules.write_text(json.dumps({"main": {"fleet": {"fixture-plain": ["default"], "fixture-worker": ["low"]}},
+                                           "rules": {"fixture-chief": {"fixture-plain": ["low"]}}}))
         effort_cases = [
             ("main/missing effort refused", invocation(effort=None), None, 2, "needs a named effort"),
             ("main/empty effort refused", invocation(effort=""), None, 2, "is not a level of 'fixture-worker'"),
@@ -169,7 +187,30 @@ def main():
              "agent type 'fleet:worker' at effort 'high' is not enabled for the main session"),
             ("main/open main.fleet: missing effort still refused", invocation(effort=None), open_rules, 2,
              "needs a named effort"),
-            ("main/open main.fleet: any named level passes", invocation(effort="high"), open_rules, 0, ""),
+            ("main/open main.fleet: a level the rules give passes", invocation(effort="high"), open_rules, 0, ""),
+            ("main/open main.fleet: a level the rules do not give is refused", invocation(effort="max"), open_rules,
+             2, "effort 'max' is not a level of 'fixture-worker'. Its levels: low, high."),
+            ("main/caller-only model, empty matrix: any named level passes",
+             invocation(subagent_type="fleet:chief", effort="xhigh"), open_rules, 0, ""),
+            ("main/caller-only model, empty matrix: a missing effort is refused",
+             invocation(subagent_type="fleet:chief", effort=None), open_rules, 2, "needs a named effort"),
+            ("main/caller-only model, empty matrix: a relative effort is refused",
+             invocation(subagent_type="fleet:chief", effort="higher"), open_rules, 2, "effort 'higher' is relative"),
+            ("main/caller-only model, empty matrix: a word that is not a named level is refused",
+             invocation(subagent_type="fleet:chief", effort="ultra"), open_rules, 2,
+             "effort 'ultra' is not a level of 'fixture-chief'. Its levels: low, medium, high, xhigh, max."),
+            ("nested/caller-only model: a row that does not list it refuses it",
+             invocation(caller="chief", subagent_type="fleet:chief", effort="high"), open_rules, 2,
+             "agent type 'fleet:chief' at effort 'high' is not available from a fixture-chief agent"),
+            ("main/default beside named levels is a configuration error",
+             invocation(subagent_type="fleet:plain", effort=None), mixed_rules, 2,
+             "give 'fixture-plain' both 'default' and named levels (low, default)"),
+            ("nested/default beside named levels is a configuration error",
+             invocation(caller="chief", subagent_type="fleet:plain", effort="low"), mixed_rules, 2,
+             "both 'default' and named levels"),
+            ("main/a model the rules do not mention is refused, though models.json describes it",
+             invocation(subagent_type="fleet:forbidden", effort="high"), open_rules, 2,
+             "'fixture-forbidden', which the fleet rules in force"),
             ("nested/missing effort refused", invocation(caller="chief", effort=None), None, 2, "needs a named effort"),
             ("nested/relative effort refused", invocation(caller="chief", effort="higher"), None, 2,
              "effort 'higher' is relative"),
@@ -184,9 +225,12 @@ def main():
             ("nested/disallowed pair refused", invocation(caller="chief", effort="high"), None, 2,
              "agent type 'fleet:worker' at effort 'high' is not available from a fixture-chief agent"),
             ("nested/open rules: relative effort still refused", invocation(caller="worker", effort="lower"),
-             open_rules, 2, "effort 'lower' is relative"),
-            ("nested/open rules: a named level passes", invocation(caller="worker", subagent_type="fleet:chief",
-                                                                   effort="high"), open_rules, 0, ""),
+             spawn_open, 2, "effort 'lower' is relative"),
+            ("nested/open rules: a level the rules give passes", invocation(caller="worker", subagent_type="fleet:chief",
+                                                                            effort="high"), spawn_open, 0, ""),
+            ("nested/open rules: a level the rules do not give is refused",
+             invocation(caller="worker", subagent_type="fleet:chief", effort="low"), spawn_open, 2,
+             "effort 'low' is not a level of 'fixture-chief'. Its levels: high."),
             ("nested/a model param is refused before the effort is read",
              invocation(caller="chief", model="other", effort=None), None, 2, "model parameter is not available"),
         ]
@@ -195,11 +239,12 @@ def main():
             check("effort/" + name, result.returncode == code and not result.stdout
                   and (text in result.stderr if code else not result.stderr),
                   "rc=%r stderr=%r" % (result.returncode, result.stderr))
-        # A fleet agent whose model has no rungs in models.json cannot have its effort checked.
+        # A definition whose model the rules do not mention is not a fleet agent the guard lets
+        # anyone start, even where main.fleet allows every fleet model.
         (fixture / "agents" / "unlisted.md").write_text("---\nname: unlisted\nmodel: fixture-unlisted\n---\nFixture.\n")
-        result = run_guard(invocation(subagent_type="fleet:unlisted"), open_rules)
-        check("effort/main/a model missing from models.json is refused",
-              result.returncode == 2 and "no effort rungs in models.json" in result.stderr, result.stderr)
+        result = run_guard(invocation(subagent_type="fleet:unlisted", effort="low"), open_rules)
+        check("effort/main/a model the rules do not mention is refused",
+              result.returncode == 2 and "do not mention, so it is not a fleet model" in result.stderr, result.stderr)
         (fixture / "agents" / "unlisted.md").unlink()
 
         result = run_guard(start("fleet:worker"))
@@ -233,22 +278,65 @@ def main():
         generation = Path(temporary) / "generation"
         (generation / "scripts").mkdir(parents=True)
         (generation / "templates").mkdir()
-        shutil.copyfile(root / "scripts/generate-agents.sh", generation / "scripts/generate-agents.sh")
+        for filename in ("generate-agents.sh", "fleet-rules.sh"):
+            shutil.copyfile(root / "scripts" / filename, generation / "scripts" / filename)
         shutil.copyfile(root / "templates/agent.md", generation / "templates/agent.md")
+        # The fleet is what the shipped rules mention: fixture-model and fixture-plain, which
+        # models.json describes, and fixture-bare, which it does not. fixture-unused is described
+        # but not mentioned, so it gets no agent and no reference row.
         models = {"snapshot": {"benchmark": "synthetic-fixture", "date": "2026-09-21"},
                   "models": [{"id": "fixture-model", "name": "Fixture Model", "efforts": {
                                  "low": {"index": 1, "usd": 1, "tps": 1},
                                  "high": {"index": 2, "usd": 2, "tps": 1}}},
                              {"id": "fixture-plain", "name": "Fixture Plain", "efforts": {
-                                 "default": {"index": 1, "usd": 1, "tps": 1}}}]}
+                                 "default": {"index": 1, "usd": 1, "tps": 1}}},
+                             {"id": "fixture-unused", "name": "Fixture Unused", "efforts": {
+                                 "low": {"index": 3, "usd": 1, "tps": 1}}}]}
         (generation / "models.json").write_text(json.dumps(models))
+        (generation / "fleet.default.json").write_text(json.dumps({
+            "main": {"fleet": {"fixture-model": ["low", "high"], "fixture-plain": ["default"]}},
+            "rules": {"fixture-model": {"fixture-bare": ["medium", "low"]}}}))
         result = subprocess.run(shell + [str(generation / "scripts/generate-agents.sh")],
                                 text=True, capture_output=True, timeout=10, env=env)
         check("generator/existing generator works with patched template", result.returncode == 0, result.stderr)
         if result.returncode == 0:
-            check("generator/one agent per model, named by its id",
-                  sorted(p.name for p in (generation / "agents").glob("*.md")) == ["fixture-model.md", "fixture-plain.md"],
+            check("generator/one agent per model the rules mention, named by its id; none for a model only "
+                  "models.json describes",
+                  sorted(p.name for p in (generation / "agents").glob("*.md"))
+                  == ["fixture-bare.md", "fixture-model.md", "fixture-plain.md"],
                   sorted(p.name for p in (generation / "agents").iterdir()))
+            bare_header = (generation / "agents/fixture-bare.md").read_text().split("\n---\n", 1)[0]
+            check("generator/a model models.json does not describe gets the plain description, its levels "
+                  "from the rules",
+                  'description: "Executor subagent on fixture-bare. The caller passes a named effort on every '
+                  'Agent call: low or medium, chosen with fleet:selecting-subagent-model; never lower or higher. '
+                  'Follows the prompt literally; does not invent scope."' in bare_header
+                  and "Benchmark" not in bare_header and "\nmodel: fixture-bare" in bare_header, bare_header)
+            reference = (generation / "skills/selecting-subagent-model/references/benchmark.md").read_text()
+            check("generator/the reference lists only fleet models",
+                  "`fleet:fixture-model`" in reference and "`fleet:fixture-plain`" in reference
+                  and "fixture-unused" not in reference and "Fixture Unused" not in reference, reference)
+            narrowed = Path(temporary) / "narrowed.json"
+            narrowed.write_text(json.dumps({"main": {"fleet": {"fixture-unknown": ["high"]}}}))
+            result = subprocess.run(shell + [str(generation / "scripts/generate-agents.sh"), "--rules", str(narrowed)],
+                                    text=True, capture_output=True, timeout=10, env=env)
+            unknown = generation / "agents/fixture-unknown.md"
+            check("generator/--rules: the agents are the models that file mentions, with its levels",
+                  result.returncode == 0 and sorted(p.name for p in (generation / "agents").glob("*.md"))
+                  == ["fixture-unknown.md"] and unknown.is_file()
+                  and "named effort on every Agent call: high, chosen" in unknown.read_text(),
+                  (result.returncode, result.stdout, result.stderr))
+            mixed = Path(temporary) / "mixed-generation.json"
+            mixed.write_text(json.dumps({"main": {"fleet": {"fixture-model": ["default", "low"]}}}))
+            before = sorted(p.name for p in (generation / "agents").glob("*.md"))
+            result = subprocess.run(shell + [str(generation / "scripts/generate-agents.sh"), "--rules", str(mixed)],
+                                    text=True, capture_output=True, timeout=10, env=env)
+            check("generator/default beside named levels is a configuration error: exit 3, agents/ unchanged",
+                  result.returncode == 3 and "gives 'fixture-model' both default and named levels" in result.stderr
+                  and sorted(p.name for p in (generation / "agents").glob("*.md")) == before,
+                  (result.returncode, result.stderr))
+            result = subprocess.run(shell + [str(generation / "scripts/generate-agents.sh")],
+                                    text=True, capture_output=True, timeout=10, env=env)
             for filename, model, levels in [("fixture-model.md", "fixture-model", "low or high"),
                                             ("fixture-plain.md", "fixture-plain", None)]:
                 text = (generation / "agents" / filename).read_text()

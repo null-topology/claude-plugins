@@ -1,23 +1,30 @@
 #!/bin/sh
-# Generates the fleet from models.json: replaces agents/*.md with one agent file per
-# model, named by the model's id, with no effort in its frontmatter (the caller passes a
-# named effort on each Agent call and the guard checks it), and rewrites the benchmark
-# reference the selection skill refers to: the table, the escalation ladder and the
-# substitutions derived from it. Run it
-# after editing models.json and commit the output; the plugin ships the generated
-# files because agent definitions are read from disk, not built at runtime.
+# Generates the fleet from the shipped rules (fleet.default.json): replaces agents/*.md with
+# one agent file per model those rules mention (fleet-rules.sh: the keys of main.fleet, of
+# rules and of every row), named by the model's id, with no effort in its frontmatter (the
+# caller passes a named effort on each Agent call and the guard checks it), and rewrites the
+# benchmark reference the selection skill refers to: the table, the escalation ladder and
+# the substitutions derived from it, for those models only. The efforts an agent's
+# description names are the levels the rules give its model (any named level for a model
+# they give none, none for "default"). models.json is data only: the model's name and its
+# benchmark figures at those efforts go into the description and the reference; a model it
+# does not describe gets a plain description, and a model it describes that the rules do
+# not mention gets no agent. Run it after editing fleet.default.json or models.json and
+# commit the output; the plugin ships the generated files because agent definitions are
+# read from disk, not built at runtime.
 #
 # With --rules, it narrows agents/ to the agents that rules file lets anyone reach and
-# touches nothing else: the benchmark reference stays as shipped. It renders every agent
-# as above, keeps the reachable ones, writes only a file that is missing or differs (each
-# through a rename, so a reader never sees half a file), then deletes the rest, and
-# prints one line per change: "added <name>", "updated <name>" or "removed <name>".
-# Nothing printed means nothing changed. The rule readers are the guard's
-# (fleet-rules.sh), so an agent is kept exactly when some call the guard allows can
-# reach it: when the rules allow its model at one of its rungs.
+# touches nothing else: the benchmark reference stays as shipped. It renders one agent per
+# model that file mentions, with the levels that file gives, keeps the reachable ones,
+# writes only a file that is missing or differs (each through a rename, so a reader never
+# sees half a file), then deletes the rest, and prints one line per change: "added <name>",
+# "updated <name>" or "removed <name>". Nothing printed means nothing changed. The rule
+# readers are the guard's (fleet-rules.sh), so an agent is kept exactly when some call the
+# guard allows can reach it: when the rules allow its model at one of its levels. A rules
+# file that mentions no model empties agents/.
 #
 # A run is all or nothing up to its install. It takes a lock (agents/.sync.lock), copies
-# models.json (and the rules file) into a staging directory, checks the copies and reads
+# models.json and the rules file into a staging directory, checks the copies and reads
 # nothing else, so a save in the middle of the run cannot mix two versions. It renders every
 # agent and, without --rules, the reference into the staging directory; a failure up to there
 # changes nothing. Only then does it install, still under the lock: every agent to keep that
@@ -28,11 +35,13 @@
 #
 # Exit status: 0 done; 1 an error (no jq, a rendering failure), nothing changed when it
 # happens before the install; 3 invalid input, nothing changed: a rules file that is not
-# exactly one JSON object (or null) or that has a section of the wrong type for a query the
-# closure needs (an allowlist that is a string, a number or a list where a section belongs,
-# for one), a models file that is missing or not of the shape
-# models_valid describes, or models that render no agent; 64 usage; 75 another run held the
-# lock for FLEET_SYNC_LOCK_WAIT seconds (default 20), or took it over, nothing changed.
+# exactly one JSON object (or null), that has a section of the wrong type for a query the
+# fleet or the closure needs (an allowlist that is a string, a number or a list where a
+# section belongs, for one), that mentions a model whose id cannot be an agent name, or that
+# gives a model "default" beside named levels; shipped rules that mention no model; a models
+# file that is missing or not of the shape models_valid describes; 64 usage; 75 another run
+# held the lock for FLEET_SYNC_LOCK_WAIT seconds (default 20), or took it over, nothing
+# changed.
 #
 # Usage: generate-agents.sh                    (from anywhere; paths resolve from the script)
 #        generate-agents.sh --rules <file>
@@ -52,8 +61,10 @@ case $# in
 esac
 
 root=$(cd "$(dirname "$0")/.." && pwd)
-# The models file is read once, by the copy step under the lock; everything else reads $staged.
+# The models file and the rules file are read once, by the copy step under the lock; everything
+# else reads the copies ($staged, $rules).
 models=$root/models.json
+source_rules=${filter:-$root/fleet.default.json}
 template=$root/templates/agent.md
 agents=$root/agents
 reference=$root/skills/selecting-subagent-model/references/benchmark.md
@@ -62,19 +73,17 @@ lock=$agents/.sync.lock
 
 command -v jq >/dev/null 2>&1 || { echo "generate-agents.sh needs jq on PATH" >&2; exit 1; }
 
-if [ -n "$filter" ]; then
-  if [ ! -f "$root/scripts/fleet-rules.sh" ]; then
-    echo "generate-agents.sh: $root/scripts/fleet-rules.sh is missing; agents/ left as it is" >&2
-    exit 1
-  fi
-  plugin_root=$root
-  data_dir=
-  . "$root/scripts/fleet-rules.sh"
-  # A rules query that fails (a section of the wrong type) marks the run, from a subshell too; the
-  # run then stops before the install, where the guard would refuse every call that reads it. The
-  # mark keeps the first failing query, the one the message names; later failures follow from it.
-  fleet_unreadable() { [ -f "$out/unreadable" ] || printf '%s\n' "$1" > "$out/unreadable"; }
+if [ ! -f "$root/scripts/fleet-rules.sh" ]; then
+  echo "generate-agents.sh: $root/scripts/fleet-rules.sh is missing; agents/ left as it is" >&2
+  exit 1
 fi
+plugin_root=$root
+data_dir=
+. "$root/scripts/fleet-rules.sh"
+# A rules query that fails (a section of the wrong type) marks the run, from a subshell too; the
+# run then stops before the install, where the guard would refuse every call that reads it. The
+# mark keeps the first failing query, the one the message names; later failures follow from it.
+fleet_unreadable() { [ -f "$out/unreadable" ] || printf '%s\n' "$1" > "$out/unreadable"; }
 
 # models_valid <file>: the shape the renderer and the reference need. One JSON object with a
 # snapshot (benchmark and date strings) and a non-empty models array; each model with an id
@@ -82,9 +91,10 @@ fi
 # "default" (a model without effort control) stands alone, since a model with named levels takes
 # one on every call and a call cannot ask for "default"; per
 # rung, index, usd and tps each a number or null, usd above zero (the reference divides by it),
-# and usd_estimated a boolean when present; provisional a boolean when present. A models file
-# that is empty, holds several documents or lists no models would render nothing and so delete
-# every agent; invalid model input leaves agents/ and the reference as they are.
+# and usd_estimated a boolean when present; provisional a boolean when present. This is the
+# format the benchmark data is written in; the rungs here are what was measured, not what the
+# fleet offers (the rules decide that). Invalid model input leaves agents/ and the reference as
+# they are.
 # The text reaches each agent's YAML frontmatter: the name and the snapshot strings go into the
 # description, which render quotes, but no quoting carries a control character or line break as
 # written, so those are refused. The id is written unquoted as name and model, so it starts with
@@ -207,58 +217,110 @@ if ! models_valid "$staged"; then
   exit 3
 fi
 
-if [ -n "$filter" ]; then
-  # The rules are read from a copy taken under the lock too. An editor saving the file can leave
-  # it empty for a moment, and a half-written file does not parse; neither is a policy, so
-  # neither may empty agents/.
-  rules=$out/rules.json
-  [ ! -f "$filter" ] || cp "$filter" "$rules"
-  if ! fleet_rules_valid "$rules"; then
-    echo "generate-agents.sh: rules file '$filter' is missing or invalid: it must hold exactly one JSON object, and an empty file, several documents or text that is not JSON is refused; agents/ left as it is" >&2
-    exit 3
-  fi
+# The rules are read from a copy taken under the lock too: the file given with --rules, else the
+# shipped default. An editor saving the file can leave it empty for a moment, and a half-written
+# file does not parse; neither is a policy, so neither may empty agents/.
+rules=$out/rules.json
+[ ! -f "$source_rules" ] || cp "$source_rules" "$rules"
+if ! fleet_rules_valid "$rules"; then
+  echo "generate-agents.sh: rules file '$source_rules' is missing or invalid: it must hold exactly one JSON object, and an empty file, several documents or text that is not JSON is refused; agents/ left as it is" >&2
+  exit 3
+fi
+
+# The fleet, read the way the guard reads it: every model the rules mention, with the levels they
+# give it. The two allowlist sizes are read first; the closure needs them, and a section of the
+# wrong type is named by the first query that fails on it.
+main_open=
+nonempty .main.fleet || main_open=1
+spawn_open=
+nonempty .rules || spawn_open=1
+fleet_read '[fleet_ids[] as $m | {id: $m, levels: fleet_levels($m)}] | tojson' || :
+fleet=${fleet_lines:-[]}
+if [ -f "$out/unreadable" ]; then
+  echo "generate-agents.sh: rules file '$source_rules' could not be read: the query $(cat "$out/unreadable") failed, so a section has the wrong type; agents/ left as it is" >&2
+  exit 3
+fi
+
+# A model id becomes a file name and is written unquoted as the agent's name and model, so it
+# follows the rule models_valid sets for an id in models.json. The id is quoted as JSON in the
+# message, so that no character in it reaches the session's notice as written.
+bad=$(printf '%s\n' "$fleet" | jq -r '[.[].id | select((test("^[A-Za-z][A-Za-z0-9._-]*$")
+    and (test("^(y|yes|n|no|true|false|on|off|null)$"; "i") | not)) | not)]
+  | if length > 0 then .[0] | tojson else empty end')
+if [ -n "$bad" ]; then
+  # printf, not echo: some shells' echo expands the backslashes of the JSON quoting.
+  printf '%s\n' "generate-agents.sh: rules file '$source_rules' mentions the model $bad, which cannot be an agent name: a model id starts with a letter, holds only letters, digits, '.', '_' and '-', and is not a word YAML reads as a boolean or null; agents/ left as it is" >&2
+  exit 3
+fi
+# "default" marks a model without effort control; beside named levels it leaves no way to check a
+# call (the guard refuses every call to such a model).
+bad=$(printf '%s\n' "$fleet" | jq -r '[.[] | select(any(.levels[]; . == "default") and (.levels | length) > 1) | .id]
+  | if length > 0 then .[0] else empty end')
+if [ -n "$bad" ]; then
+  echo "generate-agents.sh: rules file '$source_rules' gives '$bad' both default and named levels: default marks a model without effort control and stands alone; agents/ left as it is" >&2
+  exit 3
+fi
+if [ -z "$filter" ] && [ "$(printf '%s\n' "$fleet" | jq 'length')" = 0 ]; then
+  echo "generate-agents.sh: rules file '$source_rules' mentions no model, so the shipped fleet would be empty; agents/ left as it is" >&2
+  exit 3
 fi
 
 snapshot=$(jq -r '.snapshot.benchmark + ", " + .snapshot.date' "$staged")
 
-# A figure the benchmark has not published is null in models.json and "none" here. A model marked
-# provisional has figures its source marks as preliminary (a re-run pending, a cost that does not
-# yet include a pricing tier); the reason is in the benchmark run's evidence ledger. Fields are
-# joined with a tab and not passed through @tsv, which would double a backslash in a name: the
-# validation above admits no tab, line break or other control character in a name, and an id or a
-# figure holds none either, so each line splits back into the fields as written.
-#
-# One agent per model, named by its id; a model without rungs renders none. Each entry's lines
-# carry its position in the models array, so the rungs of one entry are collected together even
-# when two entries share an id; the file of the entry rendered last is the one that exists, as the
-# guard's resolution (fleet_rungs_of) reads the last entry too.
-jq -r '.models | to_entries[] | .key as $n | .value | .id as $id | .name as $name | (.provisional // false) as $provisional
-       | .efforts | to_entries[]
-       | [$n, $id, $name, .key, (.value.index // "none"), (.value.usd // "none"), (.value.tps // "none"), (.value.usd_estimated // false), $provisional]
-       | map(tostring) | join("\t")' \
+# Per fleet model, the efforts its agent is described with: the levels the rules give it, every
+# named level when they give none ("open"), or "default" alone. The jq definitions are shared by
+# the agents and the reference.
+shown_defs='def ladder: ["low", "medium", "high", "xhigh", "max"];
+def shown: $fleet | map({key: .id, value: (if .levels == [] then ladder else .levels end)}) | from_entries;'
+
+# One "M" line per fleet model, in the rules' order, followed by one "F" line per effort its
+# description shows that models.json has figures for. The data is the last models.json entry with
+# that id; a model with none is described by its id, with no figures. A figure the benchmark has
+# not published is null in models.json and "none" here. A model marked provisional has figures its
+# source marks as preliminary (a re-run pending, a cost that does not yet include a pricing tier);
+# the reason is in the benchmark run's evidence ledger. Fields are joined with a tab and not passed
+# through @tsv, which would double a backslash in a name: models_valid admits no tab, line break
+# or other control character in a name, ids are checked above, and a level or a figure holds none
+# either, so each line splits back into the fields as written. No field is empty, since read
+# would merge two tabs.
+jq -r --argjson fleet "$fleet" "$shown_defs"'
+  shown as $shown | .models as $models | $fleet[] | .id as $id | .levels as $levels
+  | ([$models[] | select(.id == $id)] | last) as $entry
+  | (if $levels == ["default"] then "default" elif $levels == [] then "open" else "named" end) as $kind
+  | (["M", $id, ($entry.name // $id), $kind, ($shown[$id] | join(" ")), ($entry.provisional // false)]
+     | map(tostring) | join("\t")),
+    ($entry.efforts // {} | to_entries[] | select(.key as $k | $shown[$id] | any(.[]; . == $k))
+     | ["F", .key, (.value.index // "none"), (.value.usd // "none"), (.value.tps // "none"), (.value.usd_estimated // false)]
+     | map(tostring) | join("\t"))' \
   "$staged" > "$out/entries.tsv"
 
-# flush: renders the agent of the entry collected so far, if any.
+# flush: renders the agent of the model collected so far, if any. The benchmark sentence is left
+# out when models.json has no figures for the efforts shown.
 flush() {
-  [ -n "$entry" ] || return 0
+  [ -n "$entry_id" ] || return 0
   basis=$snapshot
   [ "$entry_provisional" = true ] && basis="$snapshot, provisional"
-  if [ "$entry_rungs" = default ]; then
-    description="Executor subagent on $entry_name. Reasoning effort is not adjustable on this model: the caller passes no effort on the Agent call. Benchmark $basis; $entry_figures. Follows the prompt literally; does not invent scope."
+  benchmark=
+  if [ "$entry_kind" = default ]; then
+    [ -z "$entry_figures" ] || benchmark=" Benchmark $basis; $entry_figures."
+    description="Executor subagent on $entry_name. Reasoning effort is not adjustable on this model: the caller passes no effort on the Agent call.$benchmark Follows the prompt literally; does not invent scope."
   else
     # "low, medium or high": the levels the call may name.
-    levels=$(printf '%s\n' $entry_rungs | awk '{ v[NR] = $0 } END { for (i = 1; i <= NR; i++) printf "%s%s", (i == 1 ? "" : i == NR ? " or " : ", "), v[i] }')
-    description="Executor subagent on $entry_name. The caller passes a named effort on every Agent call: $levels, chosen with fleet:selecting-subagent-model; never lower or higher. Benchmark $basis, by effort (Index, \$ per task, output tokens/s): $entry_figures. Follows the prompt literally; does not invent scope."
+    levels=$(printf '%s\n' $entry_levels | awk '{ v[NR] = $0 } END { for (i = 1; i <= NR; i++) printf "%s%s", (i == 1 ? "" : i == NR ? " or " : ", "), v[i] }')
+    [ -z "$entry_figures" ] || benchmark=" Benchmark $basis, by effort (Index, \$ per task, output tokens/s): $entry_figures."
+    description="Executor subagent on $entry_name. The caller passes a named effort on every Agent call: $levels, chosen with fleet:selecting-subagent-model; never lower or higher.$benchmark Follows the prompt literally; does not invent scope."
   fi
   render "$entry_id" "$description" "$entry_id" > "$out/agents/$entry_id.md"
 }
 
-entry=
-while IFS="$(printf '\t')" read -r n id name effort index usd tps estimated provisional; do
-  if [ "$n" != "$entry" ]; then
+entry_id=
+while IFS="$(printf '\t')" read -r tag f1 f2 f3 f4 f5; do
+  if [ "$tag" = M ]; then
     flush
-    entry=$n entry_id=$id entry_name=$name entry_provisional=$provisional entry_rungs= entry_figures=
+    entry_id=$f1 entry_name=$f2 entry_kind=$f3 entry_levels=$f4 entry_provisional=$f5 entry_figures=
+    continue
   fi
+  effort=$f1 index=$f2 usd=$f3 tps=$f4 estimated=$f5
   # Costs under a dime keep up to four decimals so they do not collapse to $0.00; trailing zeros
   # beyond the second decimal are dropped ($0.0045, $0.02).
   cost=
@@ -277,36 +339,24 @@ while IFS="$(printf '\t')" read -r n id name effort index usd tps estimated prov
     [ "$tps" = none ] && tps="not published"
     figures="$effort $index, $cost, $tps"
   fi
-  entry_rungs="${entry_rungs:+$entry_rungs }$effort"
   entry_figures="${entry_figures:+$entry_figures; }$figures"
 done < "$out/entries.tsv"
 flush
 
-# Models that render no agent (every entry without efforts) would leave an empty set.
-set -- "$out/agents"/*.md
-if [ ! -f "$1" ]; then
-  echo "generate-agents.sh: models.json renders no agent; agents/ left as it is" >&2
-  exit 3
-fi
-
 if [ -z "$filter" ]; then
-  names=$(for f in "$out/agents"/*.md; do basename "$f" .md; done | sort)
+  names=$(printf '%s\n' "$fleet" | jq -r '.[].id' | sort)
 else
-  # Every agent as "<id> <rung> <rung> ...": its model id, which is also its name, and the rungs of
-  # the entry rendered last for that id, the ones the guard reads (fleet_rungs_of).
-  catalog=$(jq -r '
-    reduce (.models[] | select((.efforts | length) > 0)) as $m ({}; .[$m.id] = ($m.efforts | keys_unsorted))
-    | to_entries[] | "\(.key) \(.value | join(" "))"' "$staged")
+  # Every fleet model as "<id> <level> <level> ...": its id, which is also its agent's name, and
+  # the efforts a call to it can pass (any named level for a model the rules give none, "default"
+  # for one without effort control), the ones the guard checks.
+  catalog=$(jq -rn --argjson fleet "$fleet" "$shown_defs"' shown | to_entries[] | "\(.key) \(.value | join(" "))"')
 
-  # The closure, read the way the guard reads the rules. A call names a model and a rung, and the
-  # guard lets it through when the section lists that rung for that model; so a model is reached
-  # when the section lists one of its rungs. From the main session: everything when main.fleet is
-  # empty, else what it lists. From a reachable agent, keyed by its model: everything when rules
-  # is empty; nothing when its model has no row; else what the row lists.
-  main_open=
-  nonempty .main.fleet || main_open=1
-  spawn_open=
-  nonempty .rules || spawn_open=1
+  # The closure, read the way the guard reads the rules. A call names a model and a level, and the
+  # guard lets it through when the section lists that level for that model; so a model is reached
+  # when the section lists one of its levels. From the main session: every fleet model when
+  # main.fleet is empty, else what it lists. From a reachable agent, keyed by its model: every
+  # fleet model when rules is empty; nothing when its model has no row; else what the row lists.
+  # A fleet model nothing reaches gets no agent.
 
   # reaches <section> <id> <rung>...: the section lists one of the rungs for the model. A list that
   # cannot be read reaches nothing, as the guard refuses every call that reads it.
@@ -365,7 +415,8 @@ done
 # The reference, rendered into the staging directory before agents/ is touched, so a failure here
 # changes nothing; it is installed with one rename after the agents.
 if [ -z "$filter" ]; then
-  if ! jq -r '.snapshot as $s
+  # Only fleet models, and of each only the efforts its agent is described with.
+  if ! jq -r --argjson fleet "$fleet" "$shown_defs"'shown as $shown | .snapshot as $s
   | "# \($s.benchmark), snapshot \($s.date)",
     "",
     "Historical routing priors, not live measurements. Index is higher-is-better; cost is USD per",
@@ -374,11 +425,14 @@ if [ -z "$filter" ]; then
     "not yet include a pricing tier; the reason is in the benchmark run'\''s evidence ledger.",
     "Agent type is the call'\''s `subagent_type`, one per model; Effort is the named `effort` the call",
     "passes with it (n/a: the model has no effort control, so the call passes none).",
-    "Generated from models.json.",
+    "Lists the models the shipped rules (fleet.default.json) mention, at the efforts those rules give",
+    "them (every named level for a model they give none); the figures come from models.json.",
     "",
     "| Model | Agent type | Effort | Index | $ per task | Index per $ | Output tokens/s |",
     "|---|---|---|---:|---:|---:|---:|",
-    (.models[] | "\(.name)\(if .provisional then " (provisional)" else "" end)" as $n | .id as $id | .efforts | to_entries[]
+    (.models[] | select($shown[.id] != null)
+      | "\(.name)\(if .provisional then " (provisional)" else "" end)" as $n | .id as $id | .efforts | to_entries[]
+      | select(.key as $k | $shown[$id] | any(.[]; . == $k))
       | "| \($n) | `fleet:\($id)` | \(if .key == "default" then "n/a" else .key end) | \(.value.index // "not published") | \(if .value.usd then "\(.value.usd)\(if .value.usd_estimated then " est." else "" end)" else "not published" end) | \(if .value.index and .value.usd then (.value.index / .value.usd * 10 | round) / 10 else "n/a" end) | \(.value.tps // "not published") |")
 ' "$staged" > "$staged_reference"; then
     echo "generate-agents.sh: rendering the benchmark table failed; agents/ and the reference left as they are" >&2
@@ -388,8 +442,9 @@ if [ -z "$filter" ]; then
   # The ladder: every measured point, cheapest first (ties: higher Index first); a point joins when
   # its Index beats every cheaper point. A point off the ladder is substituted by the first ladder
   # step whose Index is at least as high, which by construction costs no more.
-  if ! jq -r '
-  [.models[] | .name as $n | .efforts | to_entries[]
+  if ! jq -r --argjson fleet "$fleet" "$shown_defs"' shown as $shown
+  | [.models[] | select($shown[.id] != null) | .id as $id | .name as $n | .efforts | to_entries[]
+    | select(.key as $k | $shown[$id] | any(.[]; . == $k))
     | select(.value.index != null and .value.usd != null)
     | {pair: (if .key == "default" then $n else "\($n) \(.key)" end), index: .value.index, usd: .value.usd}]
   | sort_by(.usd, -.index) as $points

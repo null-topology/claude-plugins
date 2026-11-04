@@ -6,7 +6,8 @@ whose figures the source marks as preliminary, for example a re-run pending or a
 not yet include a pricing tier; the reason is in the benchmark run's evidence ledger.
 Agent type is the call's `subagent_type`, one per model; Effort is the named `effort` the call
 passes with it (n/a: the model has no effort control, so the call passes none).
-Generated from models.json.
+Lists the models the shipped rules (fleet.default.json) mention, at the efforts those rules give
+them (every named level for a model they give none); the figures come from models.json.
 
 | Model | Agent type | Effort | Index | $ per task | Index per $ | Output tokens/s |
 |---|---|---|---:|---:|---:|---:|

@@ -6,8 +6,8 @@
 # Usage: subagent-guard.sh <plugin-root> <data-dir>        (hook payload on stdin)
 #
 # Who is calling comes from the payload. A fleet agent_type resolves to a
-# definition under agents/, or, when the file is gone, to a model id in
-# models.json; its model is the caller the rules section is keyed by. A type
+# definition under agents/, or, when the file is gone, to a model the rules in
+# force mention; its model is the caller the rules section is keyed by. A type
 # with this plugin's prefix that resolves to neither is still a fleet agent and
 # is refused. Otherwise an empty agent_id means the main session, governed by
 # the main section (the main thread may still carry an agent_type when the
@@ -15,20 +15,24 @@
 # subagent, which is not governed here and passes. The requested agent type of
 # an Agent call is resolved the same way.
 #
-# There is one fleet agent per model; the reasoning effort is the Agent call's
-# effort parameter. An Agent call to a fleet agent, from the main session or
-# from a fleet agent, must pass a named level on that model's ladder (its
-# rungs in models.json), or no effort for a model without effort control
-# (rung "default"); the (model, rung) pair is then authorized against the
-# rules as before. The caller's own effort is not needed: rules are keyed by
-# the caller's model.
+# There is one fleet agent per fleet model, and the fleet models are the ones
+# the rules file mentions (fleet-rules.sh); the reasoning effort is the Agent
+# call's effort parameter. An Agent call to a fleet agent, from the main
+# session or from a fleet agent, is refused when the rules do not mention its
+# model. Otherwise it must pass one of the levels the rules give that model, any
+# named level when they give it none, or no effort for a model the rules give
+# only "default"; "default" beside named levels refuses every call to that
+# model as a configuration error. The (model, effort) pair is then authorized
+# against the rules as before. The caller's own effort is not needed: rules are
+# keyed by the caller's model. models.json plays no part here.
 #
 # Rules come from $FLEET_RULES when it is set (and must exist), else from
 # <data-dir>/fleet.json (seeded from the shipped fleet.default.json on first
-# session start), else from the shipped default. Where a call needs the rules,
-# the file is read once, into a private copy that is checked and then answers
-# every query, so a file replaced or removed during the call cannot change the
-# answer; a query that fails (a section of the wrong type) refuses the call.
+# session start), else from the shipped default. The file is read once per
+# call, into a private copy that is checked and then answers every query, so a
+# file replaced or removed during the call cannot change the answer. A call
+# that needs the rules is refused when the copy is invalid; a query that fails
+# (a section of the wrong type) refuses the call.
 # The rule readers and the agent-type resolution live in fleet-rules.sh, shared
 # with the generator. The schema is described in README.md. Exit 2 refuses the
 # call and hands the message to the calling model; exit 0 lets the call through.
@@ -68,28 +72,47 @@ fleet_unreadable() {
   refuse "the fleet rules ($rules_path) could not be read: the query $1 failed, so a section has the wrong type; fleet checks refuse everything until it is fixed."
 }
 
-# check_effort <requested-type>: the call's effort against the ladder of the model fleet_agent
-# resolved for the requested type; sets rung to the rung the rules are read for, or refuses. A
-# model with a ladder needs a named level on it: a missing effort would run the agent at the
-# caller's session effort, and a relative one (lower, higher) is not a level the rules list. A
-# model without one takes no effort at all, so a call cannot set what the rules call "default".
+# check_effort <requested-type>: the call's effort against the levels the rules give the model
+# fleet_agent resolved for the requested type; sets rung to the rung the rules are read for, or
+# refuses. The rules must mention the model: one they do not is not in the fleet. A model with
+# named levels needs one of them: a missing effort would run the agent at the caller's session
+# effort, a relative one (lower, higher) is not a level the rules list, and any other value is
+# refused so that a typo does not pass for a level. A model the rules give no levels takes any
+# named level, still by name; the pair check after this lets it through only where the section
+# allows every pair. A model the rules give only "default" takes no effort at all, so a call
+# cannot set what the rules call "default"; "default" beside named levels is a configuration
+# error, and no call to that model passes until the rules are fixed.
 check_effort() {
   # A value that is not a plain lowercase word is read as JSON text, so that no line break or other
   # character can be trimmed away into a level that matches.
   effort=$(printf '%s' "$payload" | jq -r '.tool_input.effort
     | if . == null then "" elif type == "string" and test("\\A[a-z]+\\z") then . else tojson end' 2>/dev/null) ||
     refuse "the effort of the call to '$1' could not be read from the hook payload."
-  if [ -z "$fleet_listed" ]; then
-    refuse "agent type '$1' runs on '$fleet_model', which has no effort rungs in models.json, so the call's effort cannot be checked; nothing is allowed for it until the model is listed there."
+  fleet_levels_of "$fleet_model"
+  if [ -z "$fleet_member" ]; then
+    refuse "agent type '$1' runs on '$fleet_model', which the fleet rules in force ($rules_path) do not mention, so it is not a fleet model; nothing is allowed for it until the rules name it."
   fi
-  ladder=$(fleet_ladder)
-  levels=$(printf '%s\n' "$ladder" | awk 'NF { printf "%s%s", (n++ ? ", " : ""), $0 }')
-  if [ -z "$ladder" ]; then
+  levels=$(printf '%s\n' "$fleet_levels" | awk 'NF { printf "%s%s", (n++ ? ", " : ""), $0 }')
+  case "
+$fleet_levels
+" in *"
+default
+"*)
+    if [ "$fleet_levels" != default ]; then
+      refuse "the fleet rules ($rules_path) give '$fleet_model' both 'default' and named levels ($levels): 'default' marks a model without effort control and stands alone, so the efforts of '$1' cannot be checked; nothing is allowed for it until the rules are fixed."
+    fi
     if [ -n "$effort" ]; then
       refuse "'$fleet_model' has no adjustable reasoning effort, so '$1' takes no effort parameter (requested '$effort'). Call it without effort."
     fi
     rung=default
     return 0
+    ;;
+  esac
+  ladder=$fleet_levels
+  if [ -z "$ladder" ]; then
+    # No levels in the rules: any named level.
+    ladder=$(printf '%s\n' $fleet_named_levels)
+    levels=$(printf '%s\n' "$ladder" | awk 'NF { printf "%s%s", (n++ ? ", " : ""), $0 }')
   fi
   case $effort in
     '')
@@ -116,27 +139,44 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 2' HUP INT TERM
 
-# require_rules: reads the rules file once, into a private copy, checks the copy and points every
-# query at it. A rules file that is not exactly one JSON object (or null) would read as empty
-# rules, dropping the denylists, or, with several documents, let one document's answer stand for
-# another's (fleet_rules_valid). Called only where rules are read, so a broken file does not stop
-# the main session's own calls.
-require_rules() {
-  snapshot=$(mktemp "${TMPDIR:-/tmp}/fleet-rules.XXXXXX") ||
-    refuse "the fleet guard could not make a private copy of the rules file ($rules_path); nothing is allowed until it can."
-  cp "$rules_path" "$snapshot" 2>/dev/null ||
-    refuse "fleet rules file could not be read ($rules_path); nothing is allowed until it can."
-  rules=$snapshot
-  fleet_rules_valid "$rules" ||
-    refuse "fleet rules file is invalid ($rules_path): it must hold exactly one JSON object, and an empty file, several documents or text that is not JSON is refused; fleet checks refuse everything until it is fixed."
-}
-
 if [ ! -f "$rules_path" ]; then
   refuse "fleet rules file not found ($rules_path); nothing is allowed until it exists."
 fi
 if ! command -v jq >/dev/null 2>&1; then
   refuse "the fleet guard needs jq on PATH."
 fi
+
+# The one read of the rules file: a private copy, checked once, that every query reads. The copy is
+# taken for every call, since telling a fleet agent whose definition is gone from a built-in one
+# needs the fleet models; a call that does not need the rules still passes when the copy failed or
+# is invalid (require_rules).
+copy_failed=
+read_failed=
+fleet_rules_ok=
+if snapshot=$(mktemp "${TMPDIR:-/tmp}/fleet-rules.XXXXXX" 2>/dev/null); then
+  if cp "$rules_path" "$snapshot" 2>/dev/null; then
+    rules=$snapshot
+    if fleet_rules_valid "$rules"; then fleet_rules_ok=1; fi
+  else
+    read_failed=1
+  fi
+else
+  snapshot=
+  copy_failed=1
+fi
+
+# require_rules: the call needs the rules: the private copy must exist and be valid. A rules file
+# that is not exactly one JSON object (or null) would read as empty rules, dropping the denylists,
+# or, with several documents, let one document's answer stand for another's (fleet_rules_valid).
+# Called only where rules are read, so a broken file does not stop the main session's own calls.
+require_rules() {
+  [ -z "$copy_failed" ] ||
+    refuse "the fleet guard could not make a private copy of the rules file ($rules_path); nothing is allowed until it can."
+  [ -z "$read_failed" ] ||
+    refuse "fleet rules file could not be read ($rules_path); nothing is allowed until it can."
+  [ -n "$fleet_rules_ok" ] ||
+    refuse "fleet rules file is invalid ($rules_path): it must hold exactly one JSON object, and an empty file, several documents or text that is not JSON is refused; fleet checks refuse everything until it is fixed."
+}
 
 event=$(field '.hook_event_name')
 tool=$(field '.tool_name')
@@ -182,7 +222,9 @@ if fleet_agent "$agent_type"; then
   caller=$fleet_model
   caller_known=1
 elif [ -n "$agent_id" ] && fleet_prefixed "$agent_type"; then
-  refuse "agent type '$agent_type' is a fleet agent with no definition under agents/ and no entry in models.json; nothing it calls is allowed."
+  # Without valid rules the type could not be looked up; that is the fault to report.
+  require_rules
+  refuse "agent type '$agent_type' is a fleet agent with no definition under agents/, and the fleet rules in force do not mention its model; nothing it calls is allowed."
 fi
 
 if [ -z "$caller_known" ] && [ -z "$agent_id" ]; then
@@ -205,7 +247,7 @@ if [ -z "$caller_known" ] && [ -z "$agent_id" ]; then
 $fleet_lines"
   fi
   if fleet_prefixed "$requested"; then
-    refuse "agent type '$requested' is not defined in this fleet: no definition under agents/ and no entry in models.json."
+    refuse "agent type '$requested' is not defined in this fleet: no definition under agents/, and the fleet rules in force do not mention such a model."
   fi
 
   [ -n "$model" ] || exit 0
@@ -235,6 +277,8 @@ case "$tool" in
     if fleet_agent "$requested"; then
       target=1
       check_effort "$requested"
+    elif fleet_prefixed "$requested"; then
+      refuse "agent type '$requested' is not defined in this fleet: no definition under agents/, and the fleet rules in force do not mention such a model."
     fi
     nonempty '.rules' || exit 0
 
