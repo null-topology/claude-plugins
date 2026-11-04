@@ -55,7 +55,7 @@ def main():
         if not shutil.which(tool):
             parser.error("Missing test dependency: " + tool)
     # The hook inspects only calls whose target the guard treats as a fleet agent: a definition
-    # under <root>/agents, a name in <root>/models.json whose file the sync removed, or the prefix.
+    # under <root>/agents, a model id in <root>/models.json whose file the sync removed, or the prefix.
     fixture_root = Path(tempfile.mkdtemp(prefix="fleet-contract-root-"))
     atexit.register(shutil.rmtree, fixture_root, True)
     (fixture_root / "agents").mkdir()
@@ -97,9 +97,10 @@ def main():
         Case("target/bare fleet name inspected", typed("bare text", "fixture-worker"), 2, "Missing: Objective."),
         Case("target/prefixed fleet name inspected", typed("bare text", FLEET_TYPE), 2, "Missing: Objective."),
         Case("target/pruned but permitted fleet agent still inspected",
-             typed("do it", "fleet:fixture-pruned-high"), 2, "Missing: Objective."),
+             typed("do it", "fleet:fixture-pruned"), 2, "Missing: Objective."),
         Case("target/pruned fleet agent by bare name still inspected",
-             typed("do it", "fixture-pruned-high"), 2, "Missing: Objective."),
+             typed("do it", "fixture-pruned"), 2, "Missing: Objective."),
+        Case("target/a per-effort name of a listed model is not a fleet agent", typed("bare text", "fixture-pruned-high")),
         Case("target/unknown fleet-prefixed type inspected", typed("do it", "fleet:no-such-agent"), 2,
              "Missing: Objective."),
         Case("target/fleet-prefixed path not inspected", typed("bare text", "fleet:../agents/fixture-worker")),

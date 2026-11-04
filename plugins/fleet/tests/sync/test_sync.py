@@ -45,7 +45,8 @@ SYNTHETIC_MODELS = {
         {"id": "m-d", "name": "Model D", "efforts": {"low": figures(3)}},
     ],
 }
-EVERY_SYNTHETIC = {"m-a-low", "m-a-high", "m-b-low", "m-b-high", "m-c", "m-d-low"}
+# One agent per model, named by its id.
+EVERY_SYNTHETIC = {"m-a", "m-b", "m-c", "m-d"}
 
 # Rules shapes and what the guard lets anyone reach under each. The expectations are written out
 # so that the oracle is checked as well as the sync.
@@ -53,28 +54,26 @@ SYNTHETIC_CASES = [
     ("empty object allows everything", {}, EVERY_SYNTHETIC),
     ("null document reads as empty rules", None, EVERY_SYNTHETIC),
     ("main lists one pair, its row reaches a default rung",
-     {"main": {"fleet": {"m-a": ["low"]}}, "rules": {"m-a": {"m-c": ["default"]}}}, {"m-a-low", "m-c"}),
+     {"main": {"fleet": {"m-a": ["low"]}}, "rules": {"m-a": {"m-c": ["default"]}}}, {"m-a", "m-c"}),
     ("empty rules section opens every spawn",
      {"main": {"fleet": {"m-a": ["high"]}}, "rules": {}}, EVERY_SYNTHETIC),
     ("caller model without a row reaches nothing",
-     {"main": {"fleet": {"m-a": ["low"]}}, "rules": {"m-b": {"m-d": ["low"]}}}, {"m-a-low"}),
+     {"main": {"fleet": {"m-a": ["low"]}}, "rules": {"m-b": {"m-d": ["low"]}}}, {"m-a"}),
     ("chain through a default rung",
      {"main": {"fleet": {"m-c": ["default"]}}, "rules": {"m-c": {"m-d": ["low"]}, "m-d": {"m-b": ["high"]}}},
-     {"m-c", "m-d-low", "m-b-high"}),
+     {"m-c", "m-d", "m-b"}),
     ("empty main section allows every agent from main",
      {"main": {"fleet": {}}, "rules": {"m-a": {}}}, EVERY_SYNTHETIC),
     ("main lists a model with no efforts", {"main": {"fleet": {"m-a": []}}}, set()),
     ("unknown effort is ignored",
-     {"main": {"fleet": {"m-a": ["low", "ultra"]}}, "rules": {"m-a": {"m-a": ["ultra"]}}}, {"m-a-low"}),
+     {"main": {"fleet": {"m-a": ["low", "ultra"]}}, "rules": {"m-a": {"m-a": ["ultra"]}}}, {"m-a"}),
+    ("an effort the model does not have reaches nothing", {"main": {"fleet": {"m-d": ["high"]}}}, set()),
+    ("default listed for a model with named efforts reaches nothing",
+     {"main": {"fleet": {"m-a": ["default"]}}}, set()),
 ]
 
-NARROW_EXPECTED = (
-    {"gpt-6-astra-low", "gpt-6-astra-medium"}
-    | {f"{model}-{effort}" for model in ("claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5")
-       for effort in ("low", "medium", "high", "xhigh")}
-    | {f"{model}-{effort}" for model in ("gpt-6.1-sol", "gpt-6-luna")
-       for effort in ("low", "medium", "high", "xhigh", "max")}
-)
+NARROW_EXPECTED = {"gpt-6-astra", "claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "gpt-6.1-sol",
+                   "gpt-6-luna"}
 
 
 def altered(change):
@@ -96,6 +95,8 @@ MISSHAPEN_MODELS = (
     ("provisional not a boolean", lambda m: m["models"][1].update(provisional="true")),
     ("an effort that is not an object", lambda m: m["models"][2]["efforts"].update(default=5)),
     ("an unknown effort rung", lambda m: m["models"][3]["efforts"].update(ultra=figures(4))),
+    # A model with named levels takes one on every call; "default" beside them could not be asked for.
+    ("a default rung beside named ones", lambda m: m["models"][0]["efforts"].update(default=figures(4))),
     ("a model id that is a path", lambda m: m["models"][3].update(id="../m-d")),
     ("a model without a name", lambda m: m["models"][3].pop("name")),
     ("no snapshot", lambda m: m.pop("snapshot")),
@@ -113,12 +114,18 @@ MISSHAPEN_MODELS = (
 
 
 def catalog_of(models):
-    """Agent name to (model, effort), the last entry winning as the generator's last file does."""
+    """Agent name (the model id) to (model, rungs), the last entry with rungs winning as the
+    generator's last file does."""
     names = {}
     for model in models["models"]:
-        for effort in model.get("efforts", {}):
-            names[model["id"] if effort == "default" else f'{model["id"]}-{effort}'] = (model["id"], effort)
+        if model.get("efforts"):
+            names[model["id"]] = (model["id"], list(model["efforts"]))
     return names
+
+
+def call_effort(rung):
+    """The effort an Agent call passes for a rung: none for "default", else the named level."""
+    return None if rung == "default" else rung
 
 
 def main():
@@ -216,10 +223,12 @@ def main():
         env = {"FLEET_RULES": str(rules)} if rules else {}
         return run(shell + [root / "scripts/subagent-guard.sh", root, data], payload, env)
 
-    def main_call(target, model=""):
+    def main_call(target, model="", effort=None):
         tool_input = {"subagent_type": target, "prompt": "x"}
         if model:
             tool_input["model"] = model
+        if effort is not None:
+            tool_input["effort"] = effort
         return {"hook_event_name": "PreToolUse", "tool_name": "Agent", "agent_id": "", "agent_type": "",
                 "tool_input": tool_input}
 
@@ -229,12 +238,19 @@ def main():
 
     def oracle(root, rules, catalog, pool):
         """The agents the guard lets anyone reach under the rules file, asked one call at a time."""
-        names = sorted(catalog)
+        # An agent is reached when some call to it passes: one per rung of its model, with that
+        # rung as the call's named effort (none for "default").
+        pairs = [(n, rung) for n in sorted(catalog) for rung in catalog[n][1]]
 
         def passes(payload):
             return guard(root, payload, rules)[0] == 0
 
-        reach = {n for n, ok in zip(names, pool.map(lambda n: passes(main_call("fleet:" + n)), names)) if ok}
+        def nested(caller, name, rung):
+            effort = call_effort(rung)
+            return nested_call(caller, subagent_type="fleet:" + name, **({} if effort is None else {"effort": effort}))
+
+        reach = {n for (n, _), ok in zip(pairs, pool.map(
+            lambda p: passes(main_call("fleet:" + p[0], effort=call_effort(p[1]))), pairs)) if ok}
         expanded = set()
         while True:
             pending = sorted({catalog[n][0] for n in reach} - expanded)
@@ -242,8 +258,8 @@ def main():
                 return reach
             for model in pending:
                 caller = "fleet:" + min(n for n in reach if catalog[n][0] == model)
-                found = list(pool.map(lambda n: passes(nested_call(caller, subagent_type="fleet:" + n)), names))
-                reach |= {n for n, ok in zip(names, found) if ok}
+                found = list(pool.map(lambda p: passes(nested(caller, *p)), pairs))
+                reach |= {n for (n, _), ok in zip(pairs, found) if ok}
                 expanded.add(model)
 
     def sync(root, data, payload, env=None, cwd=None):
@@ -383,8 +399,8 @@ def main():
                   (code, out, err))
             if where is None:
                 continue
-            payload = (main_call("fleet:m-b-high") if where == "main"
-                       else nested_call("fleet:m-a-low", subagent_type="fleet:m-b-low"))
+            payload = (main_call("fleet:m-b", effort="high") if where == "main"
+                       else nested_call("fleet:m-a", subagent_type="fleet:m-b", effort="low"))
             code, out, err = guard(wrong_root, payload, bad)
             check(f"guard/rules: {name}: the {where} Agent call is refused as unreadable",
                   code == 2 and "could not be read" in err, (code, out, err))
@@ -430,32 +446,35 @@ def main():
         # holding a placeholder is not substituted again (the old loop never ended on it).
         awkward_names = ["Claude Fable: 5.1", "Model # one", "*star", "&anchor", "it's \"quoted\"",
                          "back\\slash \\n", "- dash", "? key", "{{DESCRIPTION}} and {{MODEL}}"]
+        # Each name is used twice: on a model with named efforts (w-) and on one without (v-).
         awkward = {"snapshot": {"benchmark": "Index: v1 #2 \"q\" \\", "date": "2026-01-01"},
-                   "models": [{"id": f"w-{i}", "name": name, "efforts": {"low": figures(10), "default": figures(10)}}
-                              for i, name in enumerate(awkward_names)]}
+                   "models": [{"id": f"{kind}-{i}", "name": name, "efforts": {rungs: figures(10)}}
+                              for i, name in enumerate(awkward_names)
+                              for kind, rungs in (("w", "low"), ("v", "default"))]}
         awkward_root = make_root(base, "awkward", SYNTHETIC_MODELS)
         (awkward_root / "models.json").write_text(json.dumps(awkward))
         code, out, err = generate(awkward_root, timeout=30)
-        guidance = {"low": "Use for straightforward tasks of any size, where the steps are clear and there are no "
-                           "real decision points.",
-                    "default": "Reasoning effort is not adjustable on this model."}
         bench = f'{awkward["snapshot"]["benchmark"]}, {awkward["snapshot"]["date"]}'
         mismatched = []
         for model in awkward["models"] if code == 0 else []:
-            for effort in ("low", "default"):
-                agent = model["id"] if effort == "default" else f'{model["id"]}-{effort}'
-                lead = (f'Executor subagent on {model["name"]}.' if effort == "default"
-                        else f'Executor subagent on {model["name"]} at {effort} reasoning effort.')
-                expected = (f"{lead} {guidance[effort]} Benchmark {bench}; Index 10, $1.00 per task, "
-                            "50 output tokens/s. Follows the prompt literally; does not invent scope.")
-                try:
-                    parsed = frontmatter_of(awkward_root / "agents" / f"{agent}.md")
-                except Exception as error:  # a parse error is the failure this check looks for
-                    mismatched.append((agent, repr(error)[:160]))
-                    continue
-                if (not isinstance(parsed, dict) or parsed.get("description") != expected
-                        or parsed.get("name") != agent or parsed.get("model") != model["id"]):
-                    mismatched.append((agent, parsed))
+            agent = model["id"]
+            if "default" in model["efforts"]:
+                expected = (f'Executor subagent on {model["name"]}. Reasoning effort is not adjustable on this '
+                            f'model: the caller passes no effort on the Agent call. Benchmark {bench}; Index 10, '
+                            "$1.00 per task, 50 output tokens/s. Follows the prompt literally; does not invent scope.")
+            else:
+                expected = (f'Executor subagent on {model["name"]}. The caller passes a named effort on every '
+                            "Agent call: low, chosen with fleet:selecting-subagent-model; never lower or higher. "
+                            f"Benchmark {bench}, by effort (Index, $ per task, output tokens/s): low 10, $1.00, 50. "
+                            "Follows the prompt literally; does not invent scope.")
+            try:
+                parsed = frontmatter_of(awkward_root / "agents" / f"{agent}.md")
+            except Exception as error:  # a parse error is the failure this check looks for
+                mismatched.append((agent, repr(error)[:160]))
+                continue
+            if (not isinstance(parsed, dict) or parsed.get("description") != expected
+                    or parsed.get("name") != agent or parsed.get("model") != model["id"] or "effort" in parsed):
+                mismatched.append((agent, parsed))
         check("generator/descriptions holding YAML-significant text parse as YAML and read back as written",
               code == 0 and not mismatched, (code, err, mismatched[:3]))
         shipped = sorted((source / "agents").glob("*.md"))
@@ -470,15 +489,37 @@ def main():
                 unparsed.append(path.name)
         check("generator/the shipped agents carry a quoted description that parses as YAML",
               bool(shipped) and not unquoted and not unparsed, (unquoted[:3], unparsed[:3]))
+        # One agent per model, named by its id, with no effort in its frontmatter: the effort is the
+        # call's. The shipped set and reference are what the generator renders from models.json.
+        model_ids = {m["id"] for m in real_models["models"] if m.get("efforts")}
+        with_effort = []
+        for path in shipped:
+            try:
+                parsed = frontmatter_of(path)
+            except Exception:
+                continue
+            if not isinstance(parsed, dict) or "effort" in parsed or parsed.get("name") != path.stem \
+                    or parsed.get("model") != path.stem:
+                with_effort.append(path.name)
+        check("generator/the shipped agents are one per model in models.json, named by its id, without an effort",
+              {p.stem for p in shipped} == model_ids and not with_effort,
+              (sorted({p.stem for p in shipped} ^ model_ids), with_effort))
+        regenerated = make_root(base, "regenerated")
+        fresh = sorted((regenerated / "agents").glob("*.md"))
+        check("generator/the shipped agents and reference are reproduced byte for byte",
+              [p.name for p in fresh] == [p.name for p in shipped]
+              and all(a.read_bytes() == b.read_bytes() for a, b in zip(fresh, shipped))
+              and (regenerated / REFERENCE).read_bytes() == (source / REFERENCE).read_bytes(),
+              [a.name for a, b in zip(fresh, shipped) if a.read_bytes() != b.read_bytes()])
 
         # Temporary files an interrupted run left are removed by the next run, in both modes.
-        (root / "agents" / ".m-a-low.md.99999").write_text("half")
+        (root / "agents" / ".m-a.md.99999").write_text("half")
         (root / "agents" / ".m-x.md.1").write_text("half")
         open_rules = base / "open.json"
         open_rules.write_text("{}")
         code, out, err = generate(root, open_rules)
         check("generator/a filtered run removes leftover temporary files", code == 0 and no_temporaries(root), (code, err))
-        (root / "agents" / ".m-a-low.md.99999").write_text("half")
+        (root / "agents" / ".m-a.md.99999").write_text("half")
         code, out, err = generate(root)
         check("generator/a full run removes leftover temporary files", code == 0 and no_temporaries(root), (code, err))
 
@@ -491,10 +532,9 @@ def main():
         # The lock: concurrent filtered runs take turns, so agents/ ends as one of the two sets.
         locked_root = make_root(base, "locked")
         only = {}
-        for agent in ("claude-opus-5-5-high", "gpt-6.1-sol-high"):
-            model, effort = agent.rsplit("-", 1)
+        for agent in ("claude-opus-5-5", "gpt-6.1-sol"):
             only[agent] = base / f"only-{agent}.json"
-            only[agent].write_text(json.dumps({"main": {"fleet": {model: [effort]}}, "rules": {model: {model: [effort]}}}))
+            only[agent].write_text(json.dumps({"main": {"fleet": {agent: ["high"]}}, "rules": {agent: {agent: ["high"]}}}))
         outcomes = []
         for _ in range(6):
             runs = list(pool.map(lambda agent: generate(locked_root, only[agent]), sorted(only)))
@@ -506,21 +546,21 @@ def main():
         lock.mkdir(exist_ok=True)
         (lock / "pid").write_text(str(os.getpid()))
         state = snapshot(locked_root)
-        code, out, err = generate(locked_root, only["claude-opus-5-5-high"] if kept(locked_root) != {"claude-opus-5-5-high"}
-                                  else only["gpt-6.1-sol-high"], {"FLEET_SYNC_LOCK_WAIT": "0"})
+        code, out, err = generate(locked_root, only["claude-opus-5-5"] if kept(locked_root) != {"claude-opus-5-5"}
+                                  else only["gpt-6.1-sol"], {"FLEET_SYNC_LOCK_WAIT": "0"})
         check("generator/a live lock held past the wait exits 75 and changes nothing",
               code == 75 and snapshot(locked_root) == state and lock.is_dir(), (code, out, err))
         (lock / "pid").write_text(str(dead_pid()))
-        code, out, err = generate(locked_root, only["gpt-6.1-sol-high"], {"FLEET_SYNC_LOCK_WAIT": "0"})
+        code, out, err = generate(locked_root, only["gpt-6.1-sol"], {"FLEET_SYNC_LOCK_WAIT": "0"})
         check("generator/a lock whose holder has exited is broken",
-              code == 0 and kept(locked_root) == {"gpt-6.1-sol-high"} and not lock.exists(), (code, out, err))
+              code == 0 and kept(locked_root) == {"gpt-6.1-sol"} and not lock.exists(), (code, out, err))
         lock.mkdir(exist_ok=True)
         (lock / "pid").unlink(missing_ok=True)
         old = time.time() - 600
         os.utime(lock, (old, old))
-        code, out, err = generate(locked_root, only["claude-opus-5-5-high"], {"FLEET_SYNC_LOCK_WAIT": "0"})
+        code, out, err = generate(locked_root, only["claude-opus-5-5"], {"FLEET_SYNC_LOCK_WAIT": "0"})
         check("generator/a lock older than two minutes without a pid is broken",
-              code == 0 and kept(locked_root) == {"claude-opus-5-5-high"} and not lock.exists(), (code, out, err))
+              code == 0 and kept(locked_root) == {"claude-opus-5-5"} and not lock.exists(), (code, out, err))
         # A reference that fails to render after the models passed the check changes nothing: the
         # reference is rendered in staging before agents/ is touched. A jq stub on PATH fails the one
         # call that renders the named part and hands every other call to the real jq.
@@ -564,7 +604,7 @@ def main():
                   (code, err))
         code, out, err = generate(failing, None, {"PATH": stub_path})
         check("generator/the jq stub passes every call through when told to fail none",
-              code == 0 and kept(failing) == EVERY_SYNTHETIC - {"m-d-low"}
+              code == 0 and kept(failing) == EVERY_SYNTHETIC - {"m-d"}
               and "| 77 |" in (failing / REFERENCE).read_text(), (code, err))
 
         # The lock's age is refreshed once rendering is done, before the install; a run whose lock was
@@ -606,7 +646,7 @@ def main():
         set_b = {"snapshot": {"benchmark": "Bench B", "date": "2026-02-02"},
                  "models": [{"id": "m-b", "name": "Beta", "efforts": {"low": figures(15)}},
                             {"id": "m-c", "name": "Gamma", "efforts": {"default": figures(5)}}]}
-        model_sets = {"old": ({"m-a-low", "m-a-high"}, set_a), "new": ({"m-b-low", "m-c"}, set_b)}
+        model_sets = {"old": ({"m-a"}, set_a), "new": ({"m-b", "m-c"}, set_b)}
         replaced = make_root(base, "replaced", set_a)
         replaced_lock = replaced / "agents" / ".sync.lock"
         replaced_lock.mkdir()
@@ -631,7 +671,7 @@ def main():
             title = f'# {models["snapshot"]["benchmark"]}, snapshot {models["snapshot"]["date"]}\n'
             others = [m["name"] for other, (_, o) in model_sets.items() if other != label for m in o["models"]]
             return (replaced_names == names
-                    and all(f"Benchmark {stamp};" in (replaced / "agents" / f"{n}.md").read_text() for n in names)
+                    and all(f"Benchmark {stamp}" in (replaced / "agents" / f"{n}.md").read_text() for n in names)
                     and replaced_reference.startswith(title)
                     and all(f'| {m["name"]} |' in replaced_reference for m in models["models"])
                     and not any(name in replaced_reference for name in others))
@@ -644,8 +684,7 @@ def main():
         narrowed.write_text(json.dumps(SYNTHETIC_CASES[2][1]))
         code, out, err = generate(root, narrowed)
         check("generator/--rules reports each change",
-              code == 0 and sorted(out.split("\n")) == sorted(["", "removed m-a-high", "removed m-b-high",
-                                                              "removed m-b-low", "removed m-d-low"]), out)
+              code == 0 and sorted(out.split("\n")) == sorted(["", "removed m-b", "removed m-d"]), out)
         code, out, err = generate(root)
         check("generator/no argument restores the full set and the reference",
               code == 0 and kept(root) == EVERY_SYNTHETIC and (root / REFERENCE).is_file(), (code, err))
@@ -660,13 +699,13 @@ def main():
         specific = out.get("hookSpecificOutput", {}) if isinstance(out, dict) else {}
         check("startup/seeds the rules file first and syncs to it",
               code == 0 and seeded.is_file() and json.loads(seeded.read_text()) == narrow
-              and kept(root) == {"m-a-low", "m-c"}, (code, out, err))
+              and kept(root) == {"m-a", "m-c"}, (code, out, err))
         check("startup/seed message goes to Claude's context",
               "rules seeded" in specific.get("additionalContext", ""), out)
         check("startup/watchPaths holds the active rules file",
               specific.get("hookEventName") == "SessionStart" and specific.get("watchPaths") == [str(seeded)], out)
         check("startup/asks for /reload-plugins with the counts",
-              "/reload-plugins" in message(out) and "0 added, 4 removed, 0 updated" in message(out), out)
+              "/reload-plugins" in message(out) and "0 added, 2 removed, 0 updated" in message(out), out)
         check("startup/the same notice also goes to additionalContext",
               message(out) != "" and message(out) in specific.get("additionalContext", "")
               and "rules seeded" in specific.get("additionalContext", ""), out)
@@ -682,7 +721,7 @@ def main():
                   and "additionalContext" not in specific and specific.get("watchPaths") == [str(seeded)],
                   (code, out, err))
 
-        name = "m-a-low.md"
+        name = "m-a.md"
         rendered = (root / "agents" / name).read_bytes()
         (root / "agents" / name).write_text("stale\n")
         code, out, err = sync(root, data, session_start("resume"))
@@ -692,7 +731,7 @@ def main():
         seeded.write_text(json.dumps({}))
         code, out, err = sync(root, data, file_changed(seeded))
         check("filechanged/rules edit syncs and asks for /reload-plugins",
-              code == 0 and kept(root) == EVERY_SYNTHETIC and "4 added, 0 removed" in message(out)
+              code == 0 and kept(root) == EVERY_SYNTHETIC and "2 added, 0 removed" in message(out)
               and "/reload-plugins" in message(out), (code, out, err))
         check("filechanged/watchPaths at the top level, no SessionStart fields",
               isinstance(out, dict) and out.get("watchPaths") == [str(seeded)] and "hookSpecificOutput" not in out, out)
@@ -712,7 +751,7 @@ def main():
         link.symlink_to(data)
         code, out, err = sync(root, data, file_changed(link / "fleet.json"))
         check("filechanged/the rules file reported through a symlinked directory still syncs",
-              code == 0 and kept(root) == {"m-a-low", "m-c"}, (code, out, err))
+              code == 0 and kept(root) == {"m-a", "m-c"}, (code, out, err))
         code, out, err = sync(root, link, file_changed(data / "fleet.json"))
         check("filechanged/the real path matches a watch path registered through a symlink",
               code == 0 and isinstance(out, dict) and out.get("watchPaths") == [str(link / "fleet.json")], (code, out, err))
@@ -734,7 +773,7 @@ def main():
         seeded.unlink()
         code, out, err = sync(root, data, file_changed(seeded, "unlink"))
         check("fallback/deleted data file syncs to the shipped default and watches both",
-              code == 0 and kept(root) == {"m-a-low", "m-c"} and not seeded.exists()
+              code == 0 and kept(root) == {"m-a", "m-c"} and not seeded.exists()
               and out.get("watchPaths") == [str(seeded), str(root / "fleet.default.json")], (code, out, err))
         seeded.write_text(json.dumps({}))
         code, out, err = sync(root, data, file_changed(seeded, "add"))
@@ -755,7 +794,7 @@ def main():
         code, out, err = sync(root, data, file_changed(override), env)
         check("override/FLEET_RULES set: a change of the override file writes nothing",
               code == 0 and out is None and snapshot(root) == state, (code, out))
-        code, out, err = guard(root, main_call("fleet:m-a-low"), override)
+        code, out, err = guard(root, main_call("fleet:m-a", effort="low"), override)
         check("override/the guard still applies FLEET_RULES to each call",
               code == 2 and "not enabled for the main session" in err, (code, err))
 
@@ -765,22 +804,22 @@ def main():
         code, out_a, err = sync(root, data, session_start("startup", "session-a"))
         code, out_b, err = sync(root, data, session_start("startup", "session-b"))
         check("sessions/the first startup is told of its sync, the second loads the synced set and is not",
-              "4 removed" in message(out_a) and "systemMessage" not in out_b, (out_a, out_b))
+              "2 removed" in message(out_a) and "systemMessage" not in out_b, (out_a, out_b))
         seeded = data / "fleet.json"
         seeded.write_text(json.dumps({}))
         code, out_a, err = sync(root, data, file_changed(seeded, session="session-a"))
         code, out_b, err = sync(root, data, file_changed(seeded, session="session-b"))
         check("sessions/one edit: the session whose run wrote agents/ is told",
-              "4 added, 0 removed, 0 updated" in message(out_a), out_a)
+              "2 added, 0 removed, 0 updated" in message(out_a), out_a)
         check("sessions/one edit: the other session is told too, though its run changed nothing",
-              "4 added, 0 removed, 0 updated" in message(out_b) and "/reload-plugins" in message(out_b), out_b)
+              "2 added, 0 removed, 0 updated" in message(out_b) and "/reload-plugins" in message(out_b), out_b)
         code, out_b, err = sync(root, data, file_changed(seeded, session="session-b"))
         check("sessions/told once: the same set again says nothing", "systemMessage" not in out_b, out_b)
         seeded.write_text(json.dumps(narrow))
         code, out_a, err = sync(root, data, file_changed(seeded, session="session-a"))
         code, out_b, err = sync(root, data, session_start("compact", "session-b"))
         check("sessions/a compaction compares with what the session was told, not with the disk before",
-              "0 added, 4 removed" in message(out_b) and "0 added, 4 removed" in context_of(out_b), out_b)
+              "0 added, 2 removed" in message(out_b) and "0 added, 2 removed" in context_of(out_b), out_b)
         code, out_a, err = sync(root, data, session_start("clear", "session-a"))
         check("sessions/a clear with nothing new says nothing", "systemMessage" not in out_a, out_a)
         # A session with an out-of-date record that then sees an invalid rules file: agents/ was left
@@ -791,7 +830,7 @@ def main():
         code, out_b, err = sync(root, data, file_changed(seeded, session="session-b"))
         check("sessions/invalid rules after an unseen change: the notice says the set differs from the "
               "loaded one, not that it follows the rules",
-              "4 added, 0 removed, 0 updated" in message(out_b) and "differs from the set this session loaded" in message(out_b)
+              "2 added, 0 removed, 0 updated" in message(out_b) and "differs from the set this session loaded" in message(out_b)
               and "left as it is" in message(out_b) and "rules in force can reach" not in message(out_b), out_b)
         seeded.write_text(json.dumps(narrow))
         code, out_a, err = sync(root, data, file_changed(seeded, session="session-a"))
@@ -844,7 +883,7 @@ def main():
         state = snapshot(root)
         code, out, err = sync(root, data, session_start("startup"))
         check("checkout/untracked agents/ under a git work tree is synced",
-              code == 0 and kept(root) == {"m-a-low", "m-c"}, (code, out, err))
+              code == 0 and kept(root) == {"m-a", "m-c"}, (code, out, err))
         generate(root)
         run(["git", "add", "plugins/fleet/agents"], cwd=checkout)
         state = snapshot(root)
@@ -854,7 +893,7 @@ def main():
               and "systemMessage" not in out, (code, out, err))
         code, out, err = sync(root, data, session_start("startup"), {"FLEET_SYNC_AGENTS": "1"})
         check("checkout/FLEET_SYNC_AGENTS=1 syncs a checkout too",
-              code == 0 and kept(root) == {"m-a-low", "m-c"}
+              code == 0 and kept(root) == {"m-a", "m-c"}
               and out["hookSpecificOutput"].get("watchPaths") == [str(data / "fleet.json")], (code, out, err))
 
         # Without git to ask, a work tree counts as tracking agents/, and the session hears of it once.
@@ -905,8 +944,8 @@ def main():
         sync(root, data, file_changed(seeded, session="session-f"))
         code, out, err = sync(root, data, session_start("compact", "session-c"))
         check("activity/a week-old record survives its own session's next start and still yields the notice",
-              record.is_file() and "4 added, 0 removed, 0 updated" in message(out)
-              and "4 added, 0 removed, 0 updated" in context_of(out), (code, out, err))
+              record.is_file() and "2 added, 0 removed, 0 updated" in message(out)
+              and "2 added, 0 removed, 0 updated" in context_of(out), (code, out, err))
         seeded.write_text(json.dumps(narrow))
 
         # ---- an invalid models.json ------------------------------------------------------------
@@ -929,7 +968,7 @@ def main():
         code, again_p, again_err = sync(root, data, file_changed(seeded, session="session-p"))
         check("sessions/a record pruned meanwhile: the next rules change says the loaded set is unknown and "
               "asks for /reload-plugins, once",
-              pruned and "4 added, 0 removed, 0 updated" in message(out_q)
+              pruned and "2 added, 0 removed, 0 updated" in message(out_q)
               and "no record of the agent set it loaded" in message(out_p) and "/reload-plugins" in message(out_p)
               and record_p.is_file() and message(again_p) == "",
               (pruned, out_q, out_p, again_p, err, again_err))
@@ -977,15 +1016,15 @@ def main():
         code_s, out_s, err_s = sync(root, data, session_start("startup", "fresh-start"))
         check("clear/no record after the session's own change: compared with agents/ as found, so silent, "
               "as a startup is",
-              "4 added, 0 removed, 0 updated" in message(own)
+              "2 added, 0 removed, 0 updated" in message(own)
               and code_c == 0 and message(out_c) == "" and context_of(out_c) == ""
               and code_s == 0 and message(out_s) == "", (own, err, code_c, out_c, err_c, code_s, out_s, err_s))
         # A rules change no sync has applied yet: the clear's own sync changes agents/ and reports it.
         seeded.write_text(json.dumps(narrow))
         code_c, out_c, err_c = sync(root, data, session_start("clear", "after-third-clear"))
         check("clear/no record, a rules change not yet synced: counted from agents/ as found, in both fields",
-              code_c == 0 and "0 added, 4 removed, 0 updated" in message(out_c)
-              and "0 added, 4 removed, 0 updated" in context_of(out_c), (code_c, out_c, err_c))
+              code_c == 0 and "0 added, 2 removed, 0 updated" in message(out_c)
+              and "0 added, 2 removed, 0 updated" in context_of(out_c), (code_c, out_c, err_c))
 
         root = make_root(base, "models-notice", SYNTHETIC_MODELS, narrow)
         data = base / "models-notice-data"
@@ -1042,60 +1081,121 @@ def main():
         generate(root, narrow_rules)
         gone = sorted(set(real_catalog) - kept(root))
         check("guard/the narrow sync removed the unreachable files",
-              "gpt-5.6-terra-high" in gone and "claude-opus-5-5-max" in gone and "gpt-6-astra-high" in gone, gone)
+              gone == ["claude-haiku-4-5", "claude-haiku-5-5", "gpt-5.6-terra"], gone)
+        # A definition a session loaded before a later sync removed it: claude-opus-5-5 has a row in the
+        # narrow rules, so its calls are checked against that row with the file gone.
+        (root / "agents" / "claude-opus-5-5.md").unlink()
 
-        def refused(payload, text):
-            code, out, err = guard(root, payload, narrow_rules)
+        def refused(payload, text, rules=narrow_rules):
+            code, out, err = guard(root, payload, rules)
             return code == 2 and text in err, (code, err)
 
-        def passed(payload):
-            code, out, err = guard(root, payload, narrow_rules)
+        def passed(payload, rules=narrow_rules):
+            code, out, err = guard(root, payload, rules)
             return code == 0, (code, err)
 
+        shipped_rules = source / "fleet.default.json"
         cases = [
             ("removed caller is governed by its model, not passed as built-in",
-             refused(nested_call("fleet:gpt-5.6-terra-high", subagent_type="fleet:gpt-6-luna-low"),
+             refused(nested_call("fleet:gpt-5.6-terra", subagent_type="fleet:gpt-6-luna", effort="low"),
                      "no spawn rules exist for a gpt-5.6-terra agent")),
             ("removed caller without a prefix is governed too",
-             refused(nested_call("gpt-5.6-terra-high", subagent_type="fleet:gpt-6-luna-low"),
+             refused(nested_call("gpt-5.6-terra", subagent_type="fleet:gpt-6-luna", effort="low"),
                      "no spawn rules exist for a gpt-5.6-terra agent")),
             ("removed caller's row allows what it lists",
-             passed(nested_call("fleet:claude-opus-5-5-max", subagent_type="fleet:gpt-6-luna-low"))),
+             passed(nested_call("fleet:claude-opus-5-5", subagent_type="fleet:gpt-6-luna", effort="max"))),
             ("removed caller's row refuses what it does not list",
-             refused(nested_call("fleet:claude-opus-5-5-max", subagent_type="fleet:claude-fable-5-1-low"),
+             refused(nested_call("fleet:claude-opus-5-5", subagent_type="fleet:claude-fable-5-1", effort="low"),
                      "not available from a claude-opus-5-5 agent")),
+            ("removed caller's row refuses an effort it does not list for a listed model",
+             refused(nested_call("fleet:claude-opus-5-5", subagent_type="fleet:gpt-6.1-sol", effort="max"),
+                     "at effort 'max' is not available from a claude-opus-5-5 agent")),
             ("removed target is checked against the caller's row",
-             refused(nested_call("fleet:claude-opus-5-5-low", subagent_type="fleet:gpt-5.6-terra-high"),
-                     "not available from a claude-opus-5-5 agent")),
+             refused(nested_call("fleet:gpt-6.1-sol", subagent_type="fleet:gpt-5.6-terra", effort="high"),
+                     "not available from a gpt-6.1-sol agent")),
+            ("removed target: its effort is checked against its ladder in models.json",
+             refused(nested_call("fleet:gpt-6.1-sol", subagent_type="fleet:claude-opus-5-5"),
+                     "needs a named effort")),
             ("removed caller: disallowed command refused",
-             refused(nested_call("fleet:claude-opus-5-5-max", "Bash", command="sudo ls"), "'sudo' is not available")),
+             refused(nested_call("fleet:claude-opus-5-5", "Bash", command="sudo ls"), "'sudo' is not available")),
             ("removed caller: disallowed skill refused",
-             refused(nested_call("fleet:claude-opus-5-5-max", "Skill", skill="code-review"), "skill 'code-review'")),
+             refused(nested_call("fleet:claude-opus-5-5", "Skill", skill="code-review"), "skill 'code-review'")),
             ("removed caller: Workflow refused",
-             refused(nested_call("fleet:claude-opus-5-5-max", "Workflow"), "workflows spawn their own agents")),
+             refused(nested_call("fleet:claude-opus-5-5", "Workflow"), "workflows spawn their own agents")),
             ("unknown fleet caller refused for every checked tool",
-             refused(nested_call("fleet:no-such-model-high", "Bash", command="ls"), "no definition under agents/")),
+             refused(nested_call("fleet:no-such-model", "Bash", command="ls"), "no definition under agents/")),
+            ("a per-effort name is not a fleet agent any more",
+             refused(nested_call("fleet:claude-opus-5-5-high", "Bash", command="ls"), "no definition under agents/")),
             ("main: removed agent outside main.fleet refused",
-             refused(main_call("fleet:gpt-5.6-terra-high"), "not enabled for the main session")),
+             refused(main_call("fleet:gpt-5.6-terra", effort="high"), "not enabled for the main session")),
             ("main: removed agent with a model parameter refused",
-             refused(main_call("fleet:gpt-6-astra-high", "opus"), "fleet agent types carry their own model")),
+             refused(main_call("fleet:gpt-5.6-terra", "opus", effort="high"), "fleet agent types carry their own model")),
             ("main: unknown fleet type refused, not taken for built-in",
-             refused(main_call("fleet:no-such-model-low"), "not defined in this fleet")),
-            ("main: kept agent in main.fleet passes", passed(main_call("fleet:claude-opus-5-5-high"))),
+             refused(main_call("fleet:no-such-model", effort="low"), "not defined in this fleet")),
+            ("main: a per-effort name is refused as not defined",
+             refused(main_call("fleet:gpt-6-luna-low"), "not defined in this fleet")),
+            ("main: kept agent in main.fleet passes", passed(main_call("fleet:gpt-6.1-sol", effort="high"))),
+            ("main: removed agent in main.fleet passes", passed(main_call("fleet:claude-opus-5-5", effort="high"))),
+            ("main: kept agent at an effort main.fleet does not list refused",
+             refused(main_call("fleet:gpt-6-astra", effort="high"),
+                     "at effort 'high' is not enabled for the main session")),
+            # The call's effort against the target's ladder (models.json), main session and fleet caller.
+            ("main: a missing effort refused", refused(main_call("fleet:gpt-6-astra"), "needs a named effort")),
+            ("main: a relative effort refused",
+             refused(main_call("fleet:gpt-6-astra", effort="higher"), "effort 'higher' is relative")),
+            ("main: lower refused as relative too",
+             refused(main_call("fleet:gpt-6-astra", effort="lower"), "effort 'lower' is relative")),
+            ("main: an effort off the ladder refused",
+             refused(main_call("fleet:gpt-6-astra", effort="ultra"), "effort 'ultra' is not a level of 'gpt-6-astra'")),
+            ("main: default is not a level of a model with named efforts",
+             refused(main_call("fleet:gpt-6-astra", effort="default"), "is not a level of 'gpt-6-astra'")),
+            ("main: an effort with a trailing line break refused",
+             refused(main_call("fleet:gpt-6-astra", effort="low\n"), "is not a level of 'gpt-6-astra'")),
+            ("main: an effort that is not a string refused",
+             refused(main_call("fleet:gpt-6-astra", effort=["low"]), "is not a level of 'gpt-6-astra'")),
+            ("main: a model without effort control refuses an effort",
+             refused(main_call("fleet:claude-haiku-4-5", effort="low"), "has no adjustable reasoning effort")),
+            ("main, empty main.fleet: the effort is still checked",
+             refused(main_call("fleet:gpt-6-astra"), "needs a named effort", shipped_rules)),
+            ("main, empty main.fleet: a named level passes",
+             passed(main_call("fleet:gpt-6-astra", effort="xhigh"), shipped_rules)),
+            ("main, empty main.fleet: a model without effort control passes without one",
+             passed(main_call("fleet:claude-haiku-4-5"), shipped_rules)),
+            ("main, empty main.fleet: a model without effort control refuses one",
+             refused(main_call("fleet:claude-haiku-4-5", effort="high"), "has no adjustable reasoning effort",
+                     shipped_rules)),
+            ("nested: a missing effort refused",
+             refused(nested_call("fleet:gpt-6-luna", subagent_type="fleet:gpt-6-luna"), "needs a named effort")),
+            ("nested: a relative effort refused",
+             refused(nested_call("fleet:gpt-6-luna", subagent_type="fleet:gpt-6-luna", effort="higher"),
+                     "effort 'higher' is relative")),
+            ("nested: an effort off the ladder refused",
+             refused(nested_call("fleet:gpt-6-luna", subagent_type="fleet:gpt-6-luna", effort="ultra"),
+                     "effort 'ultra' is not a level of 'gpt-6-luna'")),
+            ("nested: an allowed pair passes",
+             passed(nested_call("fleet:gpt-6-luna", subagent_type="fleet:gpt-6-luna", effort="xhigh"))),
+            ("nested: a model without effort control refuses an effort",
+             refused(nested_call("fleet:gpt-6-luna", subagent_type="fleet:claude-haiku-4-5", effort="low",),
+                     "has no adjustable reasoning effort", shipped_rules)),
+            ("nested: a model without effort control passes without one where its row lists default",
+             passed(nested_call("fleet:gpt-6-luna", subagent_type="fleet:claude-haiku-4-5"), shipped_rules)),
+            ("nested: a pair the row does not list refused",
+             refused(nested_call("fleet:gpt-6-luna", subagent_type="fleet:gpt-6.1-sol", effort="low"),
+                     "not available from a gpt-6-luna agent", shipped_rules)),
             ("main: built-in agent passes", passed(main_call("general-purpose"))),
             ("main: built-in agent with a listed model passes", passed(main_call("general-purpose", "opus"))),
             ("main: built-in agent with an unlisted model refused",
              refused(main_call("general-purpose", "haiku"), "not enabled for built-in agents")),
             ("main session running as an unknown --agent type stays the main session",
              passed({"hook_event_name": "PreToolUse", "tool_name": "Bash", "agent_id": "",
-                     "agent_type": "fleet:no-such-model-high", "tool_input": {"command": "sudo ls"}})),
+                     "agent_type": "fleet:no-such-model", "tool_input": {"command": "sudo ls"}})),
             ("built-in caller passes, as before",
-             passed(nested_call("general-purpose", subagent_type="fleet:gpt-5.6-terra-high"))),
+             passed(nested_call("general-purpose", subagent_type="fleet:gpt-5.6-terra", effort="high"))),
         ]
         for name, (ok, detail) in cases:
             check("guard/" + name, ok, detail)
 
-        for agent_type in ("fleet:gpt-5.6-terra-high", "fleet:no-such-model-high"):
+        for agent_type in ("fleet:gpt-5.6-terra", "fleet:no-such-model"):
             code, out, err = guard(root, {"hook_event_name": "SubagentStart", "agent_type": agent_type,
                                           "agent_id": "agent-1"}, narrow_rules)
             context = json.loads(out)["hookSpecificOutput"]["additionalContext"] if code == 0 and out else ""
@@ -1119,17 +1219,17 @@ def main():
             bad = base / "guard-bad-rules.json"
             bad.write_text(content)
             for what, payload in (
-                    ("main-session target", main_call("fleet:gpt-5.6-terra-high")),
-                    ("skill", nested_call("fleet:claude-opus-5-5-high", "Skill", skill="code-review")),
-                    ("command", nested_call("fleet:claude-opus-5-5-high", "Bash", command="sudo ls")),
-                    ("SubagentStart", {"hook_event_name": "SubagentStart", "agent_type": "fleet:claude-opus-5-5-high",
+                    ("main-session target", main_call("fleet:gpt-5.6-terra", effort="high")),
+                    ("skill", nested_call("fleet:claude-opus-5-5", "Skill", skill="code-review")),
+                    ("command", nested_call("fleet:claude-opus-5-5", "Bash", command="sudo ls")),
+                    ("SubagentStart", {"hook_event_name": "SubagentStart", "agent_type": "fleet:claude-opus-5-5",
                                        "agent_id": "agent-1"})):
                 code, out, err = guard(root, payload, bad)
                 check(f"guard/invalid rules ({name}): {what} refused",
                       code == 2 and "rules file is invalid" in err, (code, out, err))
         null_rules = base / "guard-null-rules.json"
         null_rules.write_text("null")
-        code, out, err = guard(root, main_call("fleet:gpt-5.6-terra-high"), null_rules)
+        code, out, err = guard(root, main_call("fleet:gpt-5.6-terra", effort="high"), null_rules)
         check("guard/a null rules document still reads as empty rules", code == 0, (code, err))
 
         # ---- the guard decides on one read of the rules ----------------------------------------
@@ -1149,7 +1249,7 @@ def main():
             "exit $status\n")
         (swap_dir / "jq").chmod(0o755)
         swap_path = f"{swap_dir}{os.pathsep}{base_env.get('PATH', '')}"
-        caller = "fleet:claude-opus-5-5-high"
+        caller = "fleet:claude-opus-5-5"
         start = {"hook_event_name": "SubagentStart", "agent_type": caller, "agent_id": "agent-1"}
         for mode, label in (("swap", "replaced with text that is not JSON"), ("remove", "removed")):
             for what, payload, holds in (

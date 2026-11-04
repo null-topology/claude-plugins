@@ -1,6 +1,6 @@
 ---
 name: selecting-subagent-model
-description: Use when choosing or revising a sub-agent model and reasoning effort for an assigned task, and when the user states which models to use or avoid for some work. Covers the user's standing overrides, the per-class routing table, security work and account access, vendor tendencies, and benchmark comparisons under subscription-based execution.
+description: Use when choosing or revising a sub-agent model and reasoning effort for an assigned task, which every Agent call to a fleet agent needs (its agent type and its named effort parameter), and when the user states which models to use or avoid for some work. Covers the user's standing overrides, the per-class routing table, security work and account access, vendor tendencies, and benchmark comparisons under subscription-based execution.
 ---
 
 # Selecting a sub-agent model and reasoning effort
@@ -11,8 +11,10 @@ reading it. The only judgment in it is marked as such: a starred cell in the rou
 user wants their fleet used differs between users and is kept as their overrides, not here.
 
 The fleet: Anthropic — Claude Fable 5.1, Claude Opus 5.5, Claude Sonnet 5.5, Claude Haiku 5.5,
-Claude Haiku 4.5 (retirement not before 2026-10-15); OpenAI — GPT-6 Astra, GPT-6.1 Sol, GPT-5.6 Terra, GPT-6 Luna. Use the model and effort options the
-invocation tool actually exposes; the guard's rules decide which pairs a caller may spawn.
+Claude Haiku 4.5 (retirement not before 2026-10-15); OpenAI — GPT-6 Astra, GPT-6.1 Sol, GPT-5.6 Terra, GPT-6 Luna. Each model is
+one agent type, `fleet:<model id>` (`fleet:claude-opus-5-5`, `fleet:gpt-6.1-sol`, ...); the effort is
+a parameter of each call, not part of the type. Use the agent types the session actually lists; the
+guard's rules decide which model and effort pairs a caller may spawn.
 
 ## Order of selection
 
@@ -22,8 +24,9 @@ invocation tool actually exposes; the guard's rules decide which pairs a caller 
 3. **The routing table.** Map the work to a class and a column in `references/task-routing.md`;
    the cell names a family. For security work, read the account rule below first.
 4. **The effort.** Set it from the task: interacting parts, real decision points, easy-to-miss
-   details and the cost of a mistake raise it. The table names families only; the effort at which a
-   model was measured does not carry over.
+   details and the cost of a mistake raise it (the levels are described under
+   [Effort levels](#effort-levels)). The table names families only; the effort at which a model
+   was measured does not carry over.
 5. **Compare pairs when the cell is thin or the class is General.** `references/benchmark.md` has
    the general Index, cost and speed per model and effort, the escalation ladder and the
    substitutions. Compare a higher effort on one model with another model at a lower effort; the
@@ -31,8 +34,35 @@ invocation tool actually exposes; the guard's rules decide which pairs a caller 
 6. **The vendor and the brief.** When the cell's vendor is unavailable, take the Fallback column.
    `references/vendor-guide.md` covers what each vendor's tendencies cost a task and how to brief
    each.
-7. **State the choice**: model, effort and a one-line reason, in the orchestration's existing
-   format. Name material uncertainty: a thin or starred cell, a conflict with an override.
+7. **State the choice**: `subagent_type: fleet:<model id>`, `effort: <named level>` and a
+   one-line reason, in the orchestration's existing format. Name material uncertainty: a thin or
+   starred cell, a conflict with an override. Then make the call as
+   [Passing the choice](#passing-the-choice) says.
+
+## Passing the choice
+
+This skill explicitly instructs you to set the Agent tool's `effort` parameter. On the call:
+
+- `subagent_type` is `fleet:<model id>` of the chosen model.
+- `effort` is the named level you chose: `low`, `medium`, `high`, `xhigh` or `max`, one the model
+  lists in `references/benchmark.md`. Always pass it by name. Never pass a relative value
+  (`lower`, `higher`) and never leave it out: the guard refuses both, since neither is a level
+  the rules can check.
+- A model without effort control (its effort is `n/a` in `references/benchmark.md`, Claude Haiku
+  4.5 today) takes no `effort`: leave the parameter out. The guard refuses one.
+- Never pass `model`: each fleet type carries its own.
+
+## Effort levels
+
+The same for every model that has them:
+
+| Level | Use for |
+|---|---|
+| `low` | Straightforward tasks of any size, where the steps are clear and there are no real decision points. |
+| `medium` | Tasks of moderate complexity, with a few interacting parts and shallow decision points. |
+| `high` | Tasks where interactions must be held in mind and easy-to-miss details noticed. |
+| `xhigh` | Intricate tasks, where the reasoning is visibly tangled or a lower effort has already fallen short. |
+| `max` | When `xhigh` was not enough; this is the model's reasoning ceiling. |
 
 ## User overrides
 
@@ -132,4 +162,6 @@ the work to a class and a column in `references/task-routing.md`; for security w
 account's access first. Set the effort from the task. When the cell is thin or the class is
 General, compare pairs in `references/benchmark.md`. Use the Fallback column when a vendor is
 unavailable and brief each vendor per `references/vendor-guide.md`. Persist every new preference
-the user states. State the choice in the existing orchestration format.
+the user states. State the choice in the existing orchestration format, then call the Agent tool
+with `subagent_type: fleet:<model id>` and `effort: <the named level>`; never a relative effort,
+never a `model`, and no effort for a model without effort control.

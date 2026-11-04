@@ -1,14 +1,16 @@
 # fleet
 
-A fleet of executor subagents, one per model and reasoning effort, plus the guard that keeps them
-inside a policy written in one place.
+A fleet of executor subagents, one per model, with the reasoning effort passed on each call, plus
+the guard that keeps them inside a policy written in one place.
 
 ## What it ships
 
-- `agents/<model>-<effort>.md` — the fleet, generated from `models.json`. Each file fixes a model
-  and, where the model supports effort control, an effort in its frontmatter; no hooks, no rules —
-  those live elsewhere. The repository ships every agent; an installed copy keeps only the ones
-  your rules can reach (see [Registered agents](#registered-agents)).
+- `agents/<model>.md` — the fleet, generated from `models.json`: one file per model, named by the
+  model's id (`claude-opus-5-5`, `gpt-6.1-sol`, `claude-haiku-4-5`, ...). Each file fixes a model
+  in its frontmatter and carries no effort: the caller passes a named `effort` on every Agent
+  call, and the guard checks it. No hooks, no rules — those live elsewhere. The repository ships
+  every agent; an installed copy keeps only the ones your rules can reach (see
+  [Registered agents](#registered-agents)).
 - `models.json` — the models the plugin knows: id, name, vendor, the effort rungs each one
   supports, and a dated benchmark snapshot per rung (`null` where a figure is not published,
   `"provisional": true` on a model whose figures the source marks as preliminary, for example a
@@ -24,7 +26,8 @@ inside a policy written in one place.
   shape, and renders every agent and the reference into a staging directory before it touches
   anything. A models file that is not one JSON object with a snapshot and a non-empty `models`
   array, a figure (`index`, `usd`, `tps`) that is not a number or null, a `usd` of zero, a
-  `provisional` or `usd_estimated` that is not a boolean, an unknown effort rung, an empty name,
+  `provisional` or `usd_estimated` that is not a boolean, an unknown effort rung, a `default`
+  rung beside named ones (a model either has named levels or no effort control), an empty name,
   a name or snapshot string holding a control character or line break, a model id that does not
   start with a letter or that YAML would read as a boolean (`yes`, `off`, `null`, ...), or models
   that render no agent change nothing (exit 3); so does a failure while rendering (exit 1). The
@@ -42,8 +45,10 @@ inside a policy written in one place.
   `models.json`, and its model is the row the rules are keyed by; a type with the plugin's
   prefix that resolves to neither is refused. Otherwise an empty `agent_id` means the main
   session (which may still carry an `agent_type` when the session runs as
-  `claude --agent <name>`); anything else is a built-in subagent and passes. The same script is
-  the `SubagentStart` hook that hands a starting fleet agent its denylists. Needs `jq`.
+  `claude --agent <name>`); anything else is a built-in subagent and passes. An Agent call to a
+  fleet agent, from the main session or from a fleet agent, must pass `effort` as a named level
+  of that model (see [The call's effort](#the-calls-effort)). The same script is the
+  `SubagentStart` hook that hands a starting fleet agent its denylists. Needs `jq`.
 - `scripts/fleet-rules.sh` — the rule readers, the rules-file validity test and the agent-type
   resolution, sourced by the guard, the generator's `--rules` mode, the sync and the brief check,
   so all of them read the rules and tell a fleet agent the same way.
@@ -54,7 +59,9 @@ inside a policy written in one place.
 - `skills/selecting-subagent-model` — how to pick a model and effort for a task: the user's
   standing overrides first, then `references/task-routing.md` (the model family per class of
   work and task complexity, from independent benchmarks); `references/vendor-guide.md` there
-  covers choosing between vendors and briefing each.
+  covers choosing between vendors and briefing each. Its result is `subagent_type:
+  fleet:<model id>` plus `effort: <named level>`, and it instructs the caller to pass that named
+  level on the call.
 - `skills/delegating-task` — how to write the prompt for the agent that was picked, with worked
   examples under `examples/`.
 - `scripts/delegation-contract.sh` — a second `PreToolUse` hook, on `Agent` only, that checks the
@@ -62,7 +69,7 @@ inside a policy written in one place.
 - `tests/delegation/` — fixture tests for the hook alone and next to the guard and the generator.
 - `tests/sync/` — fixture tests for the sync, with the guard as the oracle for reachability.
 
-## Why one file per model and effort
+## Why one file per model
 
 A subagent's model can come from three places, in this order: the `model` parameter of the Agent
 tool call, the `model:` key of the agent's frontmatter, or the process-wide
@@ -72,23 +79,30 @@ tool call, the `model:` key of the agent's frontmatter, or the process-wide
   not an agent definition, not a model picker entry, and a `PreToolUse` hook that rewrites the
   call's input is checked against the same enum and rejected;
 - the environment variable applies to every subagent of the process at once and is read at
-  start-up, so it cannot pick a model per call;
-- effort has no call-time parameter at all. It is frontmatter-only and otherwise inherited from
-  the session.
+  start-up, so it cannot pick a model per call.
 
-So a model outside that enum, at a chosen effort, is reachable in exactly one way: an agent
-definition that names both. That is what the fleet is. The files are dull on purpose: four
-frontmatter keys and a shared body. `models.json` holds what varies, the generator holds what
-does not, and adding a provider is one entry plus one run of the generator, not a batch of
-hand-written definitions.
+So a model outside that enum is reachable in exactly one way: an agent definition that names it.
+That is what the fleet is, one definition per model. The effort is not part of the definition:
+the Agent tool takes an `effort` parameter, documented as one of
+`lower | higher | low | medium | high | xhigh | max`, and a named level passed on the call was
+observed to set the effort the subagent ran at, overriding an effort in the agent's frontmatter.
+`lower` and `higher` were observed to have no effect. The tool passes a named level only when the
+user or instructions such as a skill ask for it, so `fleet:selecting-subagent-model` instructs
+the caller to pass the level it chose, and the guard refuses a call that does not (see
+[The call's effort](#the-calls-effort)).
+
+The files are dull on purpose: three frontmatter keys and a shared body. `models.json` holds what
+varies, the generator holds what does not, and adding a provider is one entry plus one run of the
+generator, not a batch of hand-written definitions. Each description lists the model's efforts
+with their benchmark figures, so the agent list shows what each level costs.
 
 The guard is not in the agent files either, and not by choice: `hooks:` in the frontmatter of
 an agent shipped by a plugin is ignored (the loader says so at startup). The plugin's own
 `hooks.json` hooks do run inside subagents, and the payload there names the agent type, which is
 all the guard needs.
 
-A model with no effort control (Haiku 4.5) gets one file, `agents/<model>.md`, without an effort
-key. The rules refer to its single rung as `default`.
+A model with no effort control (Haiku 4.5) has the single rung `default` in `models.json`. A call
+to it passes no `effort`, and the rules refer to it as `default`.
 
 ### Adding a model
 
@@ -127,7 +141,7 @@ empty list refuses nothing.
 ```
 
 - `main` — the main session, unrestricted by default.
-  - `fleet`: fleet agents it may spawn, model → efforts.
+  - `fleet`: fleet agents it may spawn, model → the efforts a call to it may pass.
   - `builtin_agent_models`: the `model` values it may pass to a built-in agent
     (`general-purpose`, `Explore`, `Plan`, ...). The Agent tool accepts only the aliases `sonnet`,
     `opus`, `haiku`, `fable`. A call without `model` runs on the session model and always passes.
@@ -145,6 +159,27 @@ empty list refuses nothing.
 Regardless of the sections, a fleet subagent may never pass `model` to the Agent tool (the model
 belongs to the agent definition) and may not use `Workflow`. A refusal names what the caller may
 do instead, read from the rules file.
+
+The format of this file did not change when the fleet moved from one agent per model and effort
+to one agent per model: each list still names the efforts a caller may request, and now the call
+names one in its `effort` parameter instead of picking an agent that fixed it.
+
+### The call's effort
+
+Every Agent call to a fleet agent, from the main session or from a fleet agent, is checked against
+the target model's efforts in `models.json` before the rules are read, and also when the section
+that applies is empty and so allows every pair:
+
+- a model with named levels needs `effort` set to one of them. A missing effort is refused (the
+  agent would run at whatever effort it inherits, which no rule was asked about), and so are
+  `lower` and `higher`, and any value that is not one of that model's levels;
+- a model without effort control (`default`) refuses any `effort`; the call leaves it out;
+- the pair (model, the named level, or `default`) is then authorized exactly as before: against
+  `main.fleet` from the main session, against the caller model's row in `rules` from a fleet
+  agent.
+
+The caller's own effort plays no part: rules are keyed by the caller's model. Calls from a
+built-in subagent are not governed, as before.
 
 A fleet agent learns both denylists when it starts: the `SubagentStart` hook adds them to its
 context, read from the rules file in force at that moment, so the agent does not try what would be
@@ -182,11 +217,13 @@ start (startup, resume, clear, compact, fork) and whenever the rules file change
 synced; see below). That renders every agent from
 `models.json`, keeps those the guard would let someone start, and deletes the rest from the
 installed plugin's `agents/`. "Someone" is the main session through `main.fleet`, then, model by
-model, every agent it can reach through `rules`. The readers are the guard's own
+model, every agent it can reach through `rules`. A model's agent is reached when the section
+lists one of that model's efforts for it. The readers are the guard's own
 (`scripts/fleet-rules.sh`), so the reading is the same:
 
 - an empty or missing allowlist allows everything;
-- `default` is the rung of a model without effort control;
+- `default` is the rung of a model without effort control; listed for a model with named levels,
+  it reaches nothing, since a call to that model must name a level;
 - a missing data-directory file falls back to the shipped default.
 
 Only `agents/` changes; the benchmark reference stays as shipped. A file is written only when it
@@ -251,7 +288,8 @@ nothing.
   lists. The guard still checks every call against the rules in force, whatever is registered.
   - A fleet agent whose file a sync removed has no definition to resolve. That covers one that
     was running at the time and one its session loaded before the sync. The guard resolves it
-    by name against `models.json` and applies its model's row.
+    by name, a model id, against `models.json` and applies its model's row; as a target, its
+    efforts come from the same entry.
   - A type with the plugin's prefix that resolves neither way is refused, never passed as
     built-in.
 - **A git checkout loaded with `--plugin-dir`.** The plugin root is the checkout, and git tracks
@@ -273,7 +311,7 @@ uv run tests/sync/test_sync.py --fleet-root . --shell /bin/sh
 A spawned agent sees none of the caller's conversation, so the prompt has to carry the target,
 the limits and the finish line. `fleet:delegating-task` tells the caller how to write it, and the
 hook refuses an `Agent` call to a fleet agent whose prompt lacks the shape. A fleet agent is a
-`subagent_type` the guard treats as one: a definition under `agents/` or a name in `models.json`,
+`subagent_type` the guard treats as one: a definition under `agents/` or a model id in `models.json`,
 prefixed or bare, or any type with the plugin's prefix, so an agent a sync removed is still
 inspected. Calls to any other agent type, and calls without a type, are not inspected.
 
@@ -325,5 +363,11 @@ never calls Python.
   them at all while `rules` is non-empty.
 - The benchmark figures in the agent descriptions and in the reference table are a dated
   snapshot from `models.json`, not live data.
+- The guard checks the effort a call names; the effort the subagent then runs at is the host's
+  doing. A named call-time level was observed to override an agent's frontmatter effort and
+  `lower`/`higher` to change nothing; that is the extent of what was observed.
+- Agent type names changed in 0.10.0 from `<model>-<effort>` to `<model>`. A session still
+  holding a definition loaded from an older version is refused when it calls or is called by an
+  old `fleet:` type (the old name resolves to nothing) until it reloads.
 - The command check is word matching over the command line. It stops a cooperating agent from
   drifting; it is not a security boundary.

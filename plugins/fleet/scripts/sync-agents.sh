@@ -1,7 +1,8 @@
 #!/bin/sh
 # Fleet agent sync: the plugin's SessionStart and FileChanged hook. Keeps agents/ to the agents
-# the rules in force let anyone reach (generate-agents.sh --rules), so the session's agent list
-# offers only what the guard can let through. A convenience: the guard stays the enforcement.
+# the rules in force let anyone reach (generate-agents.sh --rules): one agent per model, kept when
+# the rules allow that model at one of its efforts. So the session's agent list offers only what
+# the guard can let through. A convenience: the guard stays the enforcement.
 #
 # Usage: sync-agents.sh <plugin-root> <data-dir>        (hook payload on stdin)
 #

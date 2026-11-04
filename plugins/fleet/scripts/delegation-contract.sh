@@ -43,8 +43,8 @@ tool=$(printf '%s' "$payload" | jq -r '.tool_name') || error 'Could not read too
 [ "$tool" = Agent ] || exit 0
 
 # A fleet type is one the guard treats as a fleet agent (fleet-rules.sh): a definition under
-# agents/; a name in models.json, since the sync removes the definitions the rules cannot reach;
-# or this plugin's prefix.
+# agents/; a model id in models.json (one agent per model, named by its id), since the sync
+# removes the definitions the rules cannot reach; or this plugin's prefix.
 [ -n "$plugin_root" ] && [ -d "$plugin_root/agents" ] ||
     error 'The plugin root, holding an agents directory, is required as the first argument.'
 case $0 in */*) here=${0%/*} ;; *) here=. ;; esac

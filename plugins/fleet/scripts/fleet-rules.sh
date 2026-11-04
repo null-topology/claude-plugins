@@ -1,7 +1,8 @@
 # Shared by subagent-guard.sh, generate-agents.sh, sync-agents.sh and delegation-contract.sh, so
 # that the agents the plugin registers, the calls the guard lets through and the briefs the
 # contract checks follow one reading of the rules: which file is in force, whether it is valid,
-# how a section is read, and which model and effort an agent type stands for. Sourced, not run.
+# how a section is read, and which model an agent type stands for and which efforts that model
+# takes. Sourced, not run.
 #
 # The caller sets plugin_root and data_dir, then rules (usually from fleet_rules_path) before it
 # uses the readers, and may redefine fleet_unreadable (see fleet_read). Needs jq and awk.
@@ -91,35 +92,50 @@ frontmatter() {
   awk -v key="$2:" '/^---$/ { if (++fence == 2) exit; next } fence == 1 && $1 == key { print $2; exit }' "$1"
 }
 
+# fleet_rungs_of <model>: sets fleet_listed to 1 when models.json has an entry with that id and at
+# least one effort rung, and fleet_rungs to that entry's rungs, one per line ("default" alone for a
+# model with no effort control). When two entries share an id, the generator's file comes from the
+# last one with rungs, so the last one is read here too.
+fleet_rungs_of() {
+  fleet_listed=
+  fleet_rungs=$(jq -r --arg id "$1" '
+    [.models[]? | select(type == "object" and .id == $id
+      and (.efforts | type == "object" and length > 0))]
+    | if length == 0 then empty else "listed", (.[-1].efforts | keys_unsorted[]) end' \
+    "$plugin_root/models.json" 2>/dev/null) || fleet_rungs=
+  case $fleet_rungs in listed*) fleet_listed=1 ;; *) fleet_rungs= ; return 0 ;; esac
+  fleet_rungs=$(printf '%s\n' "$fleet_rungs" | sed 1d)
+}
+
 # fleet_agent <agent-type>: whether the type, with or without a plugin prefix, is a fleet agent;
-# when it is, sets fleet_model and fleet_effort (rung "default" for a model with no effort control).
+# when it is, sets fleet_model, and fleet_listed and fleet_rungs for that model (fleet_rungs_of).
+# There is one agent per model, named by the model's id; the effort is a parameter of each call.
 # Its definition under agents/ decides when it exists. Without one (agents/ holds only what the
 # rules in force can reach, and a session keeps the definitions it loaded before a regeneration)
-# the name is resolved against models.json, the source every definition is generated from, so a
-# fleet agent never passes for a built-in one because its file is gone.
+# the name is resolved against the model ids in models.json, the source every definition is
+# generated from, so a fleet agent never passes for a built-in one because its file is gone.
 fleet_agent() {
   fleet_model=
-  fleet_effort=
+  fleet_listed=
+  fleet_rungs=
   bare=${1##*:}
   # No agent name holds a slash; a type that does is a path, not a fleet agent.
   case $bare in '' | */*) return 1 ;; esac
   f="$plugin_root/agents/$bare.md"
   if [ -f "$f" ]; then
     fleet_model=$(frontmatter "$f" model)
-    fleet_effort=$(frontmatter "$f" effort)
-    fleet_effort=${fleet_effort:-default}
+    fleet_rungs_of "$fleet_model"
     return 0
   fi
-  # The generator names an agent <id>-<effort>, or <id> for the "default" rung; when two entries
-  # yield the same name, the file written last wins, so the last match does here too.
-  resolved=$(jq -r --arg name "$bare" '
-    last(.models[]? | .id as $id | (.efforts // {} | keys_unsorted[]) as $effort
-      | select((if $effort == "default" then $id else "\($id)-\($effort)" end) == $name)
-      | "\($id) \($effort)")
-    // empty' "$plugin_root/models.json" 2>/dev/null) || resolved=
-  [ -n "$resolved" ] || return 1
-  fleet_model=${resolved% *}
-  fleet_effort=${resolved##* }
+  fleet_rungs_of "$bare"
+  [ -n "$fleet_listed" ] || return 1
+  fleet_model=$bare
+}
+
+# fleet_ladder: the named effort levels of the model fleet_agent resolved, one per line: its rungs
+# other than "default". Empty for a model without effort control.
+fleet_ladder() {
+  printf '%s\n' "$fleet_rungs" | grep -vx default | grep -v '^$' || :
 }
 
 # fleet_prefixed <agent-type>: the type carries this plugin's prefix, as every agent the plugin

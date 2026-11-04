@@ -1,6 +1,6 @@
 ---
 name: delegating-task
-description: Use immediately before spawning a subagent, including from inside a subagent, and when FLEET_DELEGATION_INVALID refuses an Agent call. Covers writing a self-contained brief with an objective, scope boundary, epistemic boundary, acceptance criteria and return conditions, deciding whether the task is ready to hand over, and correcting a brief already sent. Does not choose the model; fleet:selecting-subagent-model does.
+description: Use immediately before spawning a subagent, including from inside a subagent, and when FLEET_DELEGATION_INVALID refuses an Agent call. Covers writing a self-contained brief with an objective, scope boundary, epistemic boundary, acceptance criteria and return conditions, deciding whether the task is ready to hand over, and correcting a brief already sent. Does not choose the model or the effort; fleet:selecting-subagent-model does.
 ---
 
 # Delegate a bounded task
@@ -11,7 +11,9 @@ prompt. Think of one backlog item: a single concrete result, not an area of resp
 
 Keep the brief proportional. It is output you generate, so compress method and explanation,
 never the task's own facts: a path, an account, a decision already taken, a limit the user
-set. Pick the model with `fleet:selecting-subagent-model`; this skill only shapes the prompt.
+set. Pick the agent type and its effort with `fleet:selecting-subagent-model`; this skill only
+shapes the prompt. On the call, never pass a `model`; always pass the named `effort` chosen with
+`fleet:selecting-subagent-model`.
 
 ## Ready to hand over?
 

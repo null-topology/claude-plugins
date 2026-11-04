@@ -1,7 +1,9 @@
 #!/bin/sh
 # Generates the fleet from models.json: replaces agents/*.md with one agent file per
-# model and effort, and rewrites the benchmark reference the selection skill refers
-# to: the table, the escalation ladder and the substitutions derived from it. Run it
+# model, named by the model's id, with no effort in its frontmatter (the caller passes a
+# named effort on each Agent call and the guard checks it), and rewrites the benchmark
+# reference the selection skill refers to: the table, the escalation ladder and the
+# substitutions derived from it. Run it
 # after editing models.json and commit the output; the plugin ships the generated
 # files because agent definitions are read from disk, not built at runtime.
 #
@@ -12,7 +14,7 @@
 # prints one line per change: "added <name>", "updated <name>" or "removed <name>".
 # Nothing printed means nothing changed. The rule readers are the guard's
 # (fleet-rules.sh), so an agent is kept exactly when some call the guard allows can
-# reach it.
+# reach it: when the rules allow its model at one of its rungs.
 #
 # A run is all or nothing up to its install. It takes a lock (agents/.sync.lock), copies
 # models.json (and the rules file) into a staging directory, checks the copies and reads
@@ -76,7 +78,9 @@ fi
 
 # models_valid <file>: the shape the renderer and the reference need. One JSON object with a
 # snapshot (benchmark and date strings) and a non-empty models array; each model with an id
-# usable as a file name, a non-empty string name and an efforts object keyed by known rungs; per
+# usable as a file name, a non-empty string name and an efforts object keyed by known rungs, where
+# "default" (a model without effort control) stands alone, since a model with named levels takes
+# one on every call and a call cannot ask for "default"; per
 # rung, index, usd and tps each a number or null, usd above zero (the reference divides by it),
 # and usd_estimated a boolean when present; provisional a boolean when present. A models file
 # that is empty, holds several documents or lists no models would render nothing and so delete
@@ -98,7 +102,8 @@ models_valid() {
           and (test("^(y|yes|n|no|true|false|on|off|null)$"; "i") | not))
         and (.name | text and length > 0)
         and boolean_if_present("provisional")
-        and (.efforts | type == "object" and all(to_entries[];
+        and (.efforts | type == "object" and ((has("default") | not) or length == 1)
+          and all(to_entries[];
           (.key | IN("low", "medium", "high", "xhigh", "max", "default"))
           and (.value | type == "object"
             and (.index | number_or_null) and (.usd | number_or_null) and (.tps | number_or_null)
@@ -106,21 +111,8 @@ models_valid() {
             and boolean_if_present("usd_estimated")))))))' "$1" 2>/dev/null)" = true ]
 }
 
-# One sentence per effort rung, the same for every model: what the rung is for.
-guidance() {
-  case $1 in
-    low)     echo "Use for straightforward tasks of any size, where the steps are clear and there are no real decision points." ;;
-    medium)  echo "Use for tasks of moderate complexity, with a few interacting parts and shallow decision points." ;;
-    high)    echo "Use for tasks where interactions must be held in mind and easy-to-miss details noticed." ;;
-    xhigh)   echo "Use for intricate tasks, where the reasoning is visibly tangled or a lower effort has already fallen short." ;;
-    max)     echo "Use when xhigh was not enough; this is the model's reasoning ceiling." ;;
-    default) echo "Reasoning effort is not adjustable on this model." ;;
-    *)       echo "generate-agents.sh: unknown effort '$1' in models.json" >&2; exit 1 ;;
-  esac
-}
-
-# render <name> <description> <model> <effort>: the template with its placeholders filled.
-# An empty effort drops the effort line, so the agent inherits the session's effort. The
+# render <name> <description> <model>: the template with its placeholders filled. The template
+# has no effort line: the effort is the Agent call's parameter, which the guard checks. The
 # description is free text (it holds the model name and the benchmark name) and goes in as a
 # double-quoted scalar: a backslash and a double quote are escaped, and models_valid admits no
 # character that would need more (control characters, line separators). That is also a JSON
@@ -128,7 +120,7 @@ guidance() {
 # environment, since -v would expand backslash escapes in them. Each placeholder is replaced
 # left to right and the description last, so text holding a placeholder is not substituted again.
 render() {
-  FLEET_NAME=$1 FLEET_DESCRIPTION=$2 FLEET_MODEL=$3 FLEET_EFFORT=$4 awk '
+  FLEET_NAME=$1 FLEET_DESCRIPTION=$2 FLEET_MODEL=$3 awk '
     function repl(s, t, r,    out, i) {
       out = ""
       while ((i = index(s, t)) > 0) { out = out substr(s, 1, i - 1) r; s = substr(s, i + length(t)) }
@@ -144,10 +136,9 @@ render() {
       return "\"" out "\""
     }
     BEGIN {
-      name = ENVIRON["FLEET_NAME"]; model = ENVIRON["FLEET_MODEL"]; effort = ENVIRON["FLEET_EFFORT"]
+      name = ENVIRON["FLEET_NAME"]; model = ENVIRON["FLEET_MODEL"]
       description = quoted(ENVIRON["FLEET_DESCRIPTION"])
     }
-    /^effort: \{\{EFFORT\}\}$/ { if (effort == "") next; print "effort: " effort; next }
     { print repl(repl(repl($0, "{{NAME}}", name), "{{MODEL}}", model), "{{DESCRIPTION}}", description) }
   ' "$template"
 }
@@ -236,35 +227,60 @@ snapshot=$(jq -r '.snapshot.benchmark + ", " + .snapshot.date' "$staged")
 # joined with a tab and not passed through @tsv, which would double a backslash in a name: the
 # validation above admits no tab, line break or other control character in a name, and an id or a
 # figure holds none either, so each line splits back into the fields as written.
-jq -r '.models[] | .id as $id | .name as $name | (.provisional // false) as $provisional | .efforts | to_entries[]
-       | [$id, $name, .key, (.value.index // "none"), (.value.usd // "none"), (.value.tps // "none"), (.value.usd_estimated // false), $provisional]
+#
+# One agent per model, named by its id; a model without rungs renders none. Each entry's lines
+# carry its position in the models array, so the rungs of one entry are collected together even
+# when two entries share an id; the file of the entry rendered last is the one that exists, as the
+# guard's resolution (fleet_rungs_of) reads the last entry too.
+jq -r '.models | to_entries[] | .key as $n | .value | .id as $id | .name as $name | (.provisional // false) as $provisional
+       | .efforts | to_entries[]
+       | [$n, $id, $name, .key, (.value.index // "none"), (.value.usd // "none"), (.value.tps // "none"), (.value.usd_estimated // false), $provisional]
        | map(tostring) | join("\t")' \
   "$staged" > "$out/entries.tsv"
-while IFS="$(printf '\t')" read -r id name effort index usd tps estimated provisional; do
-  figures="Index $index"
-  [ "$index" = none ] && figures="Index not published"
+
+# flush: renders the agent of the entry collected so far, if any.
+flush() {
+  [ -n "$entry" ] || return 0
+  basis=$snapshot
+  [ "$entry_provisional" = true ] && basis="$snapshot, provisional"
+  if [ "$entry_rungs" = default ]; then
+    description="Executor subagent on $entry_name. Reasoning effort is not adjustable on this model: the caller passes no effort on the Agent call. Benchmark $basis; $entry_figures. Follows the prompt literally; does not invent scope."
+  else
+    # "low, medium or high": the levels the call may name.
+    levels=$(printf '%s\n' $entry_rungs | awk '{ v[NR] = $0 } END { for (i = 1; i <= NR; i++) printf "%s%s", (i == 1 ? "" : i == NR ? " or " : ", "), v[i] }')
+    description="Executor subagent on $entry_name. The caller passes a named effort on every Agent call: $levels, chosen with fleet:selecting-subagent-model; never lower or higher. Benchmark $basis, by effort (Index, \$ per task, output tokens/s): $entry_figures. Follows the prompt literally; does not invent scope."
+  fi
+  render "$entry_id" "$description" "$entry_id" > "$out/agents/$entry_id.md"
+}
+
+entry=
+while IFS="$(printf '\t')" read -r n id name effort index usd tps estimated provisional; do
+  if [ "$n" != "$entry" ]; then
+    flush
+    entry=$n entry_id=$id entry_name=$name entry_provisional=$provisional entry_rungs= entry_figures=
+  fi
   # Costs under a dime keep up to four decimals so they do not collapse to $0.00; trailing zeros
   # beyond the second decimal are dropped ($0.0045, $0.02).
-  cost="cost per task not published"
-  [ "$usd" = none ] || cost=$(awk -v u="$usd" 'BEGIN { s = sprintf(u < 0.01 ? "%.4f" : u < 0.1 ? "%.3f" : "%.2f", u); while (s ~ /0$/ && length(s) - index(s, ".") > 2) sub(/0$/, "", s); printf "$%s per task", s }')
-  [ "$estimated" = true ] && cost="$cost (estimated)"
-  speed="$tps output tokens/s"
-  [ "$tps" = none ] && speed="output speed not published"
-  basis=$snapshot
-  [ "$provisional" = true ] && basis="$snapshot, provisional"
-  benchmark="Benchmark $basis; $figures, $cost, $speed."
+  cost=
+  [ "$usd" = none ] || cost=$(awk -v u="$usd" 'BEGIN { s = sprintf(u < 0.01 ? "%.4f" : u < 0.1 ? "%.3f" : "%.2f", u); while (s ~ /0$/ && length(s) - index(s, ".") > 2) sub(/0$/, "", s); printf "$%s", s }')
   if [ "$effort" = default ]; then
-    agent=$id
-    lead="Executor subagent on $name."
-    effort_value=""
+    figures="Index $index"
+    [ "$index" = none ] && figures="Index not published"
+    if [ "$usd" = none ]; then cost="cost per task not published"; else cost="$cost per task"; fi
+    [ "$estimated" = true ] && [ "$usd" != none ] && cost="$cost (estimated)"
+    speed="$tps output tokens/s"
+    [ "$tps" = none ] && speed="output speed not published"
+    figures="$figures, $cost, $speed"
   else
-    agent=$id-$effort
-    lead="Executor subagent on $name at $effort reasoning effort."
-    effort_value=$effort
+    [ "$index" = none ] && index="not published"
+    if [ "$usd" = none ]; then cost="not published"; elif [ "$estimated" = true ]; then cost="$cost estimated"; fi
+    [ "$tps" = none ] && tps="not published"
+    figures="$effort $index, $cost, $tps"
   fi
-  description="$lead $(guidance "$effort") $benchmark Follows the prompt literally; does not invent scope."
-  render "$agent" "$description" "$id" "$effort_value" > "$out/agents/$agent.md"
+  entry_rungs="${entry_rungs:+$entry_rungs }$effort"
+  entry_figures="${entry_figures:+$entry_figures; }$figures"
 done < "$out/entries.tsv"
+flush
 
 # Models that render no agent (every entry without efforts) would leave an empty set.
 set -- "$out/agents"/*.md
@@ -276,45 +292,46 @@ fi
 if [ -z "$filter" ]; then
   names=$(for f in "$out/agents"/*.md; do basename "$f" .md; done | sort)
 else
-  # Every agent as "<name> <model> <effort>". When two entries yield one name, the file rendered
-  # last is the one that exists, so its model and effort are the ones the guard reads.
+  # Every agent as "<id> <rung> <rung> ...": its model id, which is also its name, and the rungs of
+  # the entry rendered last for that id, the ones the guard reads (fleet_rungs_of).
   catalog=$(jq -r '
-    reduce (.models[] | .id as $id | .efforts | keys_unsorted[]
-      | {name: (if . == "default" then $id else "\($id)-\(.)" end), id: $id, effort: .}) as $a
-      ({}; .[$a.name] = $a)
-    | .[] | "\(.name) \(.id) \(.effort)"' "$staged")
+    reduce (.models[] | select((.efforts | length) > 0)) as $m ({}; .[$m.id] = ($m.efforts | keys_unsorted))
+    | to_entries[] | "\(.key) \(.value | join(" "))"' "$staged")
 
-  # The closure, read the way the guard reads the rules. From the main session: everything when
-  # main.fleet is empty, else what it lists. From a reachable agent, keyed by its model: everything
-  # when rules is empty; nothing when its model has no row; else what the row lists.
+  # The closure, read the way the guard reads the rules. A call names a model and a rung, and the
+  # guard lets it through when the section lists that rung for that model; so a model is reached
+  # when the section lists one of its rungs. From the main session: everything when main.fleet is
+  # empty, else what it lists. From a reachable agent, keyed by its model: everything when rules
+  # is empty; nothing when its model has no row; else what the row lists.
   main_open=
   nonempty .main.fleet || main_open=1
   spawn_open=
   nonempty .rules || spawn_open=1
 
-  # allowed, reading each section's list for a model once rather than once per effort. A list
-  # that cannot be read allows nothing, as the guard refuses every call that reads it.
-  allows() {
-    if [ "$1 $2" != "${listed_for:-}" ]; then
-      listed_for="$1 $2"
-      efforts "$1" "$2" || :
-      listed=$fleet_lines
-    fi
-    case "
-$listed
+  # reaches <section> <id> <rung>...: the section lists one of the rungs for the model. A list that
+  # cannot be read reaches nothing, as the guard refuses every call that reads it.
+  reaches() {
+    section=$1 id=$2
+    shift 2
+    efforts "$section" "$id" || return 1
+    for rung in "$@"; do
+      case "
+$fleet_lines
 " in *"
-$3
+$rung
 "*) return 0 ;; esac
+    done
     return 1
   }
 
-  keep=$(printf '%s\n' "$catalog" | while read -r name id effort; do
-    if [ -n "$main_open" ] || allows .main.fleet "$id" "$effort"; then echo "$name $id $effort"; fi
+  # $rungs is split on purpose: the rungs are plain words.
+  keep=$(printf '%s\n' "$catalog" | while read -r id rungs; do
+    if [ -n "$main_open" ] || reaches .main.fleet "$id" $rungs; then echo "$id"; fi
   done)
   expanded=' '
   while :; do
     callers=
-    for caller in $(printf '%s\n' "$keep" | awk 'NF { print $2 }' | sort -u); do
+    for caller in $(printf '%s\n' "$keep" | awk 'NF' | sort -u); do
       case $expanded in *" $caller "*) ;; *) callers="$callers $caller" ;; esac
     done
     [ -n "$callers" ] || break
@@ -324,13 +341,13 @@ $3
         matrix ".rules[\"$caller\"]" || :
         [ -n "$fleet_lines" ] || continue
       fi
-      found=$(printf '%s\n' "$catalog" | while read -r name id effort; do
-        if [ -n "$spawn_open" ] || allows ".rules[\"$caller\"]" "$id" "$effort"; then echo "$name $id $effort"; fi
+      found=$(printf '%s\n' "$catalog" | while read -r id rungs; do
+        if [ -n "$spawn_open" ] || reaches ".rules[\"$caller\"]" "$id" $rungs; then echo "$id"; fi
       done)
       keep=$(printf '%s\n%s\n' "$keep" "$found" | awk 'NF && !seen[$1]++')
     done
   done
-  names=$(printf '%s\n' "$keep" | awk 'NF { print $1 }' | sort)
+  names=$(printf '%s\n' "$keep" | awk 'NF' | sort)
 
   # A query the closure needed failed: the set it computed is not the rules' answer, so nothing
   # changes. The guard refuses the calls that read the same section.
@@ -355,12 +372,14 @@ if [ -z "$filter" ]; then
     "benchmark task; est. marks a cost the benchmark did not publish; (provisional) marks a model",
     "whose figures the source marks as preliminary, for example a re-run pending or a cost that does",
     "not yet include a pricing tier; the reason is in the benchmark run'\''s evidence ledger.",
+    "Agent type is the call'\''s `subagent_type`, one per model; Effort is the named `effort` the call",
+    "passes with it (n/a: the model has no effort control, so the call passes none).",
     "Generated from models.json.",
     "",
-    "| Model | Effort | Index | $ per task | Index per $ | Output tokens/s |",
-    "|---|---|---:|---:|---:|---:|",
-    (.models[] | "\(.name)\(if .provisional then " (provisional)" else "" end)" as $n | .efforts | to_entries[]
-      | "| \($n) | \(if .key == "default" then "n/a" else .key end) | \(.value.index // "not published") | \(if .value.usd then "\(.value.usd)\(if .value.usd_estimated then " est." else "" end)" else "not published" end) | \(if .value.index and .value.usd then (.value.index / .value.usd * 10 | round) / 10 else "n/a" end) | \(.value.tps // "not published") |")
+    "| Model | Agent type | Effort | Index | $ per task | Index per $ | Output tokens/s |",
+    "|---|---|---|---:|---:|---:|---:|",
+    (.models[] | "\(.name)\(if .provisional then " (provisional)" else "" end)" as $n | .id as $id | .efforts | to_entries[]
+      | "| \($n) | `fleet:\($id)` | \(if .key == "default" then "n/a" else .key end) | \(.value.index // "not published") | \(if .value.usd then "\(.value.usd)\(if .value.usd_estimated then " est." else "" end)" else "not published" end) | \(if .value.index and .value.usd then (.value.index / .value.usd * 10 | round) / 10 else "n/a" end) | \(.value.tps // "not published") |")
 ' "$staged" > "$staged_reference"; then
     echo "generate-agents.sh: rendering the benchmark table failed; agents/ and the reference left as they are" >&2
     exit 1

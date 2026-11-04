@@ -4,51 +4,53 @@ Historical routing priors, not live measurements. Index is higher-is-better; cos
 benchmark task; est. marks a cost the benchmark did not publish; (provisional) marks a model
 whose figures the source marks as preliminary, for example a re-run pending or a cost that does
 not yet include a pricing tier; the reason is in the benchmark run's evidence ledger.
+Agent type is the call's `subagent_type`, one per model; Effort is the named `effort` the call
+passes with it (n/a: the model has no effort control, so the call passes none).
 Generated from models.json.
 
-| Model | Effort | Index | $ per task | Index per $ | Output tokens/s |
-|---|---|---:|---:|---:|---:|
-| Claude Fable 5.1 | low | 47 | 2.37 | 19.8 | 53 |
-| Claude Fable 5.1 | medium | 49 | 2.98 | 16.4 | 53 |
-| Claude Fable 5.1 | high | 51 | 3.91 | 13 | 58 |
-| Claude Fable 5.1 | xhigh | 53 | 5.98 | 8.9 | 60 |
-| Claude Fable 5.1 | max | 53 | 7.63 | 6.9 | 68 |
-| Claude Opus 5.5 | low | 42 | 0.55 | 76.4 | 79 |
-| Claude Opus 5.5 | medium | 51 | 1.34 | 38.1 | 76 |
-| Claude Opus 5.5 | high | 54 | 1.82 | 29.7 | 76 |
-| Claude Opus 5.5 | xhigh | 56 | 3.46 | 16.2 | 80 |
-| Claude Opus 5.5 | max | 58 | 5.98 | 9.7 | 96 |
-| Claude Sonnet 5.5 (provisional) | low | 36 | 0.35 | 102.9 | 101 |
-| Claude Sonnet 5.5 (provisional) | medium | 41 | 0.48 | 85.4 | 102 |
-| Claude Sonnet 5.5 (provisional) | high | 47 | 0.88 | 53.4 | 104 |
-| Claude Sonnet 5.5 (provisional) | xhigh | 52 | 2.01 | 25.9 | 107 |
-| Claude Sonnet 5.5 (provisional) | max | 56 | 5.46 | 10.3 | 136 |
-| Claude Haiku 4.5 | n/a | 17 | 0.28 | 60.7 | 90 |
-| Claude Haiku 5.5 (provisional) | low | 29 | 0.02 | 1450 | 175.2 |
-| Claude Haiku 5.5 (provisional) | medium | 34 | 0.05 | 680 | 151.1 |
-| Claude Haiku 5.5 (provisional) | high | 38 | 0.08 | 475 | 156.6 |
-| Claude Haiku 5.5 (provisional) | xhigh | 41 | 0.12 | 341.7 | 185.2 |
-| Claude Haiku 5.5 (provisional) | max | 43 | 0.21 | 204.8 | 240.4 |
-| GPT-6 Astra | low | 46 | 0.82 | 56.1 | 44 |
-| GPT-6 Astra | medium | 50 | 1.54 | 32.5 | 43 |
-| GPT-6 Astra | high | 51 | 1.73 | 29.5 | 46 |
-| GPT-6 Astra | xhigh | 52 | 2.31 | 22.5 | 45 |
-| GPT-6 Astra | max | 53 | 3.26 | 16.3 | 46 |
-| GPT-6.1 Sol | low | 42 | 0.13 | 323.1 | 49 |
-| GPT-6.1 Sol | medium | 48 | 0.21 | 228.6 | 50 |
-| GPT-6.1 Sol | high | 50 | 0.32 | 156.3 | 50 |
-| GPT-6.1 Sol | xhigh | 51 | 0.39 | 130.8 | 53 |
-| GPT-6.1 Sol | max | 52 | 0.72 | 72.2 | 55 |
-| GPT-5.6 Terra | low | 27 | 0.14 | 192.9 | 84 |
-| GPT-5.6 Terra | medium | 30 | 0.18 | 166.7 | 94 |
-| GPT-5.6 Terra | high | 34 | 0.34 | 100 | 85 |
-| GPT-5.6 Terra | xhigh | 38 | 0.63 | 60.3 | 99 |
-| GPT-5.6 Terra | max | 42 | 1.40 | 30 | 108 |
-| GPT-6 Luna | low | 22 | 0.0045 | 4888.9 | 124 |
-| GPT-6 Luna | medium | 30 | 0.02 | 1500 | not published |
-| GPT-6 Luna | high | 33 | 0.03 | 1100 | 112 |
-| GPT-6 Luna | xhigh | 35 | 0.04 | 875 | 115 |
-| GPT-6 Luna | max | 38 | 0.07 | 542.9 | 127 |
+| Model | Agent type | Effort | Index | $ per task | Index per $ | Output tokens/s |
+|---|---|---|---:|---:|---:|---:|
+| Claude Fable 5.1 | `fleet:claude-fable-5-1` | low | 47 | 2.37 | 19.8 | 53 |
+| Claude Fable 5.1 | `fleet:claude-fable-5-1` | medium | 49 | 2.98 | 16.4 | 53 |
+| Claude Fable 5.1 | `fleet:claude-fable-5-1` | high | 51 | 3.91 | 13 | 58 |
+| Claude Fable 5.1 | `fleet:claude-fable-5-1` | xhigh | 53 | 5.98 | 8.9 | 60 |
+| Claude Fable 5.1 | `fleet:claude-fable-5-1` | max | 53 | 7.63 | 6.9 | 68 |
+| Claude Opus 5.5 | `fleet:claude-opus-5-5` | low | 42 | 0.55 | 76.4 | 79 |
+| Claude Opus 5.5 | `fleet:claude-opus-5-5` | medium | 51 | 1.34 | 38.1 | 76 |
+| Claude Opus 5.5 | `fleet:claude-opus-5-5` | high | 54 | 1.82 | 29.7 | 76 |
+| Claude Opus 5.5 | `fleet:claude-opus-5-5` | xhigh | 56 | 3.46 | 16.2 | 80 |
+| Claude Opus 5.5 | `fleet:claude-opus-5-5` | max | 58 | 5.98 | 9.7 | 96 |
+| Claude Sonnet 5.5 (provisional) | `fleet:claude-sonnet-5-5` | low | 36 | 0.35 | 102.9 | 101 |
+| Claude Sonnet 5.5 (provisional) | `fleet:claude-sonnet-5-5` | medium | 41 | 0.48 | 85.4 | 102 |
+| Claude Sonnet 5.5 (provisional) | `fleet:claude-sonnet-5-5` | high | 47 | 0.88 | 53.4 | 104 |
+| Claude Sonnet 5.5 (provisional) | `fleet:claude-sonnet-5-5` | xhigh | 52 | 2.01 | 25.9 | 107 |
+| Claude Sonnet 5.5 (provisional) | `fleet:claude-sonnet-5-5` | max | 56 | 5.46 | 10.3 | 136 |
+| Claude Haiku 4.5 | `fleet:claude-haiku-4-5` | n/a | 17 | 0.28 | 60.7 | 90 |
+| Claude Haiku 5.5 (provisional) | `fleet:claude-haiku-5-5` | low | 29 | 0.02 | 1450 | 175.2 |
+| Claude Haiku 5.5 (provisional) | `fleet:claude-haiku-5-5` | medium | 34 | 0.05 | 680 | 151.1 |
+| Claude Haiku 5.5 (provisional) | `fleet:claude-haiku-5-5` | high | 38 | 0.08 | 475 | 156.6 |
+| Claude Haiku 5.5 (provisional) | `fleet:claude-haiku-5-5` | xhigh | 41 | 0.12 | 341.7 | 185.2 |
+| Claude Haiku 5.5 (provisional) | `fleet:claude-haiku-5-5` | max | 43 | 0.21 | 204.8 | 240.4 |
+| GPT-6 Astra | `fleet:gpt-6-astra` | low | 46 | 0.82 | 56.1 | 44 |
+| GPT-6 Astra | `fleet:gpt-6-astra` | medium | 50 | 1.54 | 32.5 | 43 |
+| GPT-6 Astra | `fleet:gpt-6-astra` | high | 51 | 1.73 | 29.5 | 46 |
+| GPT-6 Astra | `fleet:gpt-6-astra` | xhigh | 52 | 2.31 | 22.5 | 45 |
+| GPT-6 Astra | `fleet:gpt-6-astra` | max | 53 | 3.26 | 16.3 | 46 |
+| GPT-6.1 Sol | `fleet:gpt-6.1-sol` | low | 42 | 0.13 | 323.1 | 49 |
+| GPT-6.1 Sol | `fleet:gpt-6.1-sol` | medium | 48 | 0.21 | 228.6 | 50 |
+| GPT-6.1 Sol | `fleet:gpt-6.1-sol` | high | 50 | 0.32 | 156.3 | 50 |
+| GPT-6.1 Sol | `fleet:gpt-6.1-sol` | xhigh | 51 | 0.39 | 130.8 | 53 |
+| GPT-6.1 Sol | `fleet:gpt-6.1-sol` | max | 52 | 0.72 | 72.2 | 55 |
+| GPT-5.6 Terra | `fleet:gpt-5.6-terra` | low | 27 | 0.14 | 192.9 | 84 |
+| GPT-5.6 Terra | `fleet:gpt-5.6-terra` | medium | 30 | 0.18 | 166.7 | 94 |
+| GPT-5.6 Terra | `fleet:gpt-5.6-terra` | high | 34 | 0.34 | 100 | 85 |
+| GPT-5.6 Terra | `fleet:gpt-5.6-terra` | xhigh | 38 | 0.63 | 60.3 | 99 |
+| GPT-5.6 Terra | `fleet:gpt-5.6-terra` | max | 42 | 1.40 | 30 | 108 |
+| GPT-6 Luna | `fleet:gpt-6-luna` | low | 22 | 0.0045 | 4888.9 | 124 |
+| GPT-6 Luna | `fleet:gpt-6-luna` | medium | 30 | 0.02 | 1500 | not published |
+| GPT-6 Luna | `fleet:gpt-6-luna` | high | 33 | 0.03 | 1100 | 112 |
+| GPT-6 Luna | `fleet:gpt-6-luna` | xhigh | 35 | 0.04 | 875 | 115 |
+| GPT-6 Luna | `fleet:gpt-6-luna` | max | 38 | 0.07 | 542.9 | 127 |
 
 ## Escalation ladder
 
