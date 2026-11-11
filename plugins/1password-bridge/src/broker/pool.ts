@@ -7,10 +7,11 @@
  * inside an ordinary call. 1Password denies a second prompt while one is open,
  * so every call of every account runs through one FIFO queue, one at a time.
  *
- * The SDK cannot cancel a call. An operation still pending after 120 s fails
- * its caller with `auth_timeout`, and the queue then starts nothing more:
- * advancing would overlap SDK calls and prompts. It calls `onStuck` instead,
- * and the broker ends the process, the one way to cancel the native call.
+ * The SDK cannot cancel a call. A real operation (connect included) still
+ * pending after 120 s fails its caller with `auth_timeout`, and the queue then
+ * starts nothing more: advancing would overlap SDK calls and prompts. It calls
+ * `onStuck` instead, and the broker ends the process, the one way to cancel
+ * the native call.
  *
  * Keep-alive: every 240 s each account whose last success is under 8 minutes
  * old is pinged with `listVaults`, through the queue. The ping checks the age
@@ -18,6 +19,14 @@
  * another account's prompt must not run on an expired authorization and ask
  * for Touch ID unasked. An older client is not pinged; its next real request
  * goes through the queue like any other.
+ *
+ * A ping still pending after 120 s is given up, not stuck: nobody waits for
+ * it, so the broker and its masks stay. The pool forgets that account's client
+ * and its late outcome only frees the queue. Until then nothing starts and the
+ * keep-alive enqueues no ping; `busy()` ignores the given-up call and the pings
+ * queued behind it. A real request behind a running ping has its own timer:
+ * 120 s from when it was queued or from the ping's start, whichever is later.
+ * When it fires before the ping settles, the request takes the stuck path above.
  */
 
 import type { FailureCode } from '../protocol.ts';
@@ -62,8 +71,13 @@ export interface PoolOptions {
   connect(account: string): Promise<AccountClient>;
   /** Whether this broker still owns the socket path; checked before every operation. */
   owns(): boolean;
-  /** Called once, when an operation outlives the timeout. */
+  /** Called once, when a real operation outlives the timeout or waits that long behind a ping. */
   onStuck(): void;
+  /**
+   * A keep-alive ping outlived the timeout (`given_up`, result `auth_timeout`) or, after that,
+   * settled (`settled`, result `ok` or the failure code). Codes only: no account, no value.
+   */
+  onHungPing?(stage: 'given_up' | 'settled', result: string): void;
   clock?: Clock;
   operationTimeoutMs?: number;
   keepAliveIntervalMs?: number;
@@ -81,7 +95,7 @@ export interface Pool {
   abort(code: FailureCode, message: string): void;
   /** Aborts, stops the keep-alive and drops every client. */
   close(): void;
-  /** True while an operation runs or waits in the queue. */
+  /** True while an operation runs or a real request waits; a given-up ping and queued pings do not count. */
   busy(): boolean;
   /** Forgets every authorized client; the next operation connects (and asks for Touch ID) again. */
   drop(): void;
@@ -115,6 +129,7 @@ interface Job {
   resolve(value: unknown): void;
   reject(err: unknown): void;
   ping: boolean;
+  queuedAt: number;
 }
 
 export function createPool(options: PoolOptions): Pool {
@@ -126,8 +141,15 @@ export function createPool(options: PoolOptions): Pool {
   const pinging = new Set<string>();
   let running = false;
   let refusal: PoolError | undefined;
+  /** The running ping and when it started; undefined while a real operation or nothing runs. */
+  let ping: { startedAt: number; givenUp: boolean } | undefined;
+  /** The timer of the first real request waiting behind the running ping. */
+  let wait: { job: Job; timer: unknown } | undefined;
 
   const fresh = (entry: Entry | undefined): boolean => entry?.lastOk !== undefined && clock.now() - entry.lastOk < windowMs;
+
+  const timedOut = (): PoolError =>
+    new PoolError('auth_timeout', `1Password did not answer within ${Math.round(timeoutMs / 1000)} s`);
 
   const owns = (): boolean => {
     try {
@@ -137,12 +159,44 @@ export function createPool(options: PoolOptions): Pool {
     }
   };
 
-  function enqueue(account: string, fn: Job['fn'], ping: boolean): Promise<unknown> {
+  function enqueue(account: string, fn: Job['fn'], isPing: boolean): Promise<unknown> {
     if (refusal !== undefined) return Promise.reject(new PoolError(refusal.code, refusal.message));
     return new Promise((resolve, reject) => {
-      queue.push({ account, fn, resolve, reject, ping });
+      queue.push({ account, fn, resolve, reject, ping: isPing, queuedAt: clock.now() });
       pump();
+      armWait();
     });
+  }
+
+  /**
+   * Bounds the wait of the first real request behind the running ping: the timeout, counted from
+   * its queueing or the ping's start, whichever is later. Later requests were queued no earlier,
+   * and when this one fails the pool refuses everything anyway.
+   */
+  function armWait(): void {
+    if (ping === undefined || wait !== undefined || refusal !== undefined) return;
+    const job = queue.find((j) => !j.ping);
+    if (job === undefined) return;
+    const deadline = Math.max(job.queuedAt, ping.startedAt) + timeoutMs;
+    const timer = clock.setTimeout(
+      () => {
+        wait = undefined;
+        const index = queue.indexOf(job);
+        if (refusal !== undefined || index < 0) return;
+        queue.splice(index, 1);
+        refusal = timedOut();
+        job.reject(refusal);
+        options.onStuck();
+      },
+      Math.max(0, deadline - clock.now()),
+    );
+    wait = { job, timer };
+  }
+
+  function clearWait(): void {
+    if (wait === undefined) return;
+    clock.clearTimeout(wait.timer);
+    wait = undefined;
   }
 
   function pump(): void {
@@ -166,20 +220,35 @@ export function createPool(options: PoolOptions): Pool {
 
   function start(job: Job): void {
     running = true;
+    const current = job.ping ? { startedAt: clock.now(), givenUp: false } : undefined;
+    ping = current;
+    armWait();
     let done = false;
     const timer = clock.setTimeout(() => {
       if (done) return;
+      if (current !== undefined) {
+        // Nobody waits for a ping: give it up, keep the broker. The call still holds the queue.
+        current.givenUp = true;
+        clients.delete(job.account);
+        job.reject(timedOut());
+        options.onHungPing?.('given_up', 'auth_timeout');
+        return;
+      }
       done = true;
-      refusal = new PoolError('auth_timeout', `1Password did not answer within ${Math.round(timeoutMs / 1000)} s`);
+      refusal = timedOut();
       job.reject(refusal);
       options.onStuck();
     }, timeoutMs);
-    const finish = (settle: () => void): void => {
+    const finish = (settle: () => void, result: () => string): void => {
       if (done) return;
       done = true;
       clock.clearTimeout(timer);
       running = false;
-      settle();
+      ping = undefined;
+      clearWait();
+      // A given-up ping's late outcome only frees the queue; its client stays forgotten.
+      if (current?.givenUp === true) options.onHungPing?.('settled', result());
+      else settle();
       pump();
     };
     (async () => {
@@ -191,24 +260,31 @@ export function createPool(options: PoolOptions): Pool {
       return { entry, value: await job.fn(entry.client) };
     })().then(
       ({ entry, value }) =>
-        finish(() => {
-          entry.lastOk = clock.now();
-          job.resolve(value);
-        }),
+        finish(
+          () => {
+            entry.lastOk = clock.now();
+            job.resolve(value);
+          },
+          () => 'ok',
+        ),
       (err: unknown) =>
-        finish(() => {
-          const entry = clients.get(job.account);
-          // A lookup miss is an answer from 1Password, not a broken client.
-          if (err instanceof LookupError && entry !== undefined) entry.lastOk = clock.now();
-          else clients.delete(job.account);
-          const failure = mapError(err);
-          job.reject(new PoolError(failure.code, failure.message));
-        }),
+        finish(
+          () => {
+            const entry = clients.get(job.account);
+            // A lookup miss is an answer from 1Password, not a broken client.
+            if (err instanceof LookupError && entry !== undefined) entry.lastOk = clock.now();
+            else clients.delete(job.account);
+            const failure = mapError(err);
+            job.reject(new PoolError(failure.code, failure.message));
+          },
+          () => mapError(err).code,
+        ),
     );
   }
 
   function tick(): void {
-    if (refusal !== undefined) return;
+    // No ping piles up behind a given-up one; the queue's own head check skips any that went stale.
+    if (refusal !== undefined || ping?.givenUp === true) return;
     for (const [account, entry] of clients) {
       if (!fresh(entry) || pinging.has(account)) continue;
       pinging.add(account);
@@ -221,6 +297,7 @@ export function createPool(options: PoolOptions): Pool {
 
   function abort(code: FailureCode, message: string): void {
     refusal ??= new PoolError(code, message);
+    clearWait();
     for (const job of queue.splice(0)) job.reject(new PoolError(code, message));
     pinging.clear();
   }
@@ -230,7 +307,10 @@ export function createPool(options: PoolOptions): Pool {
     tick,
     accounts: () => [...clients].map(([account, entry]) => ({ account, warm: fresh(entry) })),
     abort,
-    busy: () => running || queue.length > 0,
+    busy() {
+      const givenUp = ping?.givenUp === true;
+      return (running && !givenUp) || queue.some((job) => !givenUp || !job.ping);
+    },
     drop() {
       clients.clear();
       pinging.clear();

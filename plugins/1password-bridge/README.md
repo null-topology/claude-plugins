@@ -143,8 +143,11 @@ when no other ticket holds it.
 One broker process per user and protocol version serves every session. The MCP server starts it
 when `fields`, `issue_tickets` or `release` finds none running; `accounts`, the hooks and
 `op-bridge` never start it. It holds the 1Password connections, the tickets and the masks, all in
-memory, and draws the windows. It makes one 1Password call at a time; a call still pending after
-120 seconds fails with `auth_timeout` and the broker exits, so the next request starts a new one.
+memory, and draws the windows. It makes one 1Password call at a time; a request still pending after
+120 seconds, or still waiting that long behind a keep-alive call, fails with `auth_timeout` and the
+broker exits, so the next request starts a new one. A keep-alive call still pending after 120
+seconds is given up instead: the broker stays, with its masks, and forgets that account's
+connection, so the next request for it connects again once the call has returned.
 When `idle_window_minutes` have passed since the last `fields`, `issue_tickets` or redeem, it drops
 its cached 1Password clients; the next 1Password operation reconnects and may make the 1Password
 app ask for authorization again. It exits only when the idle window has passed, no client is

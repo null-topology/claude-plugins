@@ -281,6 +281,8 @@ export async function startBroker(options: BrokerOptions): Promise<Broker | null
     connect: options.connect,
     owns,
     onStuck,
+    // A given-up keep-alive ping is logged, not stuck: the broker and its masks stay.
+    onHungPing: (stage, result) => log(stage === 'given_up' ? 'ping_given_up' : 'ping_settled', { result }),
     ...(options.clock === undefined ? {} : { clock: options.clock }),
     ...(options.operationTimeoutMs === undefined ? {} : { operationTimeoutMs: options.operationTimeoutMs }),
   });

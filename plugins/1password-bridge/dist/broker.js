@@ -1863,7 +1863,7 @@ import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 
 // src/version.ts
-var VERSION = "0.2.2";
+var VERSION = "0.2.3";
 var PROTOCOL_VERSION = 2;
 
 // src/paths.ts
@@ -3140,7 +3140,10 @@ function createPool(options) {
   const pinging = /* @__PURE__ */ new Set();
   let running = false;
   let refusal;
+  let ping;
+  let wait;
   const fresh = (entry) => entry?.lastOk !== void 0 && clock.now() - entry.lastOk < windowMs;
+  const timedOut = () => new PoolError("auth_timeout", `1Password did not answer within ${Math.round(timeoutMs / 1e3)} s`);
   const owns = () => {
     try {
       return options.owns();
@@ -3148,12 +3151,37 @@ function createPool(options) {
       return false;
     }
   };
-  function enqueue(account, fn, ping) {
+  function enqueue(account, fn, isPing) {
     if (refusal !== void 0) return Promise.reject(new PoolError(refusal.code, refusal.message));
     return new Promise((resolve2, reject) => {
-      queue.push({ account, fn, resolve: resolve2, reject, ping });
+      queue.push({ account, fn, resolve: resolve2, reject, ping: isPing, queuedAt: clock.now() });
       pump();
+      armWait();
     });
+  }
+  function armWait() {
+    if (ping === void 0 || wait !== void 0 || refusal !== void 0) return;
+    const job = queue.find((j) => !j.ping);
+    if (job === void 0) return;
+    const deadline = Math.max(job.queuedAt, ping.startedAt) + timeoutMs;
+    const timer = clock.setTimeout(
+      () => {
+        wait = void 0;
+        const index = queue.indexOf(job);
+        if (refusal !== void 0 || index < 0) return;
+        queue.splice(index, 1);
+        refusal = timedOut();
+        job.reject(refusal);
+        options.onStuck();
+      },
+      Math.max(0, deadline - clock.now())
+    );
+    wait = { job, timer };
+  }
+  function clearWait() {
+    if (wait === void 0) return;
+    clock.clearTimeout(wait.timer);
+    wait = void 0;
   }
   function pump() {
     while (!running && refusal === void 0) {
@@ -3175,20 +3203,33 @@ function createPool(options) {
   }
   function start(job) {
     running = true;
+    const current = job.ping ? { startedAt: clock.now(), givenUp: false } : void 0;
+    ping = current;
+    armWait();
     let done = false;
     const timer = clock.setTimeout(() => {
       if (done) return;
+      if (current !== void 0) {
+        current.givenUp = true;
+        clients.delete(job.account);
+        job.reject(timedOut());
+        options.onHungPing?.("given_up", "auth_timeout");
+        return;
+      }
       done = true;
-      refusal = new PoolError("auth_timeout", `1Password did not answer within ${Math.round(timeoutMs / 1e3)} s`);
+      refusal = timedOut();
       job.reject(refusal);
       options.onStuck();
     }, timeoutMs);
-    const finish = (settle) => {
+    const finish = (settle, result) => {
       if (done) return;
       done = true;
       clock.clearTimeout(timer);
       running = false;
-      settle();
+      ping = void 0;
+      clearWait();
+      if (current?.givenUp === true) options.onHungPing?.("settled", result());
+      else settle();
       pump();
     };
     (async () => {
@@ -3199,21 +3240,27 @@ function createPool(options) {
       }
       return { entry, value: await job.fn(entry.client) };
     })().then(
-      ({ entry, value }) => finish(() => {
-        entry.lastOk = clock.now();
-        job.resolve(value);
-      }),
-      (err) => finish(() => {
-        const entry = clients.get(job.account);
-        if (err instanceof LookupError && entry !== void 0) entry.lastOk = clock.now();
-        else clients.delete(job.account);
-        const failure = mapError(err);
-        job.reject(new PoolError(failure.code, failure.message));
-      })
+      ({ entry, value }) => finish(
+        () => {
+          entry.lastOk = clock.now();
+          job.resolve(value);
+        },
+        () => "ok"
+      ),
+      (err) => finish(
+        () => {
+          const entry = clients.get(job.account);
+          if (err instanceof LookupError && entry !== void 0) entry.lastOk = clock.now();
+          else clients.delete(job.account);
+          const failure = mapError(err);
+          job.reject(new PoolError(failure.code, failure.message));
+        },
+        () => mapError(err).code
+      )
     );
   }
   function tick() {
-    if (refusal !== void 0) return;
+    if (refusal !== void 0 || ping?.givenUp === true) return;
     for (const [account, entry] of clients) {
       if (!fresh(entry) || pinging.has(account)) continue;
       pinging.add(account);
@@ -3224,6 +3271,7 @@ function createPool(options) {
   const interval = clock.setInterval(tick, options.keepAliveIntervalMs ?? KEEP_ALIVE_INTERVAL_MS);
   function abort(code, message) {
     refusal ??= new PoolError(code, message);
+    clearWait();
     for (const job of queue.splice(0)) job.reject(new PoolError(code, message));
     pinging.clear();
   }
@@ -3232,7 +3280,10 @@ function createPool(options) {
     tick,
     accounts: () => [...clients].map(([account, entry]) => ({ account, warm: fresh(entry) })),
     abort,
-    busy: () => running || queue.length > 0,
+    busy() {
+      const givenUp = ping?.givenUp === true;
+      return running && !givenUp || queue.some((job) => !givenUp || !job.ping);
+    },
     drop() {
       clients.clear();
       pinging.clear();
@@ -3536,6 +3587,8 @@ async function startBroker(options) {
     connect: options.connect,
     owns,
     onStuck,
+    // A given-up keep-alive ping is logged, not stuck: the broker and its masks stay.
+    onHungPing: (stage, result) => log2(stage === "given_up" ? "ping_given_up" : "ping_settled", { result }),
     ...options.clock === void 0 ? {} : { clock: options.clock },
     ...options.operationTimeoutMs === void 0 ? {} : { operationTimeoutMs: options.operationTimeoutMs }
   });

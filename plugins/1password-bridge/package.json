@@ -1,6 +1,6 @@
 {
   "name": "1password-bridge",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Claude Code plugin that hands 1Password fields to single approved commands through one-use tickets.",
   "license": "MIT",
   "private": true,

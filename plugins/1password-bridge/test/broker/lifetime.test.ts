@@ -2,7 +2,7 @@ import { afterEach, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import type { Socket } from 'node:net';
-import { KEEP_ALIVE_INTERVAL_MS } from '../../src/broker/pool.ts';
+import { KEEP_ALIVE_INTERVAL_MS, OPERATION_TIMEOUT_MS } from '../../src/broker/pool.ts';
 import { encodeAck, parseResponse, type Request } from '../../src/protocol.ts';
 import { FORGET_SCAN_MS, SESSION_FORGET_MS } from '../../src/session-lifetime.ts';
 import { PROTOCOL_VERSION } from '../../src/version.ts';
@@ -256,6 +256,35 @@ describe('broker lifetime', () => {
     assert.deepEqual(h.exits, [], 'the open delivery keeps the process');
     socket.write(encodeAck('received'));
     socket.end(encodeAck('delivered'));
+  });
+
+  test('a keep-alive ping that never returns does not end the broker; the masks stay', async () => {
+    const clock = new FakeClock();
+    const w = scriptedDialog();
+    const events: string[] = [];
+    h = harness({
+      clock,
+      dialog: w.dialog,
+      attributionWaitMs: 200,
+      recheckMs: 20,
+      log: (event, detail) => events.push(`${event} ${String(detail?.result ?? '')}`.trim()),
+    });
+    await h.start();
+    const path = h.options.socketPath;
+    const [id = ''] = await issue(path);
+    await deliver(h, w, id);
+    h.account.listVaults = () => new Promise(() => {});
+    await clock.advance(KEEP_ALIVE_INTERVAL_MS + OPERATION_TIMEOUT_MS);
+    // Past the stuck exit delay, which runs on the real clock.
+    await sleep(100);
+    assert.deepEqual(h.exits, [], 'the broker is still running');
+    assert.ok(events.includes('ping_given_up auth_timeout'), events.join(', '));
+    assert.ok(!events.includes('stuck'), events.join(', '));
+    const masked = await call(path, { v, op: 'mask', session: SESSION, tickets: [id], output: `token ${TOKEN_VALUE}` });
+    assert.deepEqual(masked, { ok: true, op: 'mask', known: true, changed: true, output: `token <masked ticket=${id}>`, missing: [] });
+    const status = await call(path, { v, op: 'status' });
+    assert.ok(status !== null && status.ok && status.op === 'status');
+    assert.deepEqual(status.accounts, [], 'the hung client was forgotten');
   });
 
   test('a 1Password operation in flight defers the drop of the clients', async () => {
