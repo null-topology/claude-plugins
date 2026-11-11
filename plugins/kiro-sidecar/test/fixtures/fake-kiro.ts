@@ -48,7 +48,15 @@
  * prompt arrived. In a working directory holding `fake-cancel`, the file's
  * text changes what a `session/cancel` does: `ignore` (nothing, for every
  * cancel) or `ignore-first` (nothing for the first cancel of a turn; a later
- * one acts as usual).
+ * one acts as usual). A `fake-close` file changes how `session/close` is
+ * answered (see `closeMode`).
+ *
+ * Scenarios for the client's handling of what it does not take as turn
+ * content: `marker` (the prompt text is `invalid <marker>` or `valid <marker>`:
+ * a `session/update` carrying the marker that its schema rejects, or a valid
+ * `config_option_update` carrying it), `notifications` (two notifications no
+ * handler is named for, holding the prompt text) and `close-stdout` (the agent
+ * closes its stdout and keeps running).
  *
  * Scenario `harness` is driven by the prompt text, so one session can go
  * through several kinds of turn: `forge` sends two messages through the
@@ -76,21 +84,34 @@
  * prompt answers `ok`.
  */
 import { spawn } from 'node:child_process';
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, closeSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { Readable, Writable } from 'node:stream';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { AgentSideConnection, RequestError, ndJsonStream } from '@agentclientprotocol/sdk';
+import { RequestError, agent, methods, ndJsonStream } from '@agentclientprotocol/sdk';
 import type {
-  Agent,
+  AgentApp,
   AnyMessage,
+  AuthenticateRequest,
+  AuthenticateResponse,
+  CancelNotification,
+  CloseSessionRequest,
+  CloseSessionResponse,
   ContentBlock,
+  InitializeRequest,
   InitializeResponse,
+  LoadSessionRequest,
+  LoadSessionResponse,
+  NewSessionRequest,
   NewSessionResponse,
   PermissionOption,
+  PromptRequest,
   PromptResponse,
   RequestPermissionResponse,
   SessionConfigOption,
+  SessionNotification,
   SessionUpdate,
+  SetSessionConfigOptionRequest,
+  SetSessionConfigOptionResponse,
 } from '@agentclientprotocol/sdk';
 import { TOOL_SERVER_TOOLS } from '../../src/session/tool-server.ts';
 
@@ -183,6 +204,17 @@ const OWN_TOOLS_HOLD = /^own-tools-then-hold ([0-9]+) (.*)$/s;
 /** `fake-cancel`: which cancels the scripted agent ignores; `honour` without the file. */
 const CANCEL_MODE = existsSync('fake-cancel') ? readFileSync('fake-cancel', 'utf8').trim() : 'honour';
 
+/**
+ * `fake-close`, read when a `session/close` comes: how the scripted agent
+ * answers it; `{}` at once without the file. `not-found` answers `-32002`,
+ * `error` answers `-32603`, `slow <ms>` answers `{}` after <ms> ms and leaves
+ * a running turn running, and `ends-turn <ms>` ends a running turn at once
+ * (`cancelled`), as ACP says a close does, and answers `{}` after <ms> ms.
+ */
+function closeMode(): string {
+  return existsSync('fake-close') ? readFileSync('fake-close', 'utf8').trim() : 'answer';
+}
+
 /** `harness` `fill-then-hold <json>`: the prompt prefix, followed by a JSON `FillSizes`. */
 const FILL_COMMAND = 'fill-then-hold ';
 
@@ -274,8 +306,51 @@ const stream = {
   writable: raw.writable,
 };
 
-const agent: Agent = config.scenario === 'replay' ? replayAgent() : scriptedAgent();
-const connection = new AgentSideConnection(() => agent, stream);
+/** The methods a fake agent answers; the optional ones only when it has them. */
+interface FakeAgent {
+  initialize(params: InitializeRequest): Promise<InitializeResponse>;
+  authenticate(params: AuthenticateRequest): Promise<AuthenticateResponse>;
+  newSession(params: NewSessionRequest): Promise<NewSessionResponse>;
+  loadSession?(params: LoadSessionRequest): Promise<LoadSessionResponse>;
+  closeSession?(params: CloseSessionRequest): Promise<CloseSessionResponse>;
+  setSessionConfigOption(params: SetSessionConfigOptionRequest): Promise<SetSessionConfigOptionResponse>;
+  prompt(params: PromptRequest): Promise<PromptResponse>;
+  cancel(params: CancelNotification): Promise<void>;
+}
+
+/**
+ * The agent app of a fake agent. A method the fake lacks gets
+ * method-not-found, and notifications other than `session/cancel` are
+ * ignored. `initialize` is registered with a parser of its own: the SDK's
+ * built-in `initialize` handler also rejects every other request until
+ * `initialize` is answered, which SDK 1.x agents (Kiro bundles one) do not do.
+ */
+function appOf(fake: FakeAgent): AgentApp {
+  const app = agent()
+    .onRequest('initialize', (params: unknown) => params as InitializeRequest, ({ params }) => fake.initialize(params))
+    .onRequest(methods.agent.authenticate, ({ params }) => fake.authenticate(params))
+    .onRequest(methods.agent.session.new, ({ params }) => fake.newSession(params))
+    .onRequest(methods.agent.session.setConfigOption, ({ params }) => fake.setSessionConfigOption(params))
+    .onRequest(methods.agent.session.prompt, ({ params }) => fake.prompt(params))
+    .onNotification(methods.agent.session.cancel, ({ params }) => fake.cancel(params));
+  const { loadSession, closeSession } = fake;
+  if (loadSession !== undefined) {
+    app.onRequest(methods.agent.session.load, ({ params }) => loadSession(params));
+  }
+  if (closeSession !== undefined) {
+    app.onRequest(methods.agent.session.close, ({ params }) => closeSession(params));
+  }
+  return app;
+}
+
+const connection = appOf(config.scenario === 'replay' ? replayAgent() : scriptedAgent()).connect(stream);
+/** The client, as the fake calls it. */
+const peer = connection.client;
+
+/** Sends one `session/update`. */
+function sessionUpdate(params: SessionNotification): Promise<void> {
+  return peer.notify(methods.client.session.update, params);
+}
 
 // --- replay -----------------------------------------------------------------
 
@@ -286,7 +361,7 @@ interface Segment {
   readonly after: Recorded[];
 }
 
-function replayAgent(): Agent {
+function replayAgent(): FakeAgent {
   const segments: Segment[] = [];
   let current: Segment | undefined;
   for (const record of recording) {
@@ -360,12 +435,12 @@ async function send(record: Recorded, pending: Map<number, Promise<unknown>>): P
     return;
   }
   if (msg.id !== undefined) {
-    const answer = connection.request(msg.method, msg.params as Record<string, unknown>);
+    const answer = peer.request(msg.method, msg.params);
     answer.catch(() => {});
     pending.set(msg.id, answer);
     return;
   }
-  await connection.notify(msg.method, msg.params as Record<string, unknown>);
+  await peer.notify(msg.method, msg.params);
 }
 
 // --- MCP server status ------------------------------------------------------
@@ -396,7 +471,7 @@ const SIDECAR_TOOLS = TOOL_SERVER_TOOLS.map((name) => ({
  */
 function mcpStatus(sessionId: string, status: string, tools?: readonly unknown[]): Promise<void> {
   appendFileSync('fake-tools.jsonl', `${JSON.stringify({ event: 'mcp_status', status, tools: tools?.length ?? 0 })}\n`);
-  return connection.extNotification('_kiro/mcp/status', {
+  return peer.notify('_kiro/mcp/status', {
     sessionId,
     servers: [{ name: 'sidecar', status, ...(tools === undefined ? {} : { tools }), _meta: { fixture: true } }],
   });
@@ -507,7 +582,7 @@ interface Turn {
   cancels: number;
 }
 
-function scriptedAgent(): Agent {
+function scriptedAgent(): FakeAgent {
   const configs = new Map<string, SessionConfigOption[]>();
   const turns = new Map<string, Turn>();
   /** Sessions whose held `fill-then-hold` turn fails when the session is closed. */
@@ -515,7 +590,7 @@ function scriptedAgent(): Agent {
   let sessions = 0;
 
   const update = (sessionId: string, value: SessionUpdate): Promise<void> =>
-    connection.sessionUpdate({ sessionId, update: value });
+    sessionUpdate({ sessionId, update: value });
   const text = (sessionId: string, value: string, kind: 'agent_message_chunk' | 'user_message_chunk' = 'agent_message_chunk') =>
     update(sessionId, { sessionUpdate: kind, content: { type: 'text', text: value } });
 
@@ -567,8 +642,12 @@ function scriptedAgent(): Agent {
     'cancel-permission': async (sessionId, turn) => {
       const toolCallId = 'run_command_tooluse_fixture12';
       await update(sessionId, { sessionUpdate: 'tool_call', toolCallId, title: 'Run Command', kind: 'execute', status: 'pending' });
-      connection
-        .requestPermission({ sessionId, toolCall: { toolCallId, title: 'ls -la', status: 'pending' }, options: RECORDED_OPTIONS })
+      peer
+        .request(methods.client.session.requestPermission, {
+          sessionId,
+          toolCall: { toolCallId, title: 'ls -la', status: 'pending' },
+          options: RECORDED_OPTIONS,
+        })
         .catch(() => {});
       return runUntilInterrupted(sessionId, turn, toolCallId, {
         message: 'The tool call was cancelled before it was approved.',
@@ -614,10 +693,10 @@ function scriptedAgent(): Agent {
     },
     'fs-terminal': async (sessionId) => {
       const attempts: Array<() => Promise<unknown>> = [
-        () => connection.readTextFile({ sessionId, path: '/work/notes.txt' }),
-        () => connection.writeTextFile({ sessionId, path: '/work/notes.txt', content: 'hello' }),
-        () => connection.createTerminal({ sessionId, command: 'ls' }),
-        () => connection.request('_kiro/custom', { sessionId }),
+        () => peer.request(methods.client.fs.readTextFile, { sessionId, path: '/work/notes.txt' }),
+        () => peer.request(methods.client.fs.writeTextFile, { sessionId, path: '/work/notes.txt', content: 'hello' }),
+        () => peer.request(methods.client.terminal.create, { sessionId, command: 'ls' }),
+        () => peer.request('_kiro/custom', { sessionId }),
       ];
       const codes: string[] = [];
       for (const attempt of attempts) {
@@ -630,6 +709,46 @@ function scriptedAgent(): Agent {
       }
       await text(sessionId, `codes: ${codes.join(',')}`);
       return { stopReason: 'end_turn' };
+    },
+    // The prompt text is `invalid <marker>` or `valid <marker>`: one
+    // `session/update` that carries the marker, rejected by its schema
+    // (`invalid`) or a valid `config_option_update`; then text `ok`, `end_turn`.
+    marker: async (sessionId, _turn, prompt) => {
+      const [kind, marker = ''] = (prompt[0]?.type === 'text' ? prompt[0].text : '').split(' ');
+      if (kind === 'invalid') {
+        const invalid = {
+          jsonrpc: '2.0',
+          method: 'session/update',
+          params: { sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 42 } }, _meta: { note: marker } },
+        };
+        process.stdout.write(`${JSON.stringify(invalid)}\n`);
+      } else {
+        const options = structuredClone(configs.get(sessionId) ?? []);
+        options.push({ type: 'select', id: 'marker', name: marker, currentValue: 'on', options: [{ value: 'on', name: marker }] });
+        await sessionUpdate({
+          sessionId,
+          update: { sessionUpdate: 'config_option_update', configOptions: options },
+          _meta: { note: marker },
+        });
+      }
+      await text(sessionId, 'ok');
+      return { stopReason: 'end_turn' };
+    },
+    // Two notifications no handler of the client is named for, both holding
+    // the prompt text: a Kiro extension one and one without the `_` prefix.
+    notifications: async (sessionId, _turn, prompt) => {
+      const marker = prompt[0]?.type === 'text' ? prompt[0].text : '';
+      for (const method of ['_kiro/memory/syncStatus', 'agent/unknown_event']) {
+        process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', method, params: { sessionId, note: marker } })}\n`);
+      }
+      await text(sessionId, 'ok');
+      return { stopReason: 'end_turn' };
+    },
+    // Closes its stdout, so the client's input ends, and keeps running.
+    'close-stdout': async () => {
+      closeSync(1);
+      setInterval(() => {}, 60_000);
+      return new Promise<PromptResponse>(() => {});
     },
     'kinds-missing': async (sessionId) => {
       const sets: PermissionOption[][] = [
@@ -644,7 +763,7 @@ function scriptedAgent(): Agent {
       const answers: RequestPermissionResponse[] = [];
       for (const [index, options] of sets.entries()) {
         const toolCallId = `tooluse_fixture2${index}`;
-        answers.push(await connection.requestPermission({ sessionId, toolCall: { toolCallId, title: 'Write File' }, options }));
+        answers.push(await peer.request(methods.client.session.requestPermission, { sessionId, toolCall: { toolCallId, title: 'Write File' }, options }));
       }
       await text(sessionId, JSON.stringify(answers));
       return { stopReason: 'end_turn' };
@@ -846,7 +965,7 @@ function scriptedAgent(): Agent {
     if (step.ask === true) {
       // kiro-cli 2.32.0 attaches the host-resolved MCP identity of the tool to the request.
       const identity = step.identity === undefined ? { serverName: 'sidecar', toolName: step.tool } : step.identity;
-      const response = await connection.requestPermission({
+      const response = await peer.request(methods.client.session.requestPermission, {
         sessionId,
         toolCall: { toolCallId, title, status: 'pending' },
         options: RECORDED_OPTIONS,
@@ -935,6 +1054,22 @@ function scriptedAgent(): Agent {
       return {};
     },
     closeSession: async (params) => {
+      const [mode, closeMs] = closeMode().split(' ');
+      switch (mode) {
+        case 'not-found':
+          throw RequestError.sessionNotFound(params.sessionId);
+        case 'error':
+          throw RequestError.internalError({ reason: 'fixture session/close failure' });
+        case 'ends-turn':
+          turns.get(params.sessionId)?.interrupt();
+          await sleep(Number(closeMs ?? '0'));
+          return {};
+        case 'slow':
+          await sleep(Number(closeMs ?? '0'));
+          return {};
+        default:
+          break;
+      }
       if (failing.has(params.sessionId)) {
         // The failing turn's error is written before this answer.
         turns.get(params.sessionId)?.interrupt();

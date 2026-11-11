@@ -15,7 +15,7 @@ import { turnPaths } from '../../src/store/paths.ts';
 import { readCall, readMeta } from '../../src/store/runs.ts';
 import { InvalidInputError } from '../../src/text/errors.ts';
 import { RESULT_HEADER } from '../../src/text/result-block.ts';
-import { ignoreCancels } from '../helpers/fake-kiro.ts';
+import { closeAnswers, closesReceived, ignoreCancels } from '../helpers/fake-kiro.ts';
 import {
   PROCESS_TIMEOUT,
   TEST_TOKEN,
@@ -441,6 +441,9 @@ const PROMPT_END_MS = 5_000;
 /** Short waits for the sessions whose Kiro ignores the plugin's cancel. */
 const SHORT_WAITS = { cancelWaitMs: 300, stopGraceMs: 300, killGraceMs: 300 };
 
+/** A short cancel wait, and a stop grace that outlasts a `session/close` answered after a second. */
+const CLOSE_WAITS = { cancelWaitMs: 300, stopGraceMs: 3_000, killGraceMs: 300 };
+
 describe('SessionManager ends a turn once its completion is recorded (against the fake)', () => {
   test('a Kiro that never ends its turn after complete_task: the turn ends at once, completed, and is pushed', PROCESS_TIMEOUT, async (t) => {
     const fixture = await managerFixture(t, 'harness');
@@ -525,6 +528,51 @@ describe('SessionManager ends a turn once its completion is recorded (against th
     assert.equal(logEvents(log, 'completion_close'), 1, log);
     assert.equal(await cancelsReceived(fixture), 1);
     assert.equal((await pushOf(stateDir, launchId)).reason, 'pushed');
+    assert.deepEqual(fixture.errors, []);
+  });
+
+  test("the turn ending during the plugin's own close: one session/close, and the run completed", PROCESS_TIMEOUT, async (t) => {
+    const fixture = await managerFixture(t, 'harness', { controlLimits: CLOSE_WAITS });
+    const { manager, stateDir } = fixture;
+    await ignoreCancels(fixture.workspace, 'all');
+    // The close ends the turn at once and is answered a second later: the completion's close comes meanwhile.
+    await closeAnswers(fixture.workspace.dir, 'ends-turn 1000');
+    const { launchId } = await manager.start({ dir: fixture.workspace.dir, prompt: 'complete-then-spin' });
+    const result = await beforeTimeout(endedTurn(fixture, launchId, 1), PROMPT_END_MS, 'the turn', () => {});
+    await manager.settled();
+
+    assert.equal(result.completion?.result, 'The task is done.');
+    assert.equal(result.endedBy, null);
+    assert.equal(await closesReceived(fixture.workspace), 1, 'one session/close');
+    const log = await acpLogOf(fixture, launchId);
+    assert.equal(logEvents(log, 'completion_close'), 1, log);
+    assert.equal((await metaOf(stateDir, launchId)).state, 'completed');
+    assert.equal(manager.get(launchId), undefined);
+    assert.equal(isAlive(fixture.spawned[0] ?? 0), false);
+    assert.deepEqual(fixture.errors, []);
+  });
+
+  test("stop during the plugin's own close: one session/close, and the reply lists no failure", PROCESS_TIMEOUT, async (t) => {
+    const fixture = await managerFixture(t, 'harness', { controlLimits: CLOSE_WAITS });
+    const { manager, stateDir } = fixture;
+    await ignoreCancels(fixture.workspace, 'all');
+    // The close is answered a second later and leaves the turn running.
+    await closeAnswers(fixture.workspace.dir, 'slow 1000');
+    const { launchId } = await manager.start({ dir: fixture.workspace.dir, prompt: 'complete-then-spin' });
+    await waitFor(async () => (await closesReceived(fixture.workspace)) === 1, "the plugin's own session/close");
+    const reply = await beforeTimeout(manager.stop({ launchId }), PROMPT_END_MS, 'stop', () => {});
+    await manager.settled();
+
+    assert.deepEqual(reply.failures, []);
+    assert.equal(reply.state, 'completed');
+    assert.equal(reply.ended?.turn, 1);
+    assert.equal(reply.ended?.result.endedBy, 'stop');
+    assert.equal(reply.ended?.result.completion?.result, 'The task is done.');
+    assert.equal(await closesReceived(fixture.workspace), 1, 'one session/close');
+    assert.equal(logEvents(await acpLogOf(fixture, launchId), 'completion_close'), 1);
+    assert.equal((await metaOf(stateDir, launchId)).state, 'completed');
+    assert.equal(manager.get(launchId), undefined);
+    assert.equal(isAlive(fixture.spawned[0] ?? 0), false);
     assert.deepEqual(fixture.errors, []);
   });
 

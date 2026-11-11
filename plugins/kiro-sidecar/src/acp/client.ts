@@ -1,7 +1,7 @@
 /**
  * The ACP client for one Kiro process.
  *
- * It wraps the SDK's `ClientSideConnection` over the process's stdio and adds
+ * It runs the SDK's client app (`client()`) over the process's stdio and adds
  * what the session owner needs: per-step timeouts and abort signals, the
  * session id fallback, tracking of each session's config options and of the
  * MCP server statuses Kiro reports (`_kiro/mcp/status`), turn events, the
@@ -12,18 +12,14 @@
  * Agent requests other than `session/request_permission` (file system,
  * terminal, extension methods) are answered with method-not-found, and no file
  * system or terminal capability is advertised, so a turn never waits on them.
+ * The SDK dispatches only the methods registered with it, so every other
+ * notification reaches the client through its fallback handler.
  */
 import { Readable, Writable } from 'node:stream';
-import {
-  CLIENT_METHODS,
-  ClientSideConnection,
-  MessageTooLargeError,
-  RequestError,
-  ndJsonStream,
-} from '@agentclientprotocol/sdk';
+import { CLIENT_METHODS, MessageTooLargeError, RequestError, client, methods, ndJsonStream } from '@agentclientprotocol/sdk';
 import type {
   AnyMessage,
-  Client,
+  ClientConnection,
   CloseSessionResponse,
   ContentBlock,
   Implementation,
@@ -136,7 +132,7 @@ export class KiroAcpClient {
   readonly #closedPromise: Promise<AcpClientError>;
   readonly #closedRejection: Promise<never>;
   readonly #gate: TransformStreamDefaultController<Uint8Array>;
-  readonly #connection: ClientSideConnection;
+  readonly #connection: ClientConnection;
   #resolveClosed: (error: AcpClientError) => void = () => {};
   #rejectClosed: (error: AcpClientError) => void = () => {};
   #closed: AcpClientError | undefined;
@@ -177,7 +173,7 @@ export class KiroAcpClient {
     const tapped = options.debugFrames === true ? tapFrames(stream, (entry) => this.#log(entry)) : stream;
 
     this.#log({ event: 'start', pid: process.pid });
-    this.#connection = new ClientSideConnection(() => this.#handlers(), tapped);
+    this.#connection = this.#app().connect(tapped);
     const signal = this.#connection.signal;
     signal.addEventListener('abort', () => this.#onConnectionClosed(signal.reason), { once: true });
     void process.exited.then((exit) => this.#onExit(exit));
@@ -214,7 +210,7 @@ export class KiroAcpClient {
 
   initialize(options: StepOptions = {}): Promise<InitializeResponse> {
     return this.#step('initialize', undefined, options, () =>
-      this.#connection.initialize({
+      this.#connection.agent.request(methods.agent.initialize, {
         protocolVersion: ACP_PROTOCOL_VERSION,
         clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
         clientInfo: this.#clientInfo,
@@ -225,7 +221,7 @@ export class KiroAcpClient {
   /** Creates a session. The id is `sessionId`, else `_meta.id`. */
   async newSession(params: SessionParams, options: StepOptions = {}): Promise<NewSessionResult> {
     const response = await this.#step('session/new', undefined, options, () =>
-      this.#connection.newSession({ cwd: params.cwd, mcpServers: [...(params.mcpServers ?? [])] }),
+      this.#connection.agent.request(methods.agent.session.new, { cwd: params.cwd, mcpServers: [...(params.mcpServers ?? [])] }),
     );
     const sessionId = sessionIdOf(response);
     if (sessionId === undefined) {
@@ -244,7 +240,7 @@ export class KiroAcpClient {
     this.#loading.add(sessionId);
     try {
       const response = await this.#step('session/load', sessionId, options, () =>
-        this.#connection.loadSession({
+        this.#connection.agent.request(methods.agent.session.load, {
           sessionId,
           cwd: params.cwd,
           mcpServers: [...(params.mcpServers ?? [])],
@@ -336,7 +332,7 @@ export class KiroAcpClient {
         ? { sessionId, configId, type: 'boolean', value }
         : { sessionId, configId, value: String(value) };
     const response = await this.#step('session/set_config_option', sessionId, options, () =>
-      this.#connection.setSessionConfigOption(request),
+      this.#connection.agent.request(methods.agent.session.setConfigOption, request),
     );
     this.#storeConfig(sessionId, response.configOptions, this.#answerPosition(response));
     return this.#config.get(sessionId) ?? [];
@@ -354,7 +350,7 @@ export class KiroAcpClient {
     this.#turns.set(sessionId, turn);
     try {
       return await this.#step('session/prompt', sessionId, options, () =>
-        this.#connection.prompt({ sessionId, prompt: blocks }),
+        this.#connection.agent.request(methods.agent.session.prompt, { sessionId, prompt: blocks }),
       );
     } finally {
       this.#withdraw(sessionId, turn);
@@ -371,7 +367,7 @@ export class KiroAcpClient {
     }
     this.#log({ event: 'cancel', sessionId, openPermissions: this.#countOpen(sessionId) });
     try {
-      await this.#connection.cancel({ sessionId });
+      await this.#connection.agent.notify(methods.agent.session.cancel, { sessionId });
     } catch (error) {
       throw await this.#closedErrorFor(error);
     } finally {
@@ -379,10 +375,14 @@ export class KiroAcpClient {
     }
   }
 
-  /** Sends `session/close`; the process stays alive for other sessions. */
+  /**
+   * Sends `session/close`; the process stays alive for other sessions. A
+   * `-32002` (session not found) answer counts as closed: the SDK resolves it
+   * as `{}`, as ACP recommends for an unknown or already closed session.
+   */
   async closeSession(sessionId: string, options: StepOptions = {}): Promise<CloseSessionResponse> {
     const response = await this.#step('session/close', sessionId, options, () =>
-      this.#connection.closeSession({ sessionId }),
+      this.#connection.agent.request(methods.agent.session.close, { sessionId }),
     );
     this.#withdraw(sessionId);
     this.#config.delete(sessionId);
@@ -401,24 +401,38 @@ export class KiroAcpClient {
     return this.#process.kill(graceMs);
   }
 
-  #handlers(): Client {
-    return {
-      requestPermission: (params) => this.#onPermission(params),
-      sessionUpdate: (params) => this.#onUpdate(params),
-      readTextFile: () => this.#refuse(CLIENT_METHODS.fs_read_text_file),
-      writeTextFile: () => this.#refuse(CLIENT_METHODS.fs_write_text_file),
-      createTerminal: () => this.#refuse(CLIENT_METHODS.terminal_create),
-      terminalOutput: () => this.#refuse(CLIENT_METHODS.terminal_output),
-      releaseTerminal: () => this.#refuse(CLIENT_METHODS.terminal_release),
-      waitForTerminalExit: () => this.#refuse(CLIENT_METHODS.terminal_wait_for_exit),
-      killTerminal: () => this.#refuse(CLIENT_METHODS.terminal_kill),
-      extNotification: (method, params) => {
-        this.#log({ event: 'notification', method, length: jsonLength(params) });
-        if (method === MCP_STATUS_METHOD) {
-          this.#onMcpStatus(params);
-        }
-      },
-    };
+  /**
+   * The client app. The SDK checks the params of each named method against
+   * its schema before the handler runs; a request without a handler gets
+   * method-not-found, and a notification without one reaches the fallback.
+   */
+  #app() {
+    return client()
+      .onRequest(methods.client.session.requestPermission, ({ params }) => this.#onPermission(params))
+      .onNotification(methods.client.session.update, ({ params }) => this.#onUpdate(params))
+      .onRequest(methods.client.fs.readTextFile, () => this.#refuse(CLIENT_METHODS.fs_read_text_file))
+      .onRequest(methods.client.fs.writeTextFile, () => this.#refuse(CLIENT_METHODS.fs_write_text_file))
+      .onRequest(methods.client.terminal.create, () => this.#refuse(CLIENT_METHODS.terminal_create))
+      .onRequest(methods.client.terminal.output, () => this.#refuse(CLIENT_METHODS.terminal_output))
+      .onRequest(methods.client.terminal.release, () => this.#refuse(CLIENT_METHODS.terminal_release))
+      .onRequest(methods.client.terminal.waitForExit, () => this.#refuse(CLIENT_METHODS.terminal_wait_for_exit))
+      .onRequest(methods.client.terminal.kill, () => this.#refuse(CLIENT_METHODS.terminal_kill))
+      .onNotification('*', ({ method, params }) => this.#onNotification(method, params));
+  }
+
+  /**
+   * Every notification but `session/update`: logged by method and length, and
+   * `_kiro/mcp/status` kept. Its params are as sent, unchecked.
+   * `elicitation/complete` is dropped unlogged, as SDK 1.x dropped it.
+   */
+  #onNotification(method: string, params: unknown): void {
+    if (method === CLIENT_METHODS.elicitation_complete) {
+      return;
+    }
+    this.#log({ event: 'notification', method, length: jsonLength(params) });
+    if (method === MCP_STATUS_METHOD) {
+      this.#onMcpStatus(params as Record<string, unknown>);
+    }
   }
 
   /**
@@ -723,7 +737,8 @@ export class KiroAcpClient {
         this.#close(closedError('exited', undefined, exit), true);
         return;
       }
-      // The SDK closes with no error when its input ends.
+      // When its input ends the SDK closes with a plain Error of this text and
+      // nothing else to tell it from a failed stream (test/acp/client-close.test.ts).
       const ended = reason instanceof Error && reason.message === 'ACP connection closed';
       this.#close(closedError(ended ? 'stream_closed' : 'stream_error', ended ? undefined : reason, undefined), true);
     });

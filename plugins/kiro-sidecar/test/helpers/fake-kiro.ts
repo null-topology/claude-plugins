@@ -159,6 +159,20 @@ export async function ignoreCancels(workspace: FakeWorkspace, which: 'all' | 'fi
   await writeFile(join(workspace.dir, 'fake-cancel'), which === 'all' ? 'ignore' : 'ignore-first');
 }
 
+/**
+ * Sets how the fake started next in `dir` answers `session/close` (see
+ * `fake-close` in the fixture): `-32002`, `-32603`, `{}` after `ms`, or
+ * `{}` after `ms` once it has ended the running turn.
+ */
+export async function closeAnswers(dir: string, mode: 'not-found' | 'error' | `slow ${number}` | `ends-turn ${number}`): Promise<void> {
+  await writeFile(join(dir, 'fake-close'), mode);
+}
+
+/** The `session/close` requests the fake has received. */
+export async function closesReceived(workspace: { received(): Promise<AnyMessage[]> }): Promise<number> {
+  return (await workspace.received()).filter((message) => 'method' in message && message.method === 'session/close').length;
+}
+
 async function writeLauncher(dir: string, scenario: string, oversizeBytes: number | undefined): Promise<string> {
   await writeFile(join(dir, 'fake-scenario.json'), JSON.stringify({ scenario, fixture: TURN_RECORDING, oversizeBytes }));
   const launcher = join(dir, 'kiro-cli.mjs');

@@ -19,6 +19,7 @@ import { turnPaths } from '../../src/store/paths.ts';
 import { createRun, readCall, writeMeta } from '../../src/store/runs.ts';
 import type { RunMeta } from '../../src/store/runs.ts';
 import { InvalidInputError } from '../../src/text/errors.ts';
+import { closeAnswers, closesReceived } from '../helpers/fake-kiro.ts';
 import type { FakeEvent, FakeWorkspace } from '../helpers/fake-kiro.ts';
 import { deadIdentity, startIdleProcess, tempDir } from '../helpers/processes.ts';
 import type { LiveProcess } from '../helpers/processes.ts';
@@ -385,6 +386,25 @@ describe('SessionManager.stop', () => {
     assert.equal(reply.ended, null);
     assert.equal(isAlive(pid), false);
     assert.equal((await metaOf(fixture.stateDir, launchId)).state, 'stopped');
+  });
+
+  test('a session/close answered -32002 (session not found) counts as closed in the reply', PROCESS_TIMEOUT, async (t) => {
+    const { fixture, launchId } = await runningSession(t, 'cancel-tool');
+    await closeAnswers(fixture.workspace.dir, 'not-found');
+    const reply = await fixture.manager.stop({ launchId });
+    assert.equal(reply.state, 'stopped');
+    assert.deepEqual(reply.failures, []);
+    assert.ok(reply.cleanedUp.includes(`Kiro session ${reply.sessionId} closed`), reply.cleanedUp.join('; '));
+    assert.equal(await closesReceived(fixture.workspace), 1);
+  });
+
+  test('a session/close answered with another error is a failure in the reply', PROCESS_TIMEOUT, async (t) => {
+    const { fixture, launchId } = await runningSession(t, 'cancel-tool');
+    await closeAnswers(fixture.workspace.dir, 'error');
+    const reply = await fixture.manager.stop({ launchId });
+    assert.equal(reply.state, 'stopped');
+    assert.deepEqual(reply.failures, ['session/close: Internal error (code -32603): {"reason":"fixture session/close failure"}']);
+    assert.equal(reply.cleanedUp.some((line) => line.startsWith('Kiro session ')), false, reply.cleanedUp.join('; '));
   });
 
   test('a start is aborted and cleaned up; the run stays failed', PROCESS_TIMEOUT, async (t) => {

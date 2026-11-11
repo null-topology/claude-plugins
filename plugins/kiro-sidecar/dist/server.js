@@ -30652,23 +30652,18 @@ import { setTimeout as sleep } from "node:timers/promises";
 // src/acp/client.ts
 import { Readable, Writable } from "node:stream";
 
-// node_modules/@agentclientprotocol/sdk/dist/schema/index.js
+// node_modules/@agentclientprotocol/sdk/dist/v1/schema/index.js
 var AGENT_METHODS = {
   initialize: "initialize",
   authenticate: "authenticate",
-  providers_list: "providers/list",
-  providers_set: "providers/set",
-  providers_disable: "providers/disable",
   session_new: "session/new",
   session_load: "session/load",
   session_set_mode: "session/set_mode",
   session_set_config_option: "session/set_config_option",
   session_prompt: "session/prompt",
   session_cancel: "session/cancel",
-  mcp_message: "mcp/message",
   session_list: "session/list",
   session_delete: "session/delete",
-  session_fork: "session/fork",
   session_resume: "session/resume",
   session_close: "session/close",
   logout: "logout"
@@ -30683,7 +30678,6 @@ var CLIENT_METHODS = {
   terminal_release: "terminal/release",
   terminal_wait_for_exit: "terminal/wait_for_exit",
   terminal_kill: "terminal/kill",
-  mcp_message: "mcp/message",
   elicitation_create: "elicitation/create",
   elicitation_complete: "elicitation/complete"
 };
@@ -30691,21 +30685,21 @@ var PROTOCOL_METHODS = {
   cancel_request: "$/cancel_request"
 };
 
-// node_modules/@agentclientprotocol/sdk/dist/schema-deserialize.js
+// node_modules/@agentclientprotocol/sdk/dist/core/schema-deserialize.js
 var skippedItem = /* @__PURE__ */ Symbol("skippedItem");
 function defaultOnError(schema, fallback) {
   return schema.catch(fallback);
 }
 function requiredDefaultOnError(schema, fallback) {
   const schemaWithCatch = schema.catch(fallback);
-  return external_exports.unknown().transform((value, context) => {
+  return unknown().transform((value, context) => {
     if (value !== void 0)
       return schemaWithCatch.parse(value);
     context.addIssue({
       code: "custom",
       message: "Required value is missing"
     });
-    return external_exports.NEVER;
+    return NEVER;
   });
 }
 function stringTag(value, key2) {
@@ -30728,13 +30722,13 @@ function excludeKnownTags(schema, key2, knownTags) {
   });
 }
 function preserveCustomPayload(schema, key2, knownTags) {
-  return external_exports.unknown().transform((value, context) => {
+  return unknown().transform((value, context) => {
     const result = schema.safeParse(value);
     if (!result.success) {
       for (const issue2 of result.error.issues) {
         context.addIssue({ ...issue2, input: value });
       }
-      return external_exports.NEVER;
+      return NEVER;
     }
     const output2 = result.data;
     const tag = stringTag(value, key2);
@@ -30750,27 +30744,20 @@ function preserveCustomPayload(schema, key2, knownTags) {
     return output2;
   });
 }
-function defaultOnErrorOptionalStringTag(schema, key2) {
-  return external_exports.preprocess((value) => {
-    if (value === null || typeof value !== "object" || Array.isArray(value)) {
-      return value;
-    }
-    const record2 = value;
-    const tag = record2[key2];
-    if (tag === void 0 || tag === null || typeof tag === "string") {
-      return value;
-    }
-    const normalized = { ...record2 };
-    delete normalized[key2];
-    return normalized;
-  }, schema);
-}
 function vecSkipError(itemSchema) {
-  return external_exports.array(itemSchema.catch(skippedItem)).transform((items) => items.filter((item) => item !== skippedItem));
+  return array(itemSchema.catch(skippedItem)).transform((items) => items.filter((item) => item !== skippedItem));
+}
+function defaultOnNull(schema, empty) {
+  return preprocess((value) => value === null ? empty() : value, schema);
+}
+function wideInt() {
+  return number2().refine(Number.isInteger, {
+    error: "Invalid input: expected int, received number"
+  });
 }
 
-// node_modules/@agentclientprotocol/sdk/dist/schema/zod.gen.js
-var zRequestId = union([number2(), string2()]).nullable();
+// node_modules/@agentclientprotocol/sdk/dist/v1/schema/zod.gen.js
+var zRequestId = union([wideInt(), string2()]).nullable();
 var zSessionId = string2();
 var zWriteTextFileRequest = object({
   sessionId: zSessionId,
@@ -30838,7 +30825,7 @@ var zResourceLink = object({
   description: defaultOnError(string2().nullish(), () => void 0),
   mimeType: defaultOnError(string2().nullish(), () => void 0),
   name: string2(),
-  size: defaultOnError(number2().nullish(), () => void 0),
+  size: defaultOnError(wideInt().nullish(), () => void 0),
   title: defaultOnError(string2().nullish(), () => void 0),
   uri: string2(),
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
@@ -30953,10 +30940,10 @@ var zEnvVariable = object({
 var zCreateTerminalRequest = object({
   sessionId: zSessionId,
   command: string2(),
-  args: array(string2()).optional(),
-  env: array(zEnvVariable).optional(),
+  args: defaultOnNull(array(string2()), () => []).optional(),
+  env: defaultOnNull(array(zEnvVariable), () => []).optional(),
   cwd: string2().nullish(),
-  outputByteLimit: number2().nullish(),
+  outputByteLimit: wideInt().gte(0).nullish(),
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
 });
 var zTerminalOutputRequest = object({
@@ -31026,9 +31013,9 @@ var zNumberPropertySchema = object({
 var zIntegerPropertySchema = object({
   title: defaultOnError(string2().nullish(), () => void 0),
   description: defaultOnError(string2().nullish(), () => void 0),
-  minimum: number2().nullish(),
-  maximum: number2().nullish(),
-  default: defaultOnError(number2().nullish(), () => void 0),
+  minimum: wideInt().nullish(),
+  maximum: wideInt().nullish(),
+  default: defaultOnError(wideInt().nullish(), () => void 0),
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
 });
 var zBooleanPropertySchema = object({
@@ -31057,8 +31044,8 @@ var zMultiSelectItems = preserveCustomPayload(union([
 var zMultiSelectPropertySchema = object({
   title: defaultOnError(string2().nullish(), () => void 0),
   description: defaultOnError(string2().nullish(), () => void 0),
-  minItems: number2().nullish(),
-  maxItems: number2().nullish(),
+  minItems: wideInt().gte(0).nullish(),
+  maxItems: wideInt().gte(0).nullish(),
   items: zMultiSelectItems,
   default: defaultOnError(vecSkipError(string2()).nullish(), () => void 0),
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
@@ -31113,15 +31100,6 @@ var zCreateElicitationRequest = preserveCustomPayload(intersection(union([
   message: string2(),
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
 })), "mode", ["form", "url"]);
-var zMcpServerAcpId = string2();
-var zMcpRequestId = string2();
-var zMessageMcpRequest = object({
-  serverId: zMcpServerAcpId,
-  requestId: zMcpRequestId,
-  method: string2(),
-  params: record(string2(), unknown()).nullish(),
-  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
-});
 var zExtRequest = unknown();
 var zAgentRequest = object({
   id: zRequestId,
@@ -31136,7 +31114,6 @@ var zAgentRequest = object({
     zWaitForTerminalExitRequest,
     zKillTerminalRequest,
     zCreateElicitationRequest,
-    zMessageMcpRequest,
     zExtRequest
   ]).nullish()
 });
@@ -31150,7 +31127,6 @@ var zPromptCapabilities = object({
 var zMcpCapabilities = object({
   http: defaultOnError(boolean2().optional().default(false), () => false),
   sse: defaultOnError(boolean2().optional().default(false), () => false),
-  acp: defaultOnError(boolean2().optional().default(false), () => false),
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
 });
 var zSessionListCapabilities = object({
@@ -31173,9 +31149,6 @@ var zSessionSystemPromptCapabilities = object({
   mode: defaultOnError(zSessionSystemPromptModeCapabilities.nullish(), () => void 0),
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
 });
-var zSessionForkCapabilities = object({
-  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
-});
 var zSessionResumeCapabilities = object({
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
 });
@@ -31187,7 +31160,6 @@ var zSessionCapabilities = object({
   delete: defaultOnError(zSessionDeleteCapabilities.nullish(), () => void 0),
   additionalDirectories: defaultOnError(zSessionAdditionalDirectoriesCapabilities.nullish(), () => void 0),
   systemPrompt: defaultOnError(zSessionSystemPromptCapabilities.nullish(), () => void 0),
-  fork: defaultOnError(zSessionForkCapabilities.nullish(), () => void 0),
   resume: defaultOnError(zSessionResumeCapabilities.nullish(), () => void 0),
   close: defaultOnError(zSessionCloseCapabilities.nullish(), () => void 0),
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
@@ -31197,9 +31169,6 @@ var zLogoutCapabilities = object({
 });
 var zAgentAuthCapabilities = object({
   logout: defaultOnError(zLogoutCapabilities.nullish(), () => void 0),
-  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
-});
-var zProvidersCapabilities = object({
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
 });
 var zAgentCapabilities = object({
@@ -31213,18 +31182,9 @@ var zAgentCapabilities = object({
     audio: false,
     embeddedContext: false
   })),
-  mcpCapabilities: defaultOnError(zMcpCapabilities.optional().default({
-    http: false,
-    sse: false,
-    acp: false
-  }), () => ({
-    http: false,
-    sse: false,
-    acp: false
-  })),
+  mcpCapabilities: defaultOnError(zMcpCapabilities.optional().default({ http: false, sse: false }), () => ({ http: false, sse: false })),
   sessionCapabilities: defaultOnError(zSessionCapabilities.optional().default({}), () => ({})),
   auth: defaultOnError(zAgentAuthCapabilities.optional().default({}), () => ({})),
-  providers: defaultOnError(zProvidersCapabilities.nullish(), () => void 0),
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
 });
 var zAuthMethodId = string2();
@@ -31232,8 +31192,8 @@ var zAuthMethodTerminal = object({
   id: zAuthMethodId,
   name: string2(),
   description: defaultOnError(string2().nullish(), () => void 0),
-  args: array(string2()).optional(),
-  env: record(string2(), string2()).optional(),
+  args: defaultOnNull(array(string2()), () => []).optional(),
+  env: defaultOnNull(record(string2(), string2()), () => ({})).optional(),
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
 });
 var zAuthMethodAgent = object({
@@ -31263,11 +31223,7 @@ var zInitializeResponse = object({
       audio: false,
       embeddedContext: false
     },
-    mcpCapabilities: {
-      http: false,
-      sse: false,
-      acp: false
-    },
+    mcpCapabilities: { http: false, sse: false },
     sessionCapabilities: {},
     auth: {}
   }), () => ({
@@ -31277,11 +31233,7 @@ var zInitializeResponse = object({
       audio: false,
       embeddedContext: false
     },
-    mcpCapabilities: {
-      http: false,
-      sse: false,
-      acp: false
-    },
+    mcpCapabilities: { http: false, sse: false },
     sessionCapabilities: {},
     auth: {}
   })),
@@ -31290,37 +31242,6 @@ var zInitializeResponse = object({
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
 });
 var zAuthenticateResponse = object({
-  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
-});
-var zProviderId = string2();
-var zLlmProtocol = union([
-  literal("anthropic"),
-  literal("openai"),
-  literal("azure"),
-  literal("vertex"),
-  literal("bedrock"),
-  string2()
-]);
-var zProviderCurrentConfig = object({
-  apiType: zLlmProtocol,
-  baseUrl: string2(),
-  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
-});
-var zProviderInfo = object({
-  providerId: zProviderId,
-  supported: requiredDefaultOnError(vecSkipError(zLlmProtocol), () => []),
-  required: boolean2(),
-  current: zProviderCurrentConfig.nullish(),
-  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
-});
-var zListProvidersResponse = object({
-  providers: array(zProviderInfo),
-  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
-});
-var zSetProviderResponse = object({
-  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
-});
-var zDisableProviderResponse = object({
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
 });
 var zLogoutResponse = object({
@@ -31412,12 +31333,6 @@ var zListSessionsResponse = object({
 var zDeleteSessionResponse = object({
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
 });
-var zForkSessionResponse = object({
-  sessionId: zSessionId,
-  modes: defaultOnError(zSessionModeState.nullish(), () => void 0),
-  configOptions: defaultOnError(vecSkipError(zSessionConfigOption).nullish(), () => void 0),
-  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
-});
 var zResumeSessionResponse = object({
   modes: defaultOnError(zSessionModeState.nullish(), () => void 0),
   configOptions: defaultOnError(vecSkipError(zSessionConfigOption).nullish(), () => void 0),
@@ -31440,18 +31355,8 @@ var zStopReason = union([
   literal("refusal"),
   literal("cancelled")
 ]);
-var zUsage = object({
-  totalTokens: number2(),
-  inputTokens: number2(),
-  outputTokens: number2(),
-  thoughtTokens: defaultOnError(number2().nullish(), () => void 0),
-  cachedReadTokens: defaultOnError(number2().nullish(), () => void 0),
-  cachedWriteTokens: defaultOnError(number2().nullish(), () => void 0),
-  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
-});
 var zPromptResponse = object({
   stopReason: zStopReason,
-  usage: defaultOnError(zUsage.nullish(), () => void 0),
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
 });
 var zExtResponse = unknown();
@@ -31481,15 +31386,11 @@ var zAgentResponse = union([
     result: union([
       zInitializeResponse,
       zAuthenticateResponse,
-      zListProvidersResponse,
-      zSetProviderResponse,
-      zDisableProviderResponse,
       zLogoutResponse,
       zNewSessionResponse,
       zLoadSessionResponse,
       zListSessionsResponse,
       zDeleteSessionResponse,
-      zForkSessionResponse,
       zResumeSessionResponse,
       zCloseSessionResponse,
       zSetSessionModeResponse,
@@ -31541,41 +31442,6 @@ var zPlan = object({
   entries: requiredDefaultOnError(vecSkipError(zPlanEntry), () => []),
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
 });
-var zPlanId = string2();
-var zPlanItems = object({
-  planId: zPlanId,
-  entries: requiredDefaultOnError(vecSkipError(zPlanEntry), () => []),
-  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
-});
-var zPlanFile = object({
-  planId: zPlanId,
-  uri: string2(),
-  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
-});
-var zPlanMarkdown = object({
-  planId: zPlanId,
-  content: string2(),
-  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
-});
-var zPlanUpdateContent = union([
-  zPlanItems.and(object({
-    type: literal("items")
-  })),
-  zPlanFile.and(object({
-    type: literal("file")
-  })),
-  zPlanMarkdown.and(object({
-    type: literal("markdown")
-  }))
-]);
-var zPlanUpdate = object({
-  plan: zPlanUpdateContent,
-  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
-});
-var zPlanRemoved = object({
-  planId: zPlanId,
-  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
-});
 var zUnstructuredCommandInput = object({
   hint: string2(),
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
@@ -31610,8 +31476,8 @@ var zCost = object({
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
 });
 var zUsageUpdate = object({
-  used: number2(),
-  size: number2(),
+  used: wideInt().gte(0),
+  size: wideInt().gte(0),
   cost: defaultOnError(zCost.nullish(), () => void 0),
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
 });
@@ -31647,108 +31513,6 @@ var zCompactionSummaryChunk = object({
   content: zContentBlock,
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
 });
-var zSessionCancelCapabilities = object({
-  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
-});
-var zSubagentSessionCapabilities = object({
-  cancel: defaultOnError(zSessionCancelCapabilities.nullish(), () => void 0),
-  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
-});
-var zRunningStateUpdate = object({
-  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
-});
-var zErrorStopReason = object({
-  error: defaultOnError(zError.nullish(), () => void 0)
-});
-var zIdleStateUpdate = defaultOnErrorOptionalStringTag(preserveCustomPayload(intersection(union([
-  object({
-    stopReason: literal("end_turn")
-  }),
-  object({
-    stopReason: literal("max_tokens")
-  }),
-  object({
-    stopReason: literal("max_turn_requests")
-  }),
-  object({
-    stopReason: literal("refusal")
-  }),
-  object({
-    stopReason: literal("cancelled")
-  }),
-  zErrorStopReason.and(object({
-    stopReason: literal("error")
-  })),
-  excludeKnownTags(object({
-    stopReason: string2()
-  }), "stopReason", [
-    "cancelled",
-    "end_turn",
-    "error",
-    "max_tokens",
-    "max_turn_requests",
-    "refusal"
-  ]),
-  object({
-    stopReason: _null3().optional()
-  })
-]), object({
-  usage: defaultOnError(zUsage.nullish(), () => void 0),
-  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0),
-  stopReason: defaultOnError(string2().nullish(), () => void 0)
-})), "stopReason", [
-  "cancelled",
-  "end_turn",
-  "error",
-  "max_tokens",
-  "max_turn_requests",
-  "refusal"
-]), "stopReason");
-var zRequiresActionStateUpdate = object({
-  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
-});
-var zUnknownStateUpdate = object({
-  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
-});
-var zStateUpdate = preserveCustomPayload(union([
-  zRunningStateUpdate.and(object({
-    state: literal("running")
-  })),
-  zIdleStateUpdate.and(object({
-    state: literal("idle")
-  })),
-  zRequiresActionStateUpdate.and(object({
-    state: literal("requires_action")
-  })),
-  zUnknownStateUpdate.and(object({
-    state: literal("unknown")
-  })),
-  excludeKnownTags(object({
-    state: string2()
-  }), "state", ["idle", "requires_action", "running", "unknown"])
-]), "state", ["idle", "requires_action", "running", "unknown"]);
-var zSubagentUpdate = object({
-  sessionId: zSessionId,
-  title: defaultOnError(string2().nullish(), () => void 0),
-  description: defaultOnError(string2().nullish(), () => void 0),
-  capabilities: defaultOnError(zSubagentSessionCapabilities.nullish(), () => void 0),
-  state: defaultOnError(zStateUpdate.nullish(), () => void 0),
-  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
-});
-var zSessionMessage = object({
-  messageId: zMessageId,
-  senderSessionId: defaultOnError(zSessionId.nullish(), () => void 0),
-  recipientSessionId: defaultOnError(zSessionId.nullish(), () => void 0),
-  content: defaultOnError(vecSkipError(zContentBlock).nullish(), () => void 0),
-  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
-});
-var zSessionMessageChunk = object({
-  messageId: zMessageId,
-  senderSessionId: defaultOnError(zSessionId.nullish(), () => void 0),
-  recipientSessionId: defaultOnError(zSessionId.nullish(), () => void 0),
-  content: zContentBlock,
-  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
-});
 var zSessionUpdate = union([
   zContentChunk.and(object({
     sessionUpdate: literal("user_message_chunk")
@@ -31767,12 +31531,6 @@ var zSessionUpdate = union([
   })),
   zPlan.and(object({
     sessionUpdate: literal("plan")
-  })),
-  zPlanUpdate.and(object({
-    sessionUpdate: literal("plan_update")
-  })),
-  zPlanRemoved.and(object({
-    sessionUpdate: literal("plan_removed")
   })),
   zAvailableCommandsUpdate.and(object({
     sessionUpdate: literal("available_commands_update")
@@ -31797,15 +31555,6 @@ var zSessionUpdate = union([
   })),
   zCompactionSummaryChunk.and(object({
     sessionUpdate: literal("compaction_summary_chunk")
-  })),
-  zSubagentUpdate.and(object({
-    sessionUpdate: literal("subagent_update")
-  })),
-  zSessionMessage.and(object({
-    sessionUpdate: literal("session_message")
-  })),
-  zSessionMessageChunk.and(object({
-    sessionUpdate: literal("session_message_chunk")
   }))
 ]);
 var zSessionNotification = object({
@@ -31846,12 +31595,6 @@ var zClientSessionCapabilities = object({
   notices: defaultOnError(zNoticeCapabilities.nullish(), () => void 0),
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
 });
-var zSubagentCapabilities = object({
-  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
-});
-var zPlanCapabilities = object({
-  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
-});
 var zAuthCapabilities = object({
   terminal: defaultOnError(boolean2().optional().default(false), () => false),
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
@@ -31871,8 +31614,6 @@ var zClientCapabilities = object({
   fs: defaultOnError(zFileSystemCapabilities.optional().default({ readTextFile: false, writeTextFile: false }), () => ({ readTextFile: false, writeTextFile: false })),
   terminal: defaultOnError(boolean2().optional().default(false), () => false),
   session: defaultOnError(zClientSessionCapabilities.nullish(), () => void 0),
-  subagents: defaultOnError(zSubagentCapabilities.nullish(), () => void 0),
-  plan: defaultOnError(zPlanCapabilities.nullish(), () => void 0),
   auth: defaultOnError(zAuthCapabilities.optional().default({ terminal: false }), () => ({ terminal: false })),
   elicitation: defaultOnError(zElicitationCapabilities.nullish(), () => void 0),
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
@@ -31895,20 +31636,6 @@ var zAuthenticateRequest = object({
   methodId: zAuthMethodId,
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
 });
-var zListProvidersRequest = object({
-  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
-});
-var zSetProviderRequest = object({
-  providerId: zProviderId,
-  apiType: zLlmProtocol,
-  baseUrl: string2(),
-  headers: record(string2(), string2()).optional(),
-  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
-});
-var zDisableProviderRequest = object({
-  providerId: zProviderId,
-  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
-});
 var zLogoutRequest = object({
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
 });
@@ -31920,25 +31647,20 @@ var zHttpHeader = object({
 var zMcpServerHttp = object({
   name: string2(),
   url: string2(),
-  headers: array(zHttpHeader),
+  headers: defaultOnNull(array(zHttpHeader), () => []),
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
 });
 var zMcpServerSse = object({
   name: string2(),
   url: string2(),
-  headers: array(zHttpHeader),
-  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
-});
-var zMcpServerAcp = object({
-  name: string2(),
-  serverId: zMcpServerAcpId,
+  headers: defaultOnNull(array(zHttpHeader), () => []),
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
 });
 var zMcpServerStdio = object({
   name: string2(),
   command: string2(),
-  args: array(string2()),
-  env: array(zEnvVariable),
+  args: defaultOnNull(array(string2()), () => []),
+  env: defaultOnNull(array(zEnvVariable), () => []),
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
 });
 var zMcpServer = union([
@@ -31947,9 +31669,6 @@ var zMcpServer = union([
   })),
   zMcpServerSse.and(object({
     type: literal("sse")
-  })),
-  zMcpServerAcp.and(object({
-    type: literal("acp")
   })),
   zMcpServerStdio
 ]);
@@ -31965,15 +31684,15 @@ var zSystemPrompt = object({
 });
 var zNewSessionRequest = object({
   cwd: string2(),
-  additionalDirectories: array(string2()).optional(),
-  mcpServers: array(zMcpServer),
+  additionalDirectories: defaultOnNull(array(string2()), () => []).optional(),
+  mcpServers: defaultOnNull(array(zMcpServer), () => []),
   systemPrompt: zSystemPrompt.nullish(),
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
 });
 var zLoadSessionRequest = object({
-  mcpServers: array(zMcpServer),
+  mcpServers: defaultOnNull(array(zMcpServer), () => []),
   cwd: string2(),
-  additionalDirectories: array(string2()).optional(),
+  additionalDirectories: defaultOnNull(array(string2()), () => []).optional(),
   sessionId: zSessionId,
   systemPrompt: zSystemPrompt.nullish(),
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
@@ -31987,19 +31706,11 @@ var zDeleteSessionRequest = object({
   sessionId: zSessionId,
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
 });
-var zForkSessionRequest = object({
-  sessionId: zSessionId,
-  cwd: string2(),
-  additionalDirectories: array(string2()).optional(),
-  mcpServers: array(zMcpServer).optional(),
-  systemPrompt: zSystemPrompt.nullish(),
-  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
-});
 var zResumeSessionRequest = object({
   sessionId: zSessionId,
   cwd: string2(),
-  additionalDirectories: array(string2()).optional(),
-  mcpServers: array(zMcpServer).optional(),
+  additionalDirectories: defaultOnNull(array(string2()), () => []).optional(),
+  mcpServers: defaultOnNull(array(zMcpServer), () => []).optional(),
   systemPrompt: zSystemPrompt.nullish(),
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
 });
@@ -32014,8 +31725,8 @@ var zSetSessionModeRequest = object({
 });
 var zSetSessionConfigOptionRequest = intersection(union([
   object({
-    value: boolean2(),
-    type: literal("boolean")
+    type: literal("boolean"),
+    value: boolean2()
   }),
   object({
     value: zSessionConfigValueId
@@ -32036,15 +31747,11 @@ var zClientRequest = object({
   params: union([
     zInitializeRequest,
     zAuthenticateRequest,
-    zListProvidersRequest,
-    zSetProviderRequest,
-    zDisableProviderRequest,
     zLogoutRequest,
     zNewSessionRequest,
     zLoadSessionRequest,
     zListSessionsRequest,
     zDeleteSessionRequest,
-    zForkSessionRequest,
     zResumeSessionRequest,
     zCloseSessionRequest,
     zSetSessionModeRequest,
@@ -32108,7 +31815,7 @@ var zKillTerminalResponse = object({
 });
 var zElicitationContentValue = union([
   string2(),
-  number2(),
+  wideInt(),
   number2(),
   boolean2(),
   array(string2())
@@ -32132,25 +31839,6 @@ var zCreateElicitationResponse = preserveCustomPayload(intersection(union([
 ]), object({
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
 })), "action", ["accept", "cancel", "decline"]);
-var zMcpError = looseObject({
-  code: int().min(-2147483648, {
-    error: "Invalid value: Expected int32 to be >= -2147483648"
-  }).max(2147483647, {
-    error: "Invalid value: Expected int32 to be <= 2147483647"
-  }),
-  message: string2(),
-  data: unknown().optional()
-});
-var zMessageMcpResponse = union([
-  object({
-    result: unknown(),
-    _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
-  }),
-  object({
-    error: zMcpError,
-    _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
-  })
-]);
 var zClientResponse = union([
   object({
     id: zRequestId,
@@ -32164,7 +31852,6 @@ var zClientResponse = union([
       zWaitForTerminalExitResponse,
       zKillTerminalResponse,
       zCreateElicitationResponse,
-      zMessageMcpResponse,
       zExtResponse
     ])
   }),
@@ -32177,24 +31864,28 @@ var zCancelNotification = object({
   sessionId: zSessionId,
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
 });
-var zMessageMcpNotification = object({
-  serverId: zMcpServerAcpId,
-  requestId: zMcpRequestId,
-  method: string2(),
-  params: record(string2(), unknown()).nullish(),
-  _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
-});
 var zClientNotification = object({
   method: string2(),
-  params: union([zCancelNotification, zMessageMcpNotification, zExtNotification]).nullish()
+  params: union([zCancelNotification, zExtNotification]).nullish()
 });
 var zCancelRequestNotification = object({
   requestId: zRequestId,
   _meta: defaultOnError(record(string2(), unknown()).nullish(), () => void 0)
 });
 
-// node_modules/@agentclientprotocol/sdk/dist/jsonrpc.js
+// node_modules/@agentclientprotocol/sdk/dist/core/jsonrpc.js
 var CANCEL_REQUEST_METHOD = "$/cancel_request";
+function treatSessionNotFoundAsSuccess(method, response, success2) {
+  if (method !== "session/close" && method !== "session/delete") {
+    return response;
+  }
+  return response.catch((error62) => {
+    if (error62 instanceof RequestError && error62.code === -32002) {
+      return success2();
+    }
+    throw error62;
+  });
+}
 function isRequestMessage(value) {
   return isJsonRpcEnvelope(value) && "id" in value && typeof value["method"] === "string" && isJsonRpcId(value["id"]);
 }
@@ -32226,28 +31917,6 @@ function isJsonRpcId(value) {
 }
 function isResponseShapedMessage(value) {
   return isRecord(value) && !("method" in value) && ("id" in value || "result" in value || "error" in value);
-}
-function isResponseBatch(batch) {
-  let hasValidCall = false;
-  let hasValidResponse = false;
-  let hasCallShape = false;
-  let hasResponseShape = false;
-  for (const entry of batch) {
-    hasValidCall ||= isRequestMessage(entry) || isNotificationMessage(entry);
-    hasValidResponse ||= isResponseMessage(entry);
-    if (!isRecord(entry)) {
-      continue;
-    }
-    hasCallShape ||= "method" in entry;
-    hasResponseShape ||= "result" in entry || "error" in entry;
-  }
-  if (hasValidCall) {
-    return false;
-  }
-  if (hasValidResponse) {
-    return true;
-  }
-  return hasResponseShape && !hasCallShape;
 }
 function cancelRequestId(params) {
   if (!isRecord(params) || !isJsonRpcId(params["requestId"])) {
@@ -32289,6 +31958,15 @@ function errorDetails(error62) {
 }
 function isZodError(error62) {
   return typeof error62 === "object" && error62 !== null && "name" in error62 && error62.name === "ZodError" && "issues" in error62 && Array.isArray(error62.issues) && "format" in error62 && typeof error62.format === "function";
+}
+function describeInvalidMessage(message) {
+  if (Array.isArray(message)) {
+    return { type: "array" };
+  }
+  if (isRecord(message)) {
+    return { type: "object", keys: Object.keys(message) };
+  }
+  return { type: message === null ? "null" : typeof message };
 }
 function errorToResult(error62) {
   if (error62 instanceof RequestError) {
@@ -32371,7 +32049,7 @@ var RequestResponder = class {
     });
   }
 };
-var requestBatchSizes = /* @__PURE__ */ new WeakMap();
+var nullIdResponders = /* @__PURE__ */ new WeakSet();
 var HandlerRegistration = class {
   disposeHandler;
   active = true;
@@ -32419,12 +32097,6 @@ var ConnectionContext = class {
     return this.connection.sendNotification(method, params);
   }
   /**
-   * Sends a non-empty JSON-RPC batch in one transport message.
-   */
-  sendBatch(entries) {
-    return this.connection.sendBatch(entries);
-  }
-  /**
    * Sends a protocol-level request cancellation notification.
    */
   sendCancelRequest(requestId) {
@@ -32455,6 +32127,7 @@ var Connection = class {
   nextRequestId = 0;
   staticHandlers = [];
   dynamicHandlers = /* @__PURE__ */ new Set();
+  fallbackHandlers = [];
   stream;
   writeQueue = Promise.resolve();
   abortController = new AbortController();
@@ -32462,7 +32135,6 @@ var Connection = class {
   retryQueue = [];
   context = new ConnectionContext(this);
   receiveReader;
-  allowBatches = true;
   constructor(requestHandlerOrStream, notificationHandlerOrHandlers, streamOrOptions, options) {
     if (typeof requestHandlerOrStream === "function") {
       const requestHandler = requestHandlerOrStream;
@@ -32552,63 +32224,13 @@ var Connection = class {
       return rejectedPromise(this.closedReason());
     }
     const request = this.prepareRequest(method, params, mapResponse, options);
-    const requestSent = this.sendWireMessage(request.message);
+    const requestSent = this.sendMessage(request.message);
     void requestSent.catch(() => {
     });
     if (options.cancellationSignal?.aborted) {
       request.cancel();
     }
     return request.response;
-  }
-  /**
-   * Sends a non-empty JSON-RPC batch in one transport message.
-   *
-   * Requests and notifications are processed independently by the peer. The
-   * returned tuple preserves the input order: request entries resolve to their
-   * mapped response, while notification entries resolve to `undefined`.
-   */
-  sendBatch(entries) {
-    if (this.abortController.signal.aborted) {
-      return rejectedPromise(this.closedReason());
-    }
-    if (!this.allowBatches) {
-      return rejectedPromise(new TypeError("JSON-RPC batches are not supported on this connection"));
-    }
-    if (entries.length === 0) {
-      return rejectedPromise(new TypeError("JSON-RPC batch must contain at least one entry"));
-    }
-    const messages = [];
-    const cancellations = [];
-    const outputs = [];
-    for (const entry of entries) {
-      if (entry.kind === "notification") {
-        messages.push({
-          jsonrpc: "2.0",
-          method: entry.method,
-          params: entry.params
-        });
-        outputs.push(Promise.resolve(void 0));
-        continue;
-      }
-      const request = this.prepareRequest(entry.method, entry.params, entry.mapResponse, entry.options);
-      messages.push(request.message);
-      outputs.push(request.response);
-      cancellations.push({
-        signal: entry.options?.cancellationSignal,
-        cancel: request.cancel
-      });
-    }
-    const batch = messages;
-    const batchSent = this.sendWireMessage(batch);
-    for (const cancellation of cancellations) {
-      if (cancellation.signal?.aborted) {
-        cancellation.cancel();
-      }
-    }
-    const response = Promise.all([batchSent, ...outputs]).then(([, ...resolved]) => resolved);
-    response.catch(() => {
-    });
-    return response;
   }
   /**
    * Sends a protocol-level request cancellation notification.
@@ -32623,7 +32245,7 @@ var Connection = class {
     if (this.abortController.signal.aborted) {
       return rejectedPromise(this.closedReason());
     }
-    return this.sendWireMessage({ jsonrpc: "2.0", method, params });
+    return this.sendMessage({ jsonrpc: "2.0", method, params });
   }
   prepareRequest(method, params, mapResponse, options = {}) {
     const id = this.nextRequestId++;
@@ -32648,6 +32270,10 @@ var Connection = class {
         pendingResponse.cleanup?.();
         void this.sendCancelRequest(id).catch(() => {
         });
+        if (options.stopWaitingOnCancel) {
+          pendingResponse.abandoned = true;
+          reject(requestCancelledError(options.cancellationSignal?.reason));
+        }
       };
       options.cancellationSignal?.addEventListener("abort", cancel2, {
         once: true
@@ -32689,7 +32315,7 @@ var Connection = class {
   initialize(stream, handlers, options) {
     this.stream = stream;
     this.staticHandlers = handlers;
-    this.allowBatches = options?.allowBatches ?? true;
+    this.fallbackHandlers = [...options?.fallbackHandlers ?? []];
     this.closedPromise = new Promise((resolve4) => {
       this.abortController.signal.addEventListener("abort", () => resolve4());
     });
@@ -32722,7 +32348,7 @@ var Connection = class {
           if (done) {
             break;
           }
-          this.receiveWireMessage(message);
+          this.receiveUnvalidatedMessage(message);
         }
       } finally {
         if (this.receiveReader === reader) {
@@ -32736,84 +32362,36 @@ var Connection = class {
       this.close(closeError);
     }
   }
-  receiveWireMessage(message) {
+  receiveUnvalidatedMessage(message) {
     if (Array.isArray(message)) {
-      if (!this.allowBatches) {
-        this.close(new TypeError("JSON-RPC batches are not supported on this connection"));
-        return;
-      }
-      this.receiveBatch(message);
+      void this.sendMessage(protocolErrorResponse(RequestError.invalidRequest(void 0, "JSON-RPC batches are not supported"))).catch(() => {
+      });
       return;
     }
     if (!isRequestMessage(message) && !isNotificationMessage(message) && !isResponseShapedMessage(message)) {
-      void this.sendWireMessage(protocolErrorResponse(RequestError.invalidRequest(message))).catch(() => {
+      void this.sendMessage(protocolErrorResponse(RequestError.invalidRequest(message))).catch(() => {
       });
       return;
     }
     this.receiveMessage(message);
   }
-  receiveBatch(batch) {
-    if (batch.length === 0) {
-      void this.sendWireMessage(protocolErrorResponse(RequestError.invalidRequest(batch))).catch(() => {
-      });
-      return;
-    }
-    const responseBatch = isResponseBatch(batch);
-    const responseCount = responseBatch ? 0 : batch.reduce((count, message) => count + (isNotificationMessage(message) ? 0 : 1), 0);
-    let remaining = responseCount;
-    let remainingNotifications = batch.reduce((count, message) => count + (isNotificationMessage(message) ? 1 : 0), 0);
-    let responseSent = false;
-    const responses = [];
-    const sendResponsesIfReady = async () => {
-      if (responseSent || remaining !== 0 || remainingNotifications !== 0 || responses.length === 0) {
-        return;
-      }
-      responseSent = true;
-      await this.sendWireMessage(responses);
-    };
-    const collectResponse = async (response) => {
-      responses.push(response);
-      remaining -= 1;
-      await sendResponsesIfReady();
-    };
-    for (const message of batch) {
-      if (responseBatch) {
-        if (isResponseShapedMessage(message)) {
-          this.receiveMessage(message);
-        }
-        continue;
-      }
-      if (!isRequestMessage(message) && !isNotificationMessage(message)) {
-        void collectResponse(protocolErrorResponse(RequestError.invalidRequest(message))).catch(() => {
-        });
-        continue;
-      }
-      const processing = this.receiveMessage(message, isRequestMessage(message) ? collectResponse : void 0, batch.length);
-      if (isNotificationMessage(message)) {
-        void processing.finally(() => {
-          remainingNotifications -= 1;
-          void sendResponsesIfReady().catch((error62) => this.close(error62));
-        });
-      }
-    }
-  }
-  receiveMessage(message, sendResponse, batchSize) {
+  receiveMessage(message) {
     if (this.abortController.signal.aborted) {
       return Promise.resolve();
     }
     if (!isRecord(message)) {
-      console.error("Invalid message", { message });
+      console.error("Invalid message", describeInvalidMessage(message));
       return Promise.resolve();
     }
     if ("method" in message) {
       if (!("id" in message)) {
         this.handleProtocolNotification(message);
       }
-      return this.processIncomingMessage(this.toIncomingMessage(message, sendResponse, batchSize)).catch((error62) => this.close(error62));
+      return this.processIncomingMessage(this.toIncomingMessage(message)).catch((error62) => this.close(error62));
     } else if ("id" in message) {
       this.handleResponse(message);
     } else {
-      console.error("Invalid message", { message });
+      console.error("Invalid message", describeInvalidMessage(message));
     }
     return Promise.resolve();
   }
@@ -32826,7 +32404,8 @@ var Connection = class {
     try {
       for (const handler of [
         ...this.staticHandlers,
-        ...this.dynamicHandlers.values()
+        ...this.dynamicHandlers.values(),
+        ...this.fallbackHandlers
       ]) {
         if (this.abortController.signal.aborted) {
           return;
@@ -32854,12 +32433,16 @@ var Connection = class {
       } else {
         const response = errorToResult(error62);
         if ("error" in response) {
-          console.error("Error handling notification", message.raw, response.error);
+          console.error("Error handling notification", {
+            method: message.method,
+            code: response.error.code,
+            message: response.error.message
+          });
         }
       }
     }
   }
-  toIncomingMessage(message, sendResponse, batchSize) {
+  toIncomingMessage(message) {
     if ("id" in message) {
       const abortController = new AbortController();
       this.incomingRequests.set(message.id, abortController);
@@ -32871,14 +32454,11 @@ var Connection = class {
       const responder = new RequestResponder(message.id, (result) => {
         const response = {
           jsonrpc: "2.0",
-          id: message.id,
+          id: nullIdResponders.has(responder) ? null : message.id,
           ...result
         };
-        return sendResponse ? sendResponse(response) : this.sendWireMessage(response);
+        return this.sendMessage(response);
       }, abortController.signal, finishRequest);
-      if (batchSize !== void 0) {
-        requestBatchSizes.set(responder, batchSize);
-      }
       return {
         kind: "request",
         method: message.method,
@@ -32900,6 +32480,9 @@ var Connection = class {
     if (pendingResponse) {
       this.pendingResponses.delete(response.id);
       pendingResponse.cleanup?.();
+      if (pendingResponse.abandoned) {
+        return;
+      }
       if (!isResponseMessage(response)) {
         pendingResponse.reject(RequestError.invalidRequest(response));
       } else if ("result" in response) {
@@ -32929,7 +32512,7 @@ var Connection = class {
   closedReason() {
     return this.abortController.signal.reason ?? new Error("ACP connection closed");
   }
-  async sendWireMessage(message) {
+  async sendMessage(message) {
     if (this.abortController.signal.aborted) {
       return rejectedPromise(this.closedReason());
     }
@@ -32952,6 +32535,7 @@ var Connection = class {
 };
 var ConnectionBuilder = class {
   handlers = [];
+  fallbackHandlers = [];
   connectionName;
   /**
    * Sets a diagnostic name used by handlers created from this builder.
@@ -32965,6 +32549,14 @@ var ConnectionBuilder = class {
    */
   withHandler(handler) {
     this.handlers.push(handler);
+    return this;
+  }
+  /**
+   * Adds a fallback after static and dynamic handlers. Each connection snapshots
+   * this registration alongside the builder's other handlers.
+   */
+  withFallbackHandler(handler) {
+    this.fallbackHandlers.push(handler);
     return this;
   }
   /**
@@ -33013,7 +32605,13 @@ var ConnectionBuilder = class {
    * Connects the configured handlers to a stream.
    */
   connect(stream, options) {
-    return new Connection(stream, this.handlers, options);
+    return new Connection(stream, this.handlers, {
+      ...options,
+      fallbackHandlers: [
+        ...options?.fallbackHandlers ?? [],
+        ...this.fallbackHandlers
+      ]
+    });
   }
   /**
    * Connects to a stream for the lifetime of `op`, then closes the connection.
@@ -33079,11 +32677,33 @@ var RequestError = class _RequestError extends Error {
     return new _RequestError(-32e3, `Authentication required${additionalMessage ? `: ${additionalMessage}` : ""}`, data);
   }
   /**
-   * Resource, such as a file, was not found
+   * A referenced resource, such as a session or file, does not exist.
+   *
+   * For an unknown or inactive session, prefer
+   * {@link RequestError.sessionNotFound}, which sets `data.sessionId` as the
+   * protocol expects.
    */
   static resourceNotFound(uri) {
     return new _RequestError(-32002, `Resource not found${uri ? `: ${uri}` : ""}`, uri && { uri });
   }
+  /**
+   * The session named by a session-scoped request does not exist or is not
+   * active on this connection.
+   *
+   * Produces a `-32002` (Resource not found) error with `data.sessionId` set
+   * to the requested session ID.
+   */
+  static sessionNotFound(sessionId) {
+    return new _RequestError(-32002, "Resource not found", {
+      sessionId
+    });
+  }
+  /**
+   * No supported protocol version is at or below the requested version.
+   *
+   * Produces a `-32022` error whose data lists the `requested` version and the
+   * `supported` versions.
+   */
   static unsupportedProtocolVersion(requested, supported) {
     return new _RequestError(-32022, "Unsupported protocol version", {
       requested,
@@ -33121,7 +32741,7 @@ function protocolErrorResponse(error62) {
   };
 }
 
-// node_modules/@agentclientprotocol/sdk/dist/stream-limits.js
+// node_modules/@agentclientprotocol/sdk/dist/core/stream-limits.js
 var DEFAULT_MAX_MESSAGE_BYTES = 32 * 1024 * 1024;
 var MessageTooLargeError = class extends Error {
   maxMessageBytes;
@@ -33180,27 +32800,50 @@ var MessageBuffer = class {
   }
 };
 
-// node_modules/@agentclientprotocol/sdk/dist/line-buffer.js
+// node_modules/@agentclientprotocol/sdk/dist/core/line-buffer.js
 var newline = 10;
+var carriageReturn = 13;
 var LineBuffer = class {
   /** Bytes of the current (incomplete) line, carried across chunks. */
   #pending;
   #maxMessageBytes;
-  constructor(maxMessageBytes) {
+  #splitOnCarriageReturn;
+  /** Whether the last line ended at a CR whose LF may start the next chunk. */
+  #afterCarriageReturn = false;
+  constructor(maxMessageBytes, { splitOnCarriageReturn = false } = {}) {
     this.#maxMessageBytes = resolveMaxMessageBytes(maxMessageBytes);
     this.#pending = new MessageBuffer(Math.min(Number.MAX_SAFE_INTEGER, this.#maxMessageBytes + 1));
+    this.#splitOnCarriageReturn = splitOnCarriageReturn;
   }
   /**
-   * Consumes a chunk, yielding each complete line without its trailing
-   * LF or CRLF.
+   * Consumes a chunk, yielding each complete line without its line ending.
    */
   *push(chunk) {
     let start2 = 0;
+    if (this.#afterCarriageReturn && chunk.byteLength > 0) {
+      this.#afterCarriageReturn = false;
+      if (chunk[0] === newline) {
+        start2 = 1;
+      }
+    }
     let newlineIndex = chunk.indexOf(newline, start2);
-    while (newlineIndex !== -1) {
-      yield this.#takeLine(chunk.subarray(start2, newlineIndex));
-      start2 = newlineIndex + 1;
-      newlineIndex = chunk.indexOf(newline, start2);
+    let carriageReturnIndex = this.#splitOnCarriageReturn ? chunk.indexOf(carriageReturn, start2) : -1;
+    while (newlineIndex !== -1 || carriageReturnIndex !== -1) {
+      if (carriageReturnIndex === -1 || newlineIndex !== -1 && newlineIndex < carriageReturnIndex) {
+        yield this.#takeLine(chunk.subarray(start2, newlineIndex));
+        start2 = newlineIndex + 1;
+        newlineIndex = chunk.indexOf(newline, start2);
+      } else {
+        yield this.#takeLine(chunk.subarray(start2, carriageReturnIndex));
+        start2 = carriageReturnIndex + 1;
+        if (start2 === chunk.byteLength) {
+          this.#afterCarriageReturn = true;
+        } else if (chunk[start2] === newline) {
+          start2++;
+          newlineIndex = chunk.indexOf(newline, start2);
+        }
+        carriageReturnIndex = chunk.indexOf(carriageReturn, start2);
+      }
     }
     if (start2 < chunk.byteLength) {
       const tail = chunk.subarray(start2);
@@ -33213,12 +32856,14 @@ var LineBuffer = class {
    * undefined if no bytes are buffered.
    */
   flush() {
+    this.#afterCarriageReturn = false;
     if (this.#pending.byteLength === 0) {
       return void 0;
     }
     return stripCarriageReturn(this.#pending.take());
   }
   clear() {
+    this.#afterCarriageReturn = false;
     this.#pending.clear();
   }
   #takeLine(tail) {
@@ -33231,7 +32876,7 @@ var LineBuffer = class {
   }
   #checkLine(tail) {
     const lastByte = tail.byteLength > 0 ? tail[tail.byteLength - 1] : this.#pending.lastByte;
-    const byteLength = this.#pending.byteLength + tail.byteLength - (lastByte === 13 ? 1 : 0);
+    const byteLength = this.#pending.byteLength + tail.byteLength - (lastByte === carriageReturn ? 1 : 0);
     if (byteLength > this.#maxMessageBytes) {
       this.clear();
       throw new MessageTooLargeError(this.#maxMessageBytes);
@@ -33239,10 +32884,10 @@ var LineBuffer = class {
   }
 };
 function stripCarriageReturn(line) {
-  return line[line.byteLength - 1] === 13 ? line.subarray(0, -1) : line;
+  return line[line.byteLength - 1] === carriageReturn ? line.subarray(0, -1) : line;
 }
 
-// node_modules/@agentclientprotocol/sdk/dist/stream.js
+// node_modules/@agentclientprotocol/sdk/dist/core/stream.js
 function ndJsonStream(output2, input2, options = {}) {
   const maxMessageBytes = resolveMaxMessageBytes(options.maxMessageBytes);
   const textEncoder = new TextEncoder();
@@ -33279,7 +32924,9 @@ function ndJsonStream(output2, input2, options = {}) {
           await writeJson(protocolErrorResponse(RequestError.parseError()));
           return;
         }
-        if (isRecord(message) || Array.isArray(message)) {
+        if (Array.isArray(message)) {
+          await writeJson(protocolErrorResponse(RequestError.invalidRequest(void 0, "JSON-RPC batches are not supported")));
+        } else if (isRecord(message)) {
           controller.enqueue(message);
         } else {
           await writeJson(protocolErrorResponse(RequestError.invalidRequest(message)));
@@ -33346,7 +32993,7 @@ function ndJsonStream(output2, input2, options = {}) {
   return { readable, writable };
 }
 
-// node_modules/@agentclientprotocol/sdk/dist/schema/guards.gen.js
+// node_modules/@agentclientprotocol/sdk/dist/v1/schema/guards.gen.js
 var zGuardCreateElicitationRequestForm = zElicitationFormMode.and(object({ mode: literal("form") })).and(object({ message: string2() }));
 var zGuardCreateElicitationRequestUrl = zElicitationUrlMode.and(object({ mode: literal("url") })).and(object({ message: string2() }));
 var zGuardCreateElicitationRequestCustom = union([zElicitationSessionScope, zElicitationRequestScope]).and(object({ message: string2() }));
@@ -33356,27 +33003,6 @@ var zGuardElicitationPropertySchemaInteger = zIntegerPropertySchema.and(object({
 var zGuardElicitationPropertySchemaBoolean = zBooleanPropertySchema.and(object({ type: literal("boolean") }));
 var zGuardElicitationPropertySchemaArray = zMultiSelectPropertySchema.and(object({ type: literal("array") }));
 var zGuardMultiSelectItemsString = zStringMultiSelectItems.and(object({ type: literal("string") }));
-var zGuardStateUpdateRunning = zRunningStateUpdate.and(object({ state: literal("running") }));
-var zGuardStateUpdateIdle = zIdleStateUpdate.and(object({ usage: zUsage.nullish() })).and(object({ state: literal("idle") }));
-var zGuardStateUpdateRequiresAction = zRequiresActionStateUpdate.and(object({ state: literal("requires_action") }));
-var zGuardStateUpdateUnknown = zUnknownStateUpdate.and(object({ state: literal("unknown") }));
-var zGuardIdleStateUpdateEndTurn = object({
-  stopReason: literal("end_turn")
-});
-var zGuardIdleStateUpdateMaxTokens = object({
-  stopReason: literal("max_tokens")
-});
-var zGuardIdleStateUpdateMaxTurnRequests = object({
-  stopReason: literal("max_turn_requests")
-});
-var zGuardIdleStateUpdateRefusal = object({
-  stopReason: literal("refusal")
-});
-var zGuardIdleStateUpdateCancelled = object({
-  stopReason: literal("cancelled")
-});
-var zGuardIdleStateUpdateError = zErrorStopReason.and(object({ error: zError.nullish() })).and(object({ stopReason: literal("error") }));
-var zGuardIdleStateUpdateNone = object({ stopReason: _null3().optional() });
 var zGuardCreateElicitationResponseAccept = zElicitationAcceptAction.and(object({ action: literal("accept") }));
 var zGuardCreateElicitationResponseDecline = object({
   action: literal("decline")
@@ -33385,9 +33011,86 @@ var zGuardCreateElicitationResponseCancel = object({
   action: literal("cancel")
 });
 
-// node_modules/@agentclientprotocol/sdk/dist/acp.js
+// node_modules/@agentclientprotocol/sdk/dist/core/app-handlers.js
+function parseParams(parser, params) {
+  if (!parser) {
+    return params;
+  }
+  if (typeof parser === "function") {
+    return parser(params);
+  }
+  return parser.parse(params);
+}
+function registerAppRequest(builder, spec, context, handler, serializeResponse, lifecycle) {
+  const handle = async (params, responder, cx, method) => {
+    try {
+      const response = await handler(context(params, cx, responder.signal, responder.id, method));
+      const sentResponse = serializeResponse ? serializeResponse(response) : response;
+      lifecycle?.beforeResponse(params, sentResponse, cx);
+      await responder.respond(sentResponse);
+    } catch (error62) {
+      lifecycle?.onError(cx, error62);
+      throw error62;
+    }
+  };
+  if (spec.method === "*") {
+    builder.withFallbackHandler({
+      handleMessage: async (message, cx) => {
+        if (message.kind !== "request")
+          return Handled.no(message);
+        await handle(message.params, message.responder, cx, message.method);
+        return Handled.yes();
+      }
+    });
+  } else {
+    builder.onReceiveRequest(spec.method, (params) => parseParams(spec.params, params), (params, responder, cx) => handle(params, responder, cx, spec.method));
+  }
+}
+function registerAppNotification(builder, spec, context, handler) {
+  if (spec.method === "*") {
+    builder.withFallbackHandler({
+      handleMessage: async (message, cx) => {
+        if (message.kind !== "notification")
+          return Handled.no(message);
+        await handler(context(message.params, cx, cx.signal, message.method));
+        return Handled.yes();
+      }
+    });
+  } else {
+    builder.onReceiveNotification(spec.method, (params) => parseParams(spec.params, params), (params, cx) => handler(context(params, cx, cx.signal, spec.method)));
+  }
+}
+
+// node_modules/@agentclientprotocol/sdk/dist/core/connection-access.js
+var connectionContextOf = /* @__PURE__ */ Symbol("connectionContextOf");
+
+// node_modules/@agentclientprotocol/sdk/dist/v1/stable/acp.js
 function ndJsonStream2(output2, input2, options) {
   return ndJsonStream(output2, input2, options);
+}
+var initializedConnections = /* @__PURE__ */ new WeakSet();
+function agentInitializationGate(enabled) {
+  return {
+    handleMessage(message, cx) {
+      if (message.kind !== "request" || !enabled() || initializedConnections.has(cx)) {
+        return Handled.no(message);
+      }
+      if (message.method !== AGENT_METHODS.initialize) {
+        return message.responder.respondWithError(RequestError.invalidRequest(void 0, `ACP connection must be initialized before '${message.method}'`)).then(() => Handled.yes());
+      }
+      const { responder } = message;
+      return Handled.no({
+        ...message,
+        responder: new RequestResponder(responder.id, (result) => {
+          if ("result" in result) {
+            initializedConnections.add(cx);
+          }
+          return responder.respondWithResult(result);
+        }, responder.signal)
+      });
+    },
+    describe: () => "agent-initialization"
+  };
 }
 function emptyObjectResponse(response) {
   return response ?? {};
@@ -33414,17 +33117,11 @@ var methods = {
     initialize: AGENT_METHODS.initialize,
     authenticate: AGENT_METHODS.authenticate,
     logout: AGENT_METHODS.logout,
-    providers: {
-      list: AGENT_METHODS.providers_list,
-      set: AGENT_METHODS.providers_set,
-      disable: AGENT_METHODS.providers_disable
-    },
     session: {
       new: AGENT_METHODS.session_new,
       load: AGENT_METHODS.session_load,
       list: AGENT_METHODS.session_list,
       delete: AGENT_METHODS.session_delete,
-      fork: AGENT_METHODS.session_fork,
       resume: AGENT_METHODS.session_resume,
       close: AGENT_METHODS.session_close,
       setMode: AGENT_METHODS.session_set_mode,
@@ -33480,6 +33177,10 @@ var AcpContext = class {
   get connectionContext() {
     return this.cx;
   }
+  /** @hidden SDK helpers use this to identify the connection. */
+  [connectionContextOf]() {
+    return this.cx;
+  }
   /** @internal */
   sendRequest(method, params, mapResponse, options) {
     return this.cx.sendRequest(method, params, mapResponse, options);
@@ -33500,6 +33201,17 @@ var AgentContext = class _AgentContext extends AcpContext {
   /** @internal */
   static create(cx, requestId) {
     return new _AgentContext(cx, requestId);
+  }
+  /**
+   * Executes a command in a new client terminal.
+   *
+   * Returns a handle for reading output, waiting for exit, killing the command,
+   * and releasing the terminal. Check the client's terminal capability first.
+   * Use `await using` or call `release()` when finished.
+   */
+  async createTerminal(params, options) {
+    const response = await this.request(CLIENT_METHODS.terminal_create, params, options);
+    return TerminalHandle.create(response.terminalId, params.sessionId, this.connectionContext);
   }
   request(method, params, options) {
     const spec = clientRequestSpecsByMethod[method];
@@ -33555,7 +33267,7 @@ var ClientContext = class _ClientContext extends AcpContext {
   }
   request(method, params, options) {
     const spec = agentRequestSpecsByMethod[method];
-    return this.sendRequest(method, params, spec?.mapResponse, options);
+    return treatSessionNotFoundAsSuccess(method, this.sendRequest(method, params, spec?.mapResponse, options), () => spec?.mapResponse ? spec.mapResponse({}) : {});
   }
   notify(method, params) {
     return this.sendNotification(method, params);
@@ -33867,15 +33579,6 @@ var ActiveSession = class _ActiveSession {
     return [prompt];
   }
 };
-function parseParams(parser, params) {
-  if (!parser) {
-    return params;
-  }
-  if (typeof parser === "function") {
-    return parser(params);
-  }
-  return parser.parse(params);
-}
 function requestSpec(method, params, mapResponse) {
   return {
     method,
@@ -33886,15 +33589,6 @@ function requestSpec(method, params, mapResponse) {
 }
 function notificationSpec(method, params) {
   return { method, params };
-}
-function registerAppRequest(builder, spec, context, handler) {
-  builder.onReceiveRequest(spec.method, (params) => parseParams(spec.params, params), async (params, responder, cx) => {
-    const response = await handler(context(params, cx, responder.signal, responder.id));
-    await responder.respond(spec.mapResponse ? spec.mapResponse(response) : response);
-  });
-}
-function registerAppNotification(builder, spec, context, handler) {
-  builder.onReceiveNotification(spec.method, (params) => parseParams(spec.params, params), (params, cx) => handler(context(params, cx, cx.signal)));
 }
 function specsByMethod(specs) {
   const byMethod = {};
@@ -33907,7 +33601,6 @@ var agentRequestSpecs = {
   initialize: requestSpec(AGENT_METHODS.initialize, zInitializeRequest),
   newSession: requestSpec(AGENT_METHODS.session_new, zNewSessionRequest),
   loadSession: requestSpec(AGENT_METHODS.session_load, zLoadSessionRequest, emptyObjectResponse),
-  unstable_forkSession: requestSpec(AGENT_METHODS.session_fork, zForkSessionRequest),
   listSessions: requestSpec(AGENT_METHODS.session_list, zListSessionsRequest),
   deleteSession: requestSpec(AGENT_METHODS.session_delete, zDeleteSessionRequest, emptyObjectResponse),
   resumeSession: requestSpec(AGENT_METHODS.session_resume, zResumeSessionRequest),
@@ -33915,9 +33608,6 @@ var agentRequestSpecs = {
   setSessionMode: requestSpec(AGENT_METHODS.session_set_mode, zSetSessionModeRequest, emptyObjectResponse),
   setSessionConfigOption: requestSpec(AGENT_METHODS.session_set_config_option, zSetSessionConfigOptionRequest),
   authenticate: requestSpec(AGENT_METHODS.authenticate, zAuthenticateRequest, emptyObjectResponse),
-  unstable_listProviders: requestSpec(AGENT_METHODS.providers_list, zListProvidersRequest),
-  unstable_setProvider: requestSpec(AGENT_METHODS.providers_set, zSetProviderRequest, emptyObjectResponse),
-  unstable_disableProvider: requestSpec(AGENT_METHODS.providers_disable, zDisableProviderRequest, emptyObjectResponse),
   logout: requestSpec(AGENT_METHODS.logout, zLogoutRequest, emptyObjectResponse),
   prompt: requestSpec(AGENT_METHODS.session_prompt, zPromptRequest)
 };
@@ -33943,31 +33633,35 @@ var agentRequestSpecsByMethod = specsByMethod(agentRequestSpecs);
 var agentNotificationSpecsByMethod = specsByMethod(agentNotificationSpecs);
 var clientRequestSpecsByMethod = specsByMethod(clientRequestSpecs);
 var clientNotificationSpecsByMethod = specsByMethod(clientNotificationSpecs);
-function agentRequestContext(params, client2, signal, requestId) {
+function agentRequestContext(params, client2, signal, requestId, method) {
   return {
+    method,
     params,
     requestId,
     signal,
     client: client2
   };
 }
-function agentNotificationContext(params, client2, signal) {
+function agentNotificationContext(params, client2, signal, method) {
   return {
+    method,
     params,
     signal,
     client: client2
   };
 }
-function clientRequestContext(params, agent, signal, requestId) {
+function clientRequestContext(params, agent, signal, requestId, method) {
   return {
+    method,
     params,
     requestId,
     signal,
     agent
   };
 }
-function clientNotificationContext(params, agent, signal) {
+function clientNotificationContext(params, agent, signal, method) {
   return {
+    method,
     params,
     signal,
     agent
@@ -34031,11 +33725,13 @@ function runConnectHandlers(connection, handlers) {
 var appBuilder = /* @__PURE__ */ Symbol("appBuilder");
 var runAgentConnectHandlers = /* @__PURE__ */ Symbol("runAgentConnectHandlers");
 var runClientConnectHandlers = /* @__PURE__ */ Symbol("runClientConnectHandlers");
-var stableConnectionOptions = { allowBatches: false };
 var AgentApp = class {
   builder = Connection.builder();
   connectHandlers = [];
+  fallbackKinds = /* @__PURE__ */ new Set();
+  hasInitializeHandler = false;
   constructor(options = {}) {
+    this.builder.withHandler(agentInitializationGate(() => this.hasInitializeHandler));
     if (options.name) {
       this.builder.name(options.name);
     }
@@ -34051,6 +33747,12 @@ var AgentApp = class {
   connect(target, options = {}) {
     return this.connectConnection(target, options).connection;
   }
+  /**
+   * Connects this agent app to a stream or client app for the lifetime of `op`.
+   *
+   * The callback receives an `AgentContext` for calling client-side methods.
+   * When `op` resolves or rejects, the connection is closed.
+   */
   connectWith(target, op) {
     const { rawConnection, connection } = this.connectConnection(target);
     return rawConnection.runUntil(() => op(connection.client));
@@ -34080,6 +33782,14 @@ var AgentApp = class {
     return this;
   }
   onRequest(method, handlerOrParams, handler) {
+    if (method === "*") {
+      if (handler)
+        throw new Error("Wildcard handlers receive raw params; omit the parser.");
+      if (this.fallbackKinds.has("request"))
+        throw new Error("A request fallback is already registered.");
+      this.fallbackKinds.add("request");
+      return this.request({ method }, handlerOrParams);
+    }
     if (handler) {
       return this.request({ method, params: handlerOrParams }, handler);
     }
@@ -34087,9 +33797,20 @@ var AgentApp = class {
     if (!spec) {
       throw new Error(`Unknown ACP request method '${method}'. Pass a params parser for custom methods.`);
     }
+    if (method === AGENT_METHODS.initialize) {
+      this.hasInitializeHandler = true;
+    }
     return this.request(spec, handlerOrParams);
   }
   onNotification(method, handlerOrParams, handler) {
+    if (method === "*") {
+      if (handler)
+        throw new Error("Wildcard handlers receive raw params; omit the parser.");
+      if (this.fallbackKinds.has("notification"))
+        throw new Error("A notification fallback is already registered.");
+      this.fallbackKinds.add("notification");
+      return this.notification({ method }, handlerOrParams);
+    }
     if (handler) {
       return this.notification({ method, params: handlerOrParams }, handler);
     }
@@ -34100,11 +33821,11 @@ var AgentApp = class {
     return this.notification(spec, handlerOrParams);
   }
   request(spec, handler) {
-    registerAppRequest(this.builder, spec, (params, cx, signal, requestId) => agentRequestContext(params, AgentContext.create(cx, requestId), signal, requestId), handler);
+    registerAppRequest(this.builder, spec, (params, cx, signal, requestId, method) => agentRequestContext(params, AgentContext.create(cx, requestId), signal, requestId, method), handler, spec.mapResponse);
     return this;
   }
   notification(spec, handler) {
-    registerAppNotification(this.builder, spec, (params, cx, signal) => agentNotificationContext(params, AgentContext.create(cx), signal), handler);
+    registerAppNotification(this.builder, spec, (params, cx, signal, method) => agentNotificationContext(params, AgentContext.create(cx), signal, method), handler);
     return this;
   }
   connectConnection(target, options = {}) {
@@ -34116,7 +33837,7 @@ var AgentApp = class {
       return state2;
     }
     const [thisStream, peerStream] = memoryStreamPair();
-    const peerRawConnection = target[appBuilder]().connect(peerStream, stableConnectionOptions);
+    const peerRawConnection = target[appBuilder]().connect(peerStream);
     const peerConnection = clientConnection(peerRawConnection);
     const state = this.openStreamConnection(thisStream);
     void state.rawConnection.closed.then(() => peerConnection.close());
@@ -34132,7 +33853,7 @@ var AgentApp = class {
     return state;
   }
   openStreamConnection(stream) {
-    const rawConnection = this.builder.connect(stream, stableConnectionOptions);
+    const rawConnection = this.builder.connect(stream);
     return {
       rawConnection,
       connection: agentConnection(rawConnection, this.connectHandlers)
@@ -34145,6 +33866,7 @@ function client(options) {
 var ClientApp = class {
   builder = Connection.builder();
   connectHandlers = [];
+  fallbackKinds = /* @__PURE__ */ new Set();
   constructor(options = {}) {
     if (options.name) {
       this.builder.name(options.name);
@@ -34165,6 +33887,12 @@ var ClientApp = class {
   connect(target) {
     return this.connectConnection(target).connection;
   }
+  /**
+   * Connects this client app to a stream or agent app for the lifetime of `op`.
+   *
+   * The callback receives a `ClientContext` for calling agent-side methods.
+   * When `op` resolves or rejects, the connection is closed.
+   */
   connectWith(target, op) {
     const { rawConnection, connection } = this.connectConnection(target);
     return rawConnection.runUntil(() => op(connection.agent));
@@ -34180,6 +33908,14 @@ var ClientApp = class {
     return this;
   }
   onRequest(method, handlerOrParams, handler) {
+    if (method === "*") {
+      if (handler)
+        throw new Error("Wildcard handlers receive raw params; omit the parser.");
+      if (this.fallbackKinds.has("request"))
+        throw new Error("A request fallback is already registered.");
+      this.fallbackKinds.add("request");
+      return this.request({ method }, handlerOrParams);
+    }
     if (handler) {
       return this.request({ method, params: handlerOrParams }, handler);
     }
@@ -34190,6 +33926,14 @@ var ClientApp = class {
     return this.request(spec, handlerOrParams);
   }
   onNotification(method, handlerOrParams, handler) {
+    if (method === "*") {
+      if (handler)
+        throw new Error("Wildcard handlers receive raw params; omit the parser.");
+      if (this.fallbackKinds.has("notification"))
+        throw new Error("A notification fallback is already registered.");
+      this.fallbackKinds.add("notification");
+      return this.notification({ method }, handlerOrParams);
+    }
     if (handler) {
       return this.notification({ method, params: handlerOrParams }, handler);
     }
@@ -34200,11 +33944,11 @@ var ClientApp = class {
     return this.notification(spec, handlerOrParams);
   }
   request(spec, handler) {
-    registerAppRequest(this.builder, spec, (params, cx, signal, requestId) => clientRequestContext(params, ClientContext.create(cx, requestId), signal, requestId), handler);
+    registerAppRequest(this.builder, spec, (params, cx, signal, requestId, method) => clientRequestContext(params, ClientContext.create(cx, requestId), signal, requestId, method), handler, spec.mapResponse);
     return this;
   }
   notification(spec, handler) {
-    registerAppNotification(this.builder, spec, (params, cx, signal) => clientNotificationContext(params, ClientContext.create(cx), signal), handler);
+    registerAppNotification(this.builder, spec, (params, cx, signal, method) => clientNotificationContext(params, ClientContext.create(cx), signal, method), handler);
     return this;
   }
   connectConnection(target) {
@@ -34214,7 +33958,7 @@ var ClientApp = class {
       return state2;
     }
     const [thisStream, peerStream] = memoryStreamPair();
-    const peerRawConnection = target[appBuilder]().connect(peerStream, stableConnectionOptions);
+    const peerRawConnection = target[appBuilder]().connect(peerStream);
     const peerConnection = agentConnection(peerRawConnection);
     const state = this.openStreamConnection(thisStream);
     void state.rawConnection.closed.then(() => peerConnection.close());
@@ -34230,416 +33974,86 @@ var ClientApp = class {
     return state;
   }
   openStreamConnection(stream) {
-    const rawConnection = this.builder.connect(stream, stableConnectionOptions);
+    const rawConnection = this.builder.connect(stream);
     return {
       rawConnection,
       connection: clientConnection(rawConnection, this.connectHandlers)
     };
   }
 };
-var legacyAgentRequestMethods = /* @__PURE__ */ new Set([
-  AGENT_METHODS.initialize,
-  AGENT_METHODS.authenticate,
-  AGENT_METHODS.providers_list,
-  AGENT_METHODS.providers_set,
-  AGENT_METHODS.providers_disable,
-  AGENT_METHODS.session_new,
-  AGENT_METHODS.session_load,
-  AGENT_METHODS.session_set_mode,
-  AGENT_METHODS.session_set_config_option,
-  AGENT_METHODS.session_prompt,
-  AGENT_METHODS.session_list,
-  AGENT_METHODS.session_delete,
-  AGENT_METHODS.session_fork,
-  AGENT_METHODS.session_resume,
-  AGENT_METHODS.session_close,
-  AGENT_METHODS.logout
-]);
-var legacyAgentNotificationMethods = /* @__PURE__ */ new Set([
-  AGENT_METHODS.session_cancel
-]);
-var legacyClientRequestMethods = /* @__PURE__ */ new Set([
-  CLIENT_METHODS.session_request_permission,
-  CLIENT_METHODS.fs_write_text_file,
-  CLIENT_METHODS.fs_read_text_file,
-  CLIENT_METHODS.terminal_create,
-  CLIENT_METHODS.terminal_output,
-  CLIENT_METHODS.terminal_release,
-  CLIENT_METHODS.terminal_wait_for_exit,
-  CLIENT_METHODS.terminal_kill,
-  CLIENT_METHODS.elicitation_create
-]);
-var legacyClientNotificationMethods = /* @__PURE__ */ new Set([
-  CLIENT_METHODS.session_update,
-  CLIENT_METHODS.elicitation_complete
-]);
-function legacyClientApp(implementation) {
-  const app = client().onRequest(CLIENT_METHODS.session_request_permission, (ctx) => implementation.requestPermission(ctx.params)).onNotification(CLIENT_METHODS.session_update, (ctx) => implementation.sessionUpdate(ctx.params)).onRequest(CLIENT_METHODS.fs_write_text_file, async (ctx) => await implementation.writeTextFile?.(ctx.params) ?? {}).onRequest(CLIENT_METHODS.fs_read_text_file, async (ctx) => await implementation.readTextFile?.(ctx.params)).onRequest(CLIENT_METHODS.terminal_create, async (ctx) => await implementation.createTerminal?.(ctx.params)).onRequest(CLIENT_METHODS.terminal_output, async (ctx) => await implementation.terminalOutput?.(ctx.params)).onRequest(CLIENT_METHODS.terminal_release, async (ctx) => await implementation.releaseTerminal?.(ctx.params) ?? {}).onRequest(CLIENT_METHODS.terminal_wait_for_exit, async (ctx) => await implementation.waitForTerminalExit?.(ctx.params)).onRequest(CLIENT_METHODS.terminal_kill, async (ctx) => await implementation.killTerminal?.(ctx.params) ?? {});
-  if (implementation.createElicitation) {
-    app.onRequest(CLIENT_METHODS.elicitation_create, (ctx) => implementation.createElicitation(ctx.params));
-  }
-  if (implementation.completeElicitation) {
-    app.onNotification(CLIENT_METHODS.elicitation_complete, (ctx) => implementation.completeElicitation(ctx.params));
-  }
-  if (implementation.extMethod) {
-    app[appBuilder]().withHandler({
-      handleMessage: async (message) => {
-        if (message.kind !== "request" || legacyClientRequestMethods.has(message.method)) {
-          return Handled.no(message);
-        }
-        await message.responder.respond(await implementation.extMethod(message.method, message.params));
-        return Handled.yes();
-      },
-      describe: () => "legacy-client-extension-request"
-    });
-  }
-  if (implementation.extNotification) {
-    app[appBuilder]().withHandler({
-      handleMessage: async (message) => {
-        if (message.kind !== "notification" || legacyClientNotificationMethods.has(message.method)) {
-          return Handled.no(message);
-        }
-        await implementation.extNotification(message.method, message.params);
-        return Handled.yes();
-      },
-      describe: () => "legacy-client-extension-notification"
-    });
-  }
-  return app;
-}
-var ClientSideConnection = class {
+var TerminalHandle = class _TerminalHandle {
+  /**
+   * Terminal identifier returned by `terminal/create`.
+   */
+  id;
+  sessionId;
   connection;
-  /**
-   * Creates a new client-side connection to an agent.
-   *
-   * This establishes the communication channel between a client and agent
-   * following the ACP specification.
-   *
-   * @param toClient - A function that creates a Client handler to process incoming agent requests
-   * @param stream - The bidirectional message stream for communication. Typically created using
-   *                 {@link ndJsonStream} for stdio-based connections.
-   *
-   * See protocol docs: [Communication Model](https://agentclientprotocol.com/protocol/overview#communication-model)
-   *
-   * @deprecated Prefer `client({ name }).connectWith(stream, async (ctx) => ...)`.
-   */
-  constructor(toClient, stream) {
-    this.connection = legacyClientApp(toClient(this))[appBuilder]().connect(stream, stableConnectionOptions);
+  constructor(id, sessionId, conn) {
+    this.id = id;
+    this.sessionId = sessionId;
+    this.connection = conn;
+  }
+  /** @internal */
+  static create(id, sessionId, conn) {
+    return new _TerminalHandle(id, sessionId, conn);
   }
   /**
-   * Establishes the connection with a client and negotiates protocol capabilities.
-   *
-   * This method is called once at the beginning of the connection to:
-   * - Negotiate the protocol version to use
-   * - Exchange capability information between client and agent
-   * - Determine available authentication methods
-   *
-   * The agent should respond with its supported protocol version and capabilities.
-   *
-   * See protocol docs: [Initialization](https://agentclientprotocol.com/protocol/initialization)
+   * Gets the current terminal output without waiting for the command to exit.
    */
-  initialize(params) {
-    return this.connection.sendRequest(AGENT_METHODS.initialize, params);
+  currentOutput() {
+    return this.connection.sendRequest(CLIENT_METHODS.terminal_output, {
+      sessionId: this.sessionId,
+      terminalId: this.id
+    });
   }
   /**
-   * Creates a new conversation session with the agent.
-   *
-   * Sessions represent independent conversation contexts with their own history and state.
-   *
-   * The agent should:
-   * - Create a new session context
-   * - Connect to any specified MCP servers
-   * - Return a unique session ID for future requests
-   *
-   * The request may include `additionalDirectories` to expand the session's filesystem
-   * scope beyond `cwd` without changing the base for relative paths.
-   *
-   * May return an `auth_required` error if the agent requires authentication.
-   *
-   * See protocol docs: [Session Setup](https://agentclientprotocol.com/protocol/session-setup)
+   * Waits for the terminal command to complete and returns its exit status.
    */
-  newSession(params) {
-    return this.connection.sendRequest(AGENT_METHODS.session_new, params);
+  waitForExit() {
+    return this.connection.sendRequest(CLIENT_METHODS.terminal_wait_for_exit, {
+      sessionId: this.sessionId,
+      terminalId: this.id
+    });
   }
   /**
-   * Loads an existing session to resume a previous conversation.
+   * Kills the terminal command without releasing the terminal.
    *
-   * This method is only available if the agent advertises the `loadSession` capability.
+   * The terminal remains valid after killing, allowing you to:
+   * - Get the final output with `currentOutput()`
+   * - Check the exit status
+   * - Release the terminal when done
    *
-   * The agent should:
-   * - Restore the session context and conversation history
-   * - Connect to the specified MCP servers
-   * - Stream the entire conversation history back to the client via notifications
-   *
-   * The request may include `additionalDirectories` to set the complete list of
-   * additional workspace roots for the loaded session.
-   *
-   * See protocol docs: [Loading Sessions](https://agentclientprotocol.com/protocol/session-setup#loading-sessions)
+   * Useful for implementing timeouts or cancellation.
    */
-  loadSession(params) {
-    return this.connection.sendRequest(AGENT_METHODS.session_load, params, emptyObjectResponse);
+  kill() {
+    return this.connection.sendRequest(CLIENT_METHODS.terminal_kill, {
+      sessionId: this.sessionId,
+      terminalId: this.id
+    }, emptyObjectResponse);
   }
   /**
-   * **UNSTABLE**
+   * Releases the terminal and frees all associated resources.
    *
-   * This capability is not part of the spec yet, and may be removed or changed at any point.
+   * If the command is still running, it will be killed.
+   * After release, the terminal ID becomes invalid and cannot be used
+   * with other terminal methods.
    *
-   * Forks an existing session to create a new independent session.
+   * Tool calls that already reference this terminal will continue to
+   * display its output.
    *
-   * Creates a new session based on the context of an existing one, allowing
-   * operations like generating summaries without affecting the original session's history.
-   *
-   * The request may include `additionalDirectories` to set the complete list of
-   * additional workspace roots for the forked session.
-   *
-   * The forked session is active when the response arrives, using the request's
-   * `cwd`, `additionalDirectories`, and `mcpServers`. Prompt it directly without
-   * first calling `resumeSession`.
-   *
-   * This method is only available if the agent advertises the `session.fork` capability.
-   *
-   * @experimental
+   * **Important:** Always call this method when done with the terminal.
    */
-  unstable_forkSession(params) {
-    return this.connection.sendRequest(AGENT_METHODS.session_fork, params);
+  release() {
+    return this.connection.sendRequest(CLIENT_METHODS.terminal_release, {
+      sessionId: this.sessionId,
+      terminalId: this.id
+    }, emptyObjectResponse);
   }
   /**
-   * Lists existing sessions from the agent.
-   *
-   * This method is only available if the agent advertises the `listSessions` capability.
-   *
-   * Returns a list of sessions with metadata like session ID, working directory,
-   * title, and last update time. Supports filtering by working directory,
-   * `additionalDirectories`, and cursor-based pagination.
+   * Releases the terminal when used with `await using`.
    */
-  listSessions(params) {
-    return this.connection.sendRequest(AGENT_METHODS.session_list, params);
-  }
-  /**
-   * Deletes an existing session returned by `session/list`.
-   *
-   * This method is only available if the agent advertises the `sessionCapabilities.delete` capability.
-   */
-  deleteSession(params) {
-    return this.connection.sendRequest(AGENT_METHODS.session_delete, params, emptyObjectResponse);
-  }
-  /**
-   * Resumes an existing session without returning previous messages.
-   *
-   * This method is only available if the agent advertises the `session.resume` capability.
-   *
-   * The agent should resume the session context, allowing the conversation to continue
-   * without replaying the message history (unlike `session/load`).
-   *
-   * The request may include `additionalDirectories` to set the complete list of
-   * additional workspace roots for the resumed session.
-   */
-  resumeSession(params) {
-    return this.connection.sendRequest(AGENT_METHODS.session_resume, params);
-  }
-  /**
-   * Closes an active session and frees up any resources associated with it.
-   *
-   * This method is only available if the agent advertises the `session.close` capability.
-   *
-   * The agent must cancel any ongoing work (as if `session/cancel` was called)
-   * and then free up any resources associated with the session.
-   */
-  closeSession(params) {
-    return this.connection.sendRequest(AGENT_METHODS.session_close, params, emptyObjectResponse);
-  }
-  /**
-   * Sets the operational mode for a session.
-   *
-   * Allows switching between different agent modes (e.g., "ask", "architect", "code")
-   * that affect system prompts, tool availability, and permission behaviors.
-   *
-   * The mode must be one of the modes advertised in `availableModes` during session
-   * creation or loading. Agents may also change modes autonomously and notify the
-   * client via `current_mode_update` notifications.
-   *
-   * This method can be called at any time during a session, whether the Agent is
-   * idle or actively generating a turn.
-   *
-   * See protocol docs: [Session Modes](https://agentclientprotocol.com/protocol/session-modes)
-   */
-  setSessionMode(params) {
-    return this.connection.sendRequest(AGENT_METHODS.session_set_mode, params, emptyObjectResponse);
-  }
-  /**
-   * Set a configuration option for a given session.
-   *
-   * The response contains the full set of configuration options and their current values,
-   * as changing one option may affect the available values or state of other options.
-   */
-  setSessionConfigOption(params) {
-    return this.connection.sendRequest(AGENT_METHODS.session_set_config_option, params);
-  }
-  /**
-   * Authenticates the client using the specified authentication method.
-   *
-   * Called when the agent requires authentication before allowing session creation.
-   * The client provides the authentication method ID that was advertised during initialization.
-   *
-   * After successful authentication, the client can proceed to create sessions with
-   * `newSession` without receiving an `auth_required` error.
-   *
-   * See protocol docs: [Initialization](https://agentclientprotocol.com/protocol/initialization)
-   */
-  authenticate(params) {
-    return this.connection.sendRequest(AGENT_METHODS.authenticate, params, emptyObjectResponse);
-  }
-  /**
-   * **UNSTABLE**
-   *
-   * This capability is not part of the spec yet, and may be removed or changed at any point.
-   *
-   * Lists providers that can be configured by the client.
-   *
-   * This method is only available if the agent advertises the `providers` capability.
-   *
-   * @experimental
-   */
-  unstable_listProviders(params) {
-    return this.connection.sendRequest(AGENT_METHODS.providers_list, params);
-  }
-  /**
-   * **UNSTABLE**
-   *
-   * This capability is not part of the spec yet, and may be removed or changed at any point.
-   *
-   * Replaces the configuration for a provider.
-   *
-   * This method is only available if the agent advertises the `providers` capability.
-   *
-   * @experimental
-   */
-  unstable_setProvider(params) {
-    return this.connection.sendRequest(AGENT_METHODS.providers_set, params, emptyObjectResponse);
-  }
-  /**
-   * **UNSTABLE**
-   *
-   * This capability is not part of the spec yet, and may be removed or changed at any point.
-   *
-   * Disables a provider.
-   *
-   * This method is only available if the agent advertises the `providers` capability.
-   *
-   * @experimental
-   */
-  unstable_disableProvider(params) {
-    return this.connection.sendRequest(AGENT_METHODS.providers_disable, params, emptyObjectResponse);
-  }
-  /**
-   * Logout of the current authentication method.
-   */
-  logout(params) {
-    return this.connection.sendRequest(AGENT_METHODS.logout, params, emptyObjectResponse);
-  }
-  /**
-   * Processes a user prompt within a session.
-   *
-   * This method handles the whole lifecycle of a prompt:
-   * - Receives user messages with optional context (files, images, etc.)
-   * - Processes the prompt using language models
-   * - Reports language model content and tool calls to the Clients
-   * - Requests permission to run tools
-   * - Executes any requested tool calls
-   * - Returns when the turn is complete with a stop reason
-   *
-   * See protocol docs: [Prompt Turn](https://agentclientprotocol.com/protocol/prompt-turn)
-   */
-  prompt(params) {
-    return this.connection.sendRequest(AGENT_METHODS.session_prompt, params);
-  }
-  /**
-   * Cancels ongoing operations for a session.
-   *
-   * This is a notification sent by the client to cancel an ongoing prompt turn.
-   *
-   * Upon receiving this notification, the Agent SHOULD:
-   * - Stop all language model requests as soon as possible
-   * - Abort all tool call invocations in progress
-   * - Send any pending `session/update` notifications
-   * - Respond to the original `session/prompt` request with `StopReason::Cancelled`
-   *
-   * See protocol docs: [Cancellation](https://agentclientprotocol.com/protocol/prompt-turn#cancellation)
-   */
-  cancel(params) {
-    return this.connection.sendNotification(AGENT_METHODS.session_cancel, params);
-  }
-  request(method, params, options) {
-    const spec = agentRequestSpecsByMethod[method];
-    return this.connection.sendRequest(method, params, spec?.mapResponse, options);
-  }
-  notify(method, params) {
-    return this.connection.sendNotification(method, params);
-  }
-  /**
-   * Extension method.
-   *
-   * @deprecated Use {@link request}.
-   */
-  extMethod(method, params) {
-    return this.request(method, params);
-  }
-  /**
-   * Extension notification.
-   *
-   * @deprecated Use {@link notify}.
-   */
-  extNotification(method, params) {
-    return this.notify(method, params);
-  }
-  /**
-   * AbortSignal that aborts when the connection closes.
-   *
-   * This signal can be used to:
-   * - Listen for connection closure: `connection.signal.addEventListener('abort', () => {...})`
-   * - Check connection status synchronously: `if (connection.signal.aborted) {...}`
-   * - Pass to other APIs (fetch, setTimeout) for automatic cancellation
-   *
-   * The connection closes when the underlying stream ends, either normally or due to an error.
-   *
-   * @example
-   * ```typescript
-   * const connection = new ClientSideConnection(client, stream);
-   *
-   * // Listen for closure
-   * connection.signal.addEventListener('abort', () => {
-   *   console.log('Connection closed - performing cleanup');
-   * });
-   *
-   * // Check status
-   * if (connection.signal.aborted) {
-   *   console.log('Connection is already closed');
-   * }
-   *
-   * // Pass to other APIs
-   * fetch(url, { signal: connection.signal });
-   * ```
-   */
-  get signal() {
-    return this.connection.signal;
-  }
-  /**
-   * Promise that resolves when the connection closes.
-   *
-   * The connection closes when the underlying stream ends, either normally or due to an error.
-   * Once closed, the connection cannot send or receive any more messages.
-   *
-   * This is useful for async/await style cleanup:
-   *
-   * @example
-   * ```typescript
-   * const connection = new ClientSideConnection(client, stream);
-   * await connection.closed;
-   * console.log('Connection closed - performing cleanup');
-   * ```
-   */
-  get closed() {
-    return this.connection.closed;
+  async [Symbol.asyncDispose]() {
+    await this.release();
   }
 };
 
@@ -34834,7 +34248,7 @@ var KiroAcpClient = class {
     );
     const tapped = options.debugFrames === true ? tapFrames(stream, (entry) => this.#log(entry)) : stream;
     this.#log({ event: "start", pid: process3.pid });
-    this.#connection = new ClientSideConnection(() => this.#handlers(), tapped);
+    this.#connection = this.#app().connect(tapped);
     const signal = this.#connection.signal;
     signal.addEventListener("abort", () => this.#onConnectionClosed(signal.reason), { once: true });
     void process3.exited.then((exit2) => this.#onExit(exit2));
@@ -34867,7 +34281,7 @@ var KiroAcpClient = class {
       "initialize",
       void 0,
       options,
-      () => this.#connection.initialize({
+      () => this.#connection.agent.request(methods.agent.initialize, {
         protocolVersion: ACP_PROTOCOL_VERSION,
         clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
         clientInfo: this.#clientInfo
@@ -34880,7 +34294,7 @@ var KiroAcpClient = class {
       "session/new",
       void 0,
       options,
-      () => this.#connection.newSession({ cwd: params.cwd, mcpServers: [...params.mcpServers ?? []] })
+      () => this.#connection.agent.request(methods.agent.session.new, { cwd: params.cwd, mcpServers: [...params.mcpServers ?? []] })
     );
     const sessionId = sessionIdOf(response);
     if (sessionId === void 0) {
@@ -34898,7 +34312,7 @@ var KiroAcpClient = class {
         "session/load",
         sessionId,
         options,
-        () => this.#connection.loadSession({
+        () => this.#connection.agent.request(methods.agent.session.load, {
           sessionId,
           cwd: params.cwd,
           mcpServers: [...params.mcpServers ?? []]
@@ -34968,7 +34382,7 @@ var KiroAcpClient = class {
       "session/set_config_option",
       sessionId,
       options,
-      () => this.#connection.setSessionConfigOption(request)
+      () => this.#connection.agent.request(methods.agent.session.setConfigOption, request)
     );
     this.#storeConfig(sessionId, response.configOptions, this.#answerPosition(response));
     return this.#config.get(sessionId) ?? [];
@@ -34984,7 +34398,7 @@ var KiroAcpClient = class {
         "session/prompt",
         sessionId,
         options,
-        () => this.#connection.prompt({ sessionId, prompt: blocks })
+        () => this.#connection.agent.request(methods.agent.session.prompt, { sessionId, prompt: blocks })
       );
     } finally {
       this.#withdraw(sessionId, turn);
@@ -35000,20 +34414,24 @@ var KiroAcpClient = class {
     }
     this.#log({ event: "cancel", sessionId, openPermissions: this.#countOpen(sessionId) });
     try {
-      await this.#connection.cancel({ sessionId });
+      await this.#connection.agent.notify(methods.agent.session.cancel, { sessionId });
     } catch (error62) {
       throw await this.#closedErrorFor(error62);
     } finally {
       this.#withdraw(sessionId);
     }
   }
-  /** Sends `session/close`; the process stays alive for other sessions. */
+  /**
+   * Sends `session/close`; the process stays alive for other sessions. A
+   * `-32002` (session not found) answer counts as closed: the SDK resolves it
+   * as `{}`, as ACP recommends for an unknown or already closed session.
+   */
   async closeSession(sessionId, options = {}) {
     const response = await this.#step(
       "session/close",
       sessionId,
       options,
-      () => this.#connection.closeSession({ sessionId })
+      () => this.#connection.agent.request(methods.agent.session.close, { sessionId })
     );
     this.#withdraw(sessionId);
     this.#config.delete(sessionId);
@@ -35030,24 +34448,27 @@ var KiroAcpClient = class {
     }
     return this.#process.kill(graceMs);
   }
-  #handlers() {
-    return {
-      requestPermission: (params) => this.#onPermission(params),
-      sessionUpdate: (params) => this.#onUpdate(params),
-      readTextFile: () => this.#refuse(CLIENT_METHODS.fs_read_text_file),
-      writeTextFile: () => this.#refuse(CLIENT_METHODS.fs_write_text_file),
-      createTerminal: () => this.#refuse(CLIENT_METHODS.terminal_create),
-      terminalOutput: () => this.#refuse(CLIENT_METHODS.terminal_output),
-      releaseTerminal: () => this.#refuse(CLIENT_METHODS.terminal_release),
-      waitForTerminalExit: () => this.#refuse(CLIENT_METHODS.terminal_wait_for_exit),
-      killTerminal: () => this.#refuse(CLIENT_METHODS.terminal_kill),
-      extNotification: (method, params) => {
-        this.#log({ event: "notification", method, length: jsonLength(params) });
-        if (method === MCP_STATUS_METHOD) {
-          this.#onMcpStatus(params);
-        }
-      }
-    };
+  /**
+   * The client app. The SDK checks the params of each named method against
+   * its schema before the handler runs; a request without a handler gets
+   * method-not-found, and a notification without one reaches the fallback.
+   */
+  #app() {
+    return client().onRequest(methods.client.session.requestPermission, ({ params }) => this.#onPermission(params)).onNotification(methods.client.session.update, ({ params }) => this.#onUpdate(params)).onRequest(methods.client.fs.readTextFile, () => this.#refuse(CLIENT_METHODS.fs_read_text_file)).onRequest(methods.client.fs.writeTextFile, () => this.#refuse(CLIENT_METHODS.fs_write_text_file)).onRequest(methods.client.terminal.create, () => this.#refuse(CLIENT_METHODS.terminal_create)).onRequest(methods.client.terminal.output, () => this.#refuse(CLIENT_METHODS.terminal_output)).onRequest(methods.client.terminal.release, () => this.#refuse(CLIENT_METHODS.terminal_release)).onRequest(methods.client.terminal.waitForExit, () => this.#refuse(CLIENT_METHODS.terminal_wait_for_exit)).onRequest(methods.client.terminal.kill, () => this.#refuse(CLIENT_METHODS.terminal_kill)).onNotification("*", ({ method, params }) => this.#onNotification(method, params));
+  }
+  /**
+   * Every notification but `session/update`: logged by method and length, and
+   * `_kiro/mcp/status` kept. Its params are as sent, unchecked.
+   * `elicitation/complete` is dropped unlogged, as SDK 1.x dropped it.
+   */
+  #onNotification(method, params) {
+    if (method === CLIENT_METHODS.elicitation_complete) {
+      return;
+    }
+    this.#log({ event: "notification", method, length: jsonLength(params) });
+    if (method === MCP_STATUS_METHOD) {
+      this.#onMcpStatus(params);
+    }
   }
   /**
    * Keeps the latest status of each server a `_kiro/mcp/status` names, under
@@ -40123,7 +39544,8 @@ var SessionManager = class {
       gone: latch(),
       turnDone: null,
       stopping: false,
-      canClose: false
+      canClose: false,
+      processEnd: null
     };
     this.#sessions.set(launchId, session);
     const abort = session.startAbort;
@@ -40754,9 +40176,25 @@ ${tail}`}`;
   }
   /**
    * Sends `session/close` when Kiro offers it, closes stdin, and kills the
-   * process when it has not exited when the stop grace is over.
+   * process when it has not exited when the stop grace is over. This runs
+   * once per session: a later caller (the completion's close or a `stop`
+   * while the plugin's own close after a completion runs) waits for the
+   * first one to finish and adds nothing to its report.
    */
   async #endProcess(session, report) {
+    if (session.processEnd !== null) {
+      await session.processEnd;
+      return;
+    }
+    const ending = this.#closeAndEndProcess(session, report);
+    session.processEnd = ending.then(
+      () => void 0,
+      () => void 0
+    );
+    await ending;
+  }
+  /** The work of {@link #endProcess}, which runs it once. */
+  async #closeAndEndProcess(session, report) {
     const { client: client2, handle, sessionId } = session;
     const grace = this.#controlLimits.stopGraceMs;
     const deadline = performance.now() + grace;

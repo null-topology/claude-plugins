@@ -452,6 +452,8 @@ interface Session {
   stopping: boolean;
   /** Kiro offers `session/close`. */
   canClose: boolean;
+  /** Set by the first `#endProcess`; settles once it has closed the session and the process has ended. */
+  processEnd: Promise<void> | null;
 }
 
 /** A start step that failed in a way of its own (deadline, abort). */
@@ -827,6 +829,7 @@ export class SessionManager implements LiveRegistry {
       turnDone: null,
       stopping: false,
       canClose: false,
+      processEnd: null,
     };
     this.#sessions.set(launchId, session);
     const abort = session.startAbort;
@@ -1510,9 +1513,26 @@ export class SessionManager implements LiveRegistry {
 
   /**
    * Sends `session/close` when Kiro offers it, closes stdin, and kills the
-   * process when it has not exited when the stop grace is over.
+   * process when it has not exited when the stop grace is over. This runs
+   * once per session: a later caller (the completion's close or a `stop`
+   * while the plugin's own close after a completion runs) waits for the
+   * first one to finish and adds nothing to its report.
    */
   async #endProcess(session: Session, report: StopReport): Promise<void> {
+    if (session.processEnd !== null) {
+      await session.processEnd;
+      return;
+    }
+    const ending = this.#closeAndEndProcess(session, report);
+    session.processEnd = ending.then(
+      () => undefined,
+      () => undefined,
+    );
+    await ending;
+  }
+
+  /** The work of {@link #endProcess}, which runs it once. */
+  async #closeAndEndProcess(session: Session, report: StopReport): Promise<void> {
     const { client, handle, sessionId } = session;
     const grace = this.#controlLimits.stopGraceMs;
     const deadline = performance.now() + grace;
