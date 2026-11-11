@@ -36601,7 +36601,7 @@ var MESSAGE_KEPT_CHARS = 4e3;
 var RESULT_KEPT_CHARS = 2e4;
 
 // src/version.ts
-var SERVER_VERSION = "0.1.0";
+var SERVER_VERSION = "0.2.0";
 
 // src/sidecar-tools.ts
 var SIDECAR_SERVER_NAME = "sidecar";

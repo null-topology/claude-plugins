@@ -3,7 +3,15 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import type { SessionNotification } from '@agentclientprotocol/sdk';
 import { toTurnEvent } from '../../src/acp/events.ts';
-import { checkOwnToolRequest, isOwnToolRequest, OWN_TOOL_PROOFS_KEPT, SidecarCalls } from '../../src/session/sidecar-calls.ts';
+import {
+  checkOwnToolRequest,
+  FRAME_SHAPE_KEY_CHARS,
+  FRAME_SHAPE_KEYS_KEPT,
+  isOwnToolRequest,
+  OWN_TOOL_PROOFS_KEPT,
+  ownToolFrameShape,
+  SidecarCalls,
+} from '../../src/session/sidecar-calls.ts';
 import { MESSAGE_KEPT_CHARS, MESSAGES_KEPT_TOTAL_CHARS, RESULT_KEPT_CHARS } from '../../src/text/limits.ts';
 import { messagesBlock } from '../../src/text/messages.ts';
 import { buildSecretSet } from '../../src/text/redact.ts';
@@ -413,5 +421,54 @@ describe('SidecarCalls, the kiro-cli 3.x form', () => {
     const recorder = calls();
     assert.equal(complete(recorder, 'legacy', 'send_message', { text: 'legacy' }), 'message');
     assert.deepEqual(recorder.summary().messages, ['legacy']);
+  });
+});
+
+describe('ownToolFrameShape', () => {
+  test('the legacy and current forms give sorted key names, never a value', () => {
+    const legacy = ownToolFrameShape('id1', '@sidecar/send_message', {
+      ...rawCall('send_message', { text: 'SECRET_TEXT_VALUE' }),
+      _meta: { kiro: { toolOrigin: 'default', serverName: 'sidecar' } },
+    });
+    assert.deepEqual(legacy, {
+      toolCallId: 'id1',
+      tool: 'send_message',
+      rawInputKeys: ['arguments', 'tool_id'],
+      kiroMetaKeys: ['serverName', 'toolOrigin'],
+    });
+    const current = ownToolFrameShape('id2', '@sidecar/complete_task', { rawInput: { result: 'SECRET_RESULT_VALUE' } });
+    assert.deepEqual(current, { toolCallId: 'id2', tool: 'complete_task', rawInputKeys: ['result'] });
+    const text = JSON.stringify([legacy, current]);
+    assert.ok(!text.includes('SECRET_') && !text.includes('sidecar::') && !text.includes('default'), text);
+  });
+
+  test('another title, or a near one, gives nothing', () => {
+    for (const title of ['Run Command', '@sidecar/complete_task ', '@other/complete_task', undefined]) {
+      assert.equal(ownToolFrameShape('id', title, { rawInput: { result: 'x' } }), undefined, String(title));
+    }
+  });
+
+  test('a part that is not an object has no list', () => {
+    for (const update of [{ rawInput: 'text', _meta: { kiro: ['a'] } }, { rawInput: null, _meta: 'm' }, null, 'frame']) {
+      assert.deepEqual(ownToolFrameShape('id', '@sidecar/send_message', update), { toolCallId: 'id', tool: 'send_message' });
+    }
+  });
+
+  test('at most the first sorted names are kept, each cut', () => {
+    const many = Object.fromEntries(Array.from({ length: 40 }, (_, i) => [`${'k'.repeat(50)}${String(i).padStart(2, '0')}`, i]));
+    const shape = ownToolFrameShape('id', '@sidecar/send_message', { rawInput: many, _meta: { kiro: many } });
+    assert.equal(shape?.rawInputKeys?.length, FRAME_SHAPE_KEYS_KEPT);
+    assert.ok(shape?.rawInputKeys?.every((key) => key === 'k'.repeat(FRAME_SHAPE_KEY_CHARS)));
+    assert.equal(shape?.kiroMetaKeys?.length, FRAME_SHAPE_KEYS_KEPT);
+  });
+
+  test('a key name that is not an identifier is not written', () => {
+    const shape = ownToolFrameShape('id', '@sidecar/complete_task', {
+      rawInput: { result: 'x', 'private customer text': 1, 'a.b': 2, '': 3 },
+      _meta: { kiro: { 'free text here': true, toolOrigin: 'default' } },
+    });
+    assert.deepEqual(shape?.rawInputKeys, ['?', '?', '?', 'result']);
+    assert.deepEqual(shape?.kiroMetaKeys, ['?', 'toolOrigin']);
+    assert.ok(!JSON.stringify(shape).includes('customer'));
   });
 });

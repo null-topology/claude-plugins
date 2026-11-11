@@ -57,14 +57,15 @@ export const AUTH_REQUIRED_CODE = -32000;
 /**
  * Authentication, sign-in or login wording, as Kiro's sign-in errors use it
  * ("Authentication required", "Authentication token is invalid", "Sign in to
- * Kiro to send a prompt.", "you are not signed in", ...). A hyphenated
- * "signed-in" or "logged-in" followed by a word names someone rather than
- * saying who is not signed in, so it does not count: Kiro 3.2.0's
+ * Kiro to send a prompt.", "you are not signed in", "You are not signed-in
+ * to Kiro.", ...). "signed in" or "logged in" (with a space, hyphen or
+ * underscore) used as an adjective right before "user" names someone rather
+ * than saying who is not signed in, so it does not count: Kiro 3.2.0's
  * MemoryNotReadyError, also -32000, reads "This session's memories are not
  * ready, because the signed-in user is not known yet. Try again later."
  */
 const AUTH_WORDING =
-  /authenticat|\bsign[\s_-]?in\b|\bsigned[\s_]in\b|\bsigned-in\b(?!\s+\w)|\blog[\s_-]?in\b|\blogged[\s_]in\b|\blogged-in\b(?!\s+\w)|\blogin/i;
+  /authenticat|\bsign[\s_-]?in\b|\bsigned[\s_-]?in\b(?![\s_-]+users?\b)|\blog[\s_-]?in\b|\blogged[\s_-]?in\b(?![\s_-]+users?\b)|\blogin/i;
 
 /**
  * True for an error Kiro answered a request with that says it is not signed

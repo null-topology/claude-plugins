@@ -23,6 +23,9 @@ describe('isAuthenticationError', () => {
       'You are not logged-in',
       'You are not signed-in.',
       'not signed_in',
+      'You are not signed-in to Kiro.',
+      'You must be logged-in to send a prompt',
+      'The logged-in session moved to another device',
     ]) {
       assert.equal(isAuthenticationError(new RequestError(AUTH_REQUIRED_CODE, message)), true, message);
     }
@@ -48,7 +51,7 @@ describe('isAuthenticationError', () => {
     }
   });
 
-  test('a signed-in or logged-in someone is not: Kiro 3.2.0 MemoryNotReadyError', () => {
+  test('"signed in" or "logged in" right before "user" is not: Kiro 3.2.0 MemoryNotReadyError', () => {
     // Message and data as the 3.2.0 bundle constructs MemoryNotReadyError (acp-server.js, class nwt).
     const memoryNotReady = new RequestError(
       -32000,
@@ -56,7 +59,15 @@ describe('isAuthenticationError', () => {
       { errorType: 'MemoryNotReadyError', reason: 'userPending' },
     );
     assert.equal(isAuthenticationError(memoryNotReady), false);
-    assert.equal(isAuthenticationError(new RequestError(-32000, 'The logged-in session moved to another device')), false);
+    for (const message of [
+      'the signed-in user is not known yet',
+      'the signed in user is not known yet',
+      'the Signed_In User is not known yet',
+      'the logged-in user is not known yet',
+      'the logged in users are not known yet',
+    ]) {
+      assert.equal(isAuthenticationError(new RequestError(-32000, message)), false, message);
+    }
   });
 
   test('the wording with another code, or no code, is not', () => {

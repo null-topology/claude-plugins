@@ -739,3 +739,48 @@ describe('SessionManager own tools in the kiro-cli 3.x form', () => {
     assert.deepEqual(fixture.errors, []);
   });
 });
+
+describe('SessionManager own-tool frame shapes in acp.jsonl', () => {
+  test('one own_tool_frame line per own-tool call, key names only; another title writes none', PROCESS_TIMEOUT, async (t) => {
+    const fixture = await managerFixture(t, 'harness');
+    const { manager } = fixture;
+    const steps = [
+      // Legacy form, its tool_call frame sent twice, with a _meta.kiro.
+      {
+        tool: 'send_message',
+        args: { text: 'LEGACY_VALUE_7f3a' },
+        end: 'completed',
+        kiroMeta: { toolOrigin: 'default', serverName: 'sidecar' },
+        repeatFrame: true,
+      },
+      // A call with another title: no line.
+      { tool: 'send_message', title: 'Run Command', args: { text: 'OTHER_VALUE_2b8e' }, end: 'completed' },
+      // Current form, no _meta.
+      { form: 'v3', tool: 'complete_task', args: { result: 'V3_VALUE_9c1d' }, end: 'completed', ask: true },
+    ];
+    const { launchId } = await manager.start({ dir: fixture.workspace.dir, prompt: `own-tools-then-hold 60000 ${JSON.stringify(steps)}` });
+    const result = await beforeTimeout(endedTurn(fixture, launchId, 1), PROMPT_END_MS, 'the turn', () => {});
+    assert.equal(result.completion?.result, 'V3_VALUE_9c1d');
+    const log = await acpLogOf(fixture, launchId);
+    const lines = log.split('\n').filter((line) => line.includes('"event":"own_tool_frame"'));
+    const shapes = lines.map((line) => {
+      const { at, ...rest } = JSON.parse(line) as Record<string, unknown>;
+      assert.equal(typeof at, 'string');
+      return rest;
+    });
+    assert.deepEqual(shapes, [
+      {
+        event: 'own_tool_frame',
+        toolCallId: 'tooluse_own_fixture0',
+        tool: 'send_message',
+        rawInputKeys: ['arguments', 'tool_id'],
+        kiroMetaKeys: ['serverName', 'toolOrigin'],
+      },
+      { event: 'own_tool_frame', toolCallId: 'tooluse_own_fixture2', tool: 'complete_task', rawInputKeys: ['result'] },
+    ]);
+    for (const value of ['LEGACY_VALUE_7f3a', 'OTHER_VALUE_2b8e', 'V3_VALUE_9c1d', 'sidecar::send_message', 'default']) {
+      assert.ok(lines.every((line) => !line.includes(value)), `${value} in ${lines.join('\n')}`);
+    }
+    assert.deepEqual(fixture.errors, []);
+  });
+});

@@ -297,6 +297,10 @@ interface OwnToolStep {
   askFirst?: boolean;
   /** `v3` only: `end` sends `rawInput: {}` until the final update, which carries the arguments. */
   valueAt?: 'every' | 'end';
+  /** The `tool_call` frame's `_meta.kiro`; none when not given. */
+  kiroMeta?: Record<string, unknown>;
+  /** Send the `tool_call` frame twice. */
+  repeatFrame?: boolean;
 }
 
 /** `harness` `complete-then-*`: the result of the `complete_task` call. */
@@ -1074,7 +1078,19 @@ function scriptedAgent(): FakeAgent {
     if (step.ask === true && step.askFirst === true) {
       await ask();
     }
-    await update(sessionId, { sessionUpdate: 'tool_call', toolCallId, title, kind: 'other', status: 'pending', rawInput });
+    const frame = {
+      sessionUpdate: 'tool_call',
+      toolCallId,
+      title,
+      kind: 'other',
+      status: 'pending',
+      rawInput,
+      ...(step.kiroMeta === undefined ? {} : { _meta: { kiro: step.kiroMeta } }),
+    } as const;
+    await update(sessionId, frame);
+    if (step.repeatFrame === true) {
+      await update(sessionId, frame);
+    }
     if (step.ask === true && step.askFirst !== true) {
       await ask();
     }

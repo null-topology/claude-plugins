@@ -116,7 +116,7 @@ import type { SweepReport } from './sweep.ts';
 import { decideOutcome, describeError } from './outcome.ts';
 import { writeProtocolSteering } from './protocol-steering.ts';
 import { copySkills, copySteering } from './run-copies.ts';
-import { checkOwnToolRequest } from './sidecar-calls.ts';
+import { checkOwnToolRequest, ownToolFrameShape } from './sidecar-calls.ts';
 import { resolveSkills, skillSourcesFromEnv } from './skills.ts';
 import type { ResolvedSkill } from './skills.ts';
 import { resolveSteering } from './steering.ts';
@@ -195,6 +195,9 @@ export const DEFAULT_CONTROL_LIMITS: ControlLimits = Object.freeze({
 
 /** How long `stop` waits for a session to finish ending once its process is gone. */
 const SESSION_END_WAIT_MS = 10_000;
+
+/** How many tool call ids a session remembers as having their own-tool frame shape logged. */
+const OWN_TOOL_FRAMES_REMEMBERED = 256;
 
 /** How long `stop` waits for `docker rm -f`. */
 const CONTAINER_REMOVE_TIMEOUT_MS = 30_000;
@@ -451,6 +454,8 @@ interface Session {
   denied: number;
   /** Permission requests decided as the plugin's own tools and not answered yet, by tool call id. */
   readonly ownToolRequests: Map<string, number>;
+  /** Tool call ids whose own-tool frame shape is in `acp.jsonl` already, latest last (bounded). */
+  readonly ownToolFramesLogged: Set<string>;
   /** Set once the session has failed or ended; it leaves the registry. */
   ended: boolean;
   /** Set once `acp.jsonl` is closed; later lifecycle entries are dropped. */
@@ -838,6 +843,7 @@ export class SessionManager implements LiveRegistry {
       allowed: 0,
       denied: 0,
       ownToolRequests: new Map(),
+      ownToolFramesLogged: new Set(),
       ended: false,
       acpClosed: false,
       startDone: latch(),
@@ -1994,6 +2000,7 @@ export class SessionManager implements LiveRegistry {
         return;
       case 'tool_call':
         if (!event.replay) {
+          this.#logOwnToolFrame(session, event.toolCallId, event.title, event.update);
           session.turn?.toolCall(event.title, event.toolCallId, event.update);
         }
         return;
@@ -2037,6 +2044,29 @@ export class SessionManager implements LiveRegistry {
       default:
         return;
     }
+  }
+
+  /**
+   * Writes the key names of a `tool_call` frame titled as an own tool to
+   * `acp.jsonl`, once per tool call id: the frame layout of a Kiro version
+   * shows there without any value the call carries.
+   */
+  #logOwnToolFrame(session: Session, toolCallId: string, title: string | undefined, update: unknown): void {
+    if (session.ownToolFramesLogged.has(toolCallId)) {
+      return;
+    }
+    const shape = ownToolFrameShape(toolCallId, title, update);
+    if (shape === undefined) {
+      return;
+    }
+    session.ownToolFramesLogged.add(toolCallId);
+    for (const oldest of session.ownToolFramesLogged) {
+      if (session.ownToolFramesLogged.size <= OWN_TOOL_FRAMES_REMEMBERED) {
+        break;
+      }
+      session.ownToolFramesLogged.delete(oldest);
+    }
+    this.#logLine(session, { event: 'own_tool_frame', ...shape }, false);
   }
 
   /** Whether the answered request `toolCallId` was decided as an own tool's; forgets one such decision. */

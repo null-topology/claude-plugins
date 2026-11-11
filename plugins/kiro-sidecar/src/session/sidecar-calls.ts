@@ -47,6 +47,68 @@ function ownToolOf(title: string | undefined): OwnTool | undefined {
   return (Object.keys(OWN_TOOLS) as OwnTool[]).find((tool) => title === ownToolTitle(tool));
 }
 
+/** At most this many key names per list in an {@link OwnToolFrameShape}. */
+export const FRAME_SHAPE_KEYS_KEPT = 16;
+/** Each key name in an {@link OwnToolFrameShape} is cut to this many characters. */
+export const FRAME_SHAPE_KEY_CHARS = 40;
+
+/**
+ * The shape of a `tool_call` frame titled as an own tool, for the ACP log:
+ * key names only, never a value. `rawInputKeys` and `kiroMetaKeys` (the keys
+ * of `_meta.kiro`) are present when that part is an object.
+ */
+export interface OwnToolFrameShape {
+  readonly toolCallId: string;
+  readonly tool: string;
+  readonly rawInputKeys?: readonly string[];
+  readonly kiroMetaKeys?: readonly string[];
+}
+
+/** What stands in an {@link OwnToolFrameShape} for a key name that is not an identifier. */
+export const FRAME_SHAPE_OTHER_KEY = '?';
+
+/** A key name written as it is: a field name, not text the model could place in a key. */
+const FIELD_NAME = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+
+/**
+ * The sorted key names of `value`, bounded in count and length; undefined
+ * when it is not an object. The model chooses the keys of `rawInput`, so a
+ * name that is not an identifier is not written.
+ */
+function keyNames(value: unknown): string[] | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  return Object.keys(value)
+    .sort()
+    .slice(0, FRAME_SHAPE_KEYS_KEPT)
+    .map((key) => (FIELD_NAME.test(key) ? key.slice(0, FRAME_SHAPE_KEY_CHARS) : FRAME_SHAPE_OTHER_KEY));
+}
+
+/**
+ * The shape of a `tool_call` frame whose title is exactly an own tool's, or
+ * undefined for any other title. `update` is the raw session update. It lets
+ * the frame layout a Kiro version sends be seen in `acp.jsonl` without
+ * logging what the call carries.
+ */
+export function ownToolFrameShape(toolCallId: string, title: string | undefined, update: unknown): OwnToolFrameShape | undefined {
+  const tool = ownToolOf(title);
+  if (tool === undefined) {
+    return undefined;
+  }
+  const frame = typeof update === 'object' && update !== null ? (update as Record<string, unknown>) : {};
+  const meta = frame['_meta'];
+  const kiro = typeof meta === 'object' && meta !== null && !Array.isArray(meta) ? (meta as Record<string, unknown>)['kiro'] : undefined;
+  const rawInputKeys = keyNames(frame['rawInput']);
+  const kiroMetaKeys = keyNames(kiro);
+  return {
+    toolCallId,
+    tool,
+    ...(rawInputKeys === undefined ? {} : { rawInputKeys }),
+    ...(kiroMetaKeys === undefined ? {} : { kiroMetaKeys }),
+  };
+}
+
 /** The parts of a `session/request_permission` that tell whose tool it is for. */
 export interface PermissionRequestIdentity {
   readonly toolCall: { readonly title?: string | null | undefined };

@@ -12,6 +12,7 @@ import {
   formatDuration,
 } from '../../src/hooks/wake.ts';
 import type { WakeInput } from '../../src/hooks/wake.ts';
+import { UNPROVEN_CALL_NOTICE } from '../../src/session/turn.ts';
 import { SHUTDOWN_ERROR } from '../../src/session/turn-result.ts';
 import type { TurnResult } from '../../src/session/types.ts';
 import type { RunMeta } from '../../src/store/runs.ts';
@@ -181,6 +182,19 @@ describe('wake message layout', () => {
     const completed = wake({ result: { ...done, notice } }).split('\n');
     assert.deepEqual(completed, [...completedWithout.slice(0, headerEnd), shown, ...completedWithout.slice(headerEnd)]);
     assert.equal(without.some((line) => line.startsWith('Notice:')), false);
+  });
+
+  test('a result with both notices shows each in full on the one notice line', () => {
+    // The text TurnRecorder.noteUnreadToolEnvelope keeps, joined after the unproven notice as the recorder joins them.
+    const envelope =
+      'Kiro asked permission for a sidecar tool in an identity layout this plugin does not read ' +
+      '(_meta.kiro.mcpTool.version 2); the permission policy decided it, and its ' +
+      'send_message or complete_task may not be recorded. Update the plugin.';
+    const lines = wake({ result: { notice: `${UNPROVEN_CALL_NOTICE} ${envelope}` } }).split('\n');
+    const noticeLines = lines.filter((line) => line.startsWith('Notice:'));
+    assert.deepEqual(noticeLines, [`Notice: ${UNPROVEN_CALL_NOTICE} ${envelope}`]);
+    assert.ok(noticeLines[0]?.includes(UNPROVEN_CALL_NOTICE));
+    assert.ok(noticeLines[0]?.includes(envelope));
   });
 
   test('a turn opened by a subagent names its agent type', () => {

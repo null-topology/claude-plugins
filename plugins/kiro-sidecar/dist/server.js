@@ -30460,7 +30460,7 @@ var AcpClientError = class extends Error {
   }
 };
 var AUTH_REQUIRED_CODE = -32e3;
-var AUTH_WORDING = /authenticat|\bsign[\s_-]?in\b|\bsigned[\s_]in\b|\bsigned-in\b(?!\s+\w)|\blog[\s_-]?in\b|\blogged[\s_]in\b|\blogged-in\b(?!\s+\w)|\blogin/i;
+var AUTH_WORDING = /authenticat|\bsign[\s_-]?in\b|\bsigned[\s_-]?in\b(?![\s_-]+users?\b)|\blog[\s_-]?in\b|\blogged[\s_-]?in\b(?![\s_-]+users?\b)|\blogin/i;
 function isAuthenticationError(error62) {
   if (typeof error62 !== "object" || error62 === null) {
     return false;
@@ -34083,7 +34083,7 @@ var TerminalHandle = class _TerminalHandle {
 
 // src/version.ts
 var SERVER_NAME = "kiro";
-var SERVER_VERSION = "0.1.0";
+var SERVER_VERSION = "0.2.0";
 
 // src/acp/config.ts
 function offeredValues(option) {
@@ -38694,6 +38694,33 @@ function ownToolTitle(tool) {
 function ownToolOf(title) {
   return Object.keys(OWN_TOOLS).find((tool) => title === ownToolTitle(tool));
 }
+var FRAME_SHAPE_KEYS_KEPT = 16;
+var FRAME_SHAPE_KEY_CHARS = 40;
+var FRAME_SHAPE_OTHER_KEY = "?";
+var FIELD_NAME = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+function keyNames(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return void 0;
+  }
+  return Object.keys(value).sort().slice(0, FRAME_SHAPE_KEYS_KEPT).map((key2) => FIELD_NAME.test(key2) ? key2.slice(0, FRAME_SHAPE_KEY_CHARS) : FRAME_SHAPE_OTHER_KEY);
+}
+function ownToolFrameShape(toolCallId, title, update) {
+  const tool = ownToolOf(title);
+  if (tool === void 0) {
+    return void 0;
+  }
+  const frame = typeof update === "object" && update !== null ? update : {};
+  const meta3 = frame["_meta"];
+  const kiro = typeof meta3 === "object" && meta3 !== null && !Array.isArray(meta3) ? meta3["kiro"] : void 0;
+  const rawInputKeys = keyNames(frame["rawInput"]);
+  const kiroMetaKeys = keyNames(kiro);
+  return {
+    toolCallId,
+    tool,
+    ...rawInputKeys === void 0 ? {} : { rawInputKeys },
+    ...kiroMetaKeys === void 0 ? {} : { kiroMetaKeys }
+  };
+}
 var MCP_TOOL_ENVELOPE_VERSION = 1;
 function checkOwnToolRequest(request) {
   const tool = ownToolOf(request.toolCall.title ?? void 0);
@@ -39630,6 +39657,7 @@ var DEFAULT_CONTROL_LIMITS = Object.freeze({
   killGraceMs: CLEANUP_KILL_GRACE_MS
 });
 var SESSION_END_WAIT_MS = 1e4;
+var OWN_TOOL_FRAMES_REMEMBERED = 256;
 var CONTAINER_REMOVE_TIMEOUT_MS = 3e4;
 var DEFAULT_DEPS = Object.freeze({
   spawn: spawnProcess,
@@ -39958,6 +39986,7 @@ var SessionManager = class {
       allowed: 0,
       denied: 0,
       ownToolRequests: /* @__PURE__ */ new Map(),
+      ownToolFramesLogged: /* @__PURE__ */ new Set(),
       ended: false,
       acpClosed: false,
       startDone: latch(),
@@ -41006,6 +41035,7 @@ ${tail}`}`;
         return;
       case "tool_call":
         if (!event.replay) {
+          this.#logOwnToolFrame(session, event.toolCallId, event.title, event.update);
           session.turn?.toolCall(event.title, event.toolCallId, event.update);
         }
         return;
@@ -41045,6 +41075,28 @@ ${tail}`}`;
       default:
         return;
     }
+  }
+  /**
+   * Writes the key names of a `tool_call` frame titled as an own tool to
+   * `acp.jsonl`, once per tool call id: the frame layout of a Kiro version
+   * shows there without any value the call carries.
+   */
+  #logOwnToolFrame(session, toolCallId, title, update) {
+    if (session.ownToolFramesLogged.has(toolCallId)) {
+      return;
+    }
+    const shape = ownToolFrameShape(toolCallId, title, update);
+    if (shape === void 0) {
+      return;
+    }
+    session.ownToolFramesLogged.add(toolCallId);
+    for (const oldest of session.ownToolFramesLogged) {
+      if (session.ownToolFramesLogged.size <= OWN_TOOL_FRAMES_REMEMBERED) {
+        break;
+      }
+      session.ownToolFramesLogged.delete(oldest);
+    }
+    this.#logLine(session, { event: "own_tool_frame", ...shape }, false);
   }
   /** Whether the answered request `toolCallId` was decided as an own tool's; forgets one such decision. */
   #takeOwnToolRequest(session, toolCallId) {

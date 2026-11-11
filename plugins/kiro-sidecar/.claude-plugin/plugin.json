@@ -1,6 +1,6 @@
 {
   "name": "kiro-sidecar",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Runs Kiro CLI agent sessions over the Agent Client Protocol from Claude Code.",
   "author": {
     "name": "null-topology"
