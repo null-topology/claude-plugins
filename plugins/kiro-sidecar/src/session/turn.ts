@@ -60,6 +60,8 @@ export class TurnRecorder {
   #lastChar = '';
   /** A tool call came after agent text and before the next agent text. */
   #toolSinceText = false;
+  /** The credits of the turn's `turn_completion` updates so far; null before the first that has any. */
+  #credits: number | null = null;
   /** The error that kept `turns/<n>.md` from being finalized, if any. */
   textError: unknown;
   /** The error that kept `turns/<n>.json` from being written or read, if any. */
@@ -135,6 +137,18 @@ export class TurnRecorder {
     return this.#finishing ? undefined : this.#calls.update(toolCallId, status);
   }
 
+  /**
+   * The credits of a `turn_completion` update of this turn (null: it had
+   * none), added to the turn's. One that comes once the turn is ending is
+   * not counted: the turn does not wait for it.
+   */
+  credits(credits: number | null): void {
+    if (this.#finishing || credits === null) {
+      return;
+    }
+    this.#credits = (this.#credits ?? 0) + credits;
+  }
+
   /** The running counters. `lastTool` is redacted. */
   live(): LiveTurn {
     const progress = this.#accumulator.progress();
@@ -197,6 +211,7 @@ export class TurnRecorder {
       durationS: Math.max(0, Math.round((endedAt.getTime() - this.startedAt.getTime()) / 1000)),
       toolCalls: summary.toolCalls,
       lastTool: summary.lastTool,
+      credits: this.#credits,
       messages: [...calls.messages],
       messagesDropped: calls.messagesDropped,
       completion: calls.completion,

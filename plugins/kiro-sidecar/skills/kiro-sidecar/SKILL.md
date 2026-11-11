@@ -15,6 +15,8 @@ results come back to you without asking.
 - Presets are not available in this version: pass the start parameters themselves, never `preset`.
 - `mode: docker` runs Kiro in a container that sees only `dir` and `mounts`. `mode: local` runs it
   on this host as you: its commands run with your files and your rights.
+- The first docker start of a day may pull the Kiro image and take longer; the `start` reply's
+  `imageRefresh` says when the image changed or could not be refreshed.
 - `skills` (Claude skill names, `name` or `plugin:name`) and `steering` (absolute paths of `.md`
   files) are copied into a docker session for Kiro to use. Local mode refuses both in this version.
 - For isolated coding work, create a git worktree first and start Kiro in it. Kiro cannot commit

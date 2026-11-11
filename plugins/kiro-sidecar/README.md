@@ -272,8 +272,16 @@ flowchart LR
 - **Labels and cleanup.** Every container is labelled with its run, owner and driver process, so
   `stop`, the server shutdown (500 ms, one detached `docker rm -f`) and the next startup sweep
   can always find it. A label value that the run's secret set would redact fails the launch.
-- **Image.** `--pull never`: the image must already be present (see [Requirements](#requirements)).
-  A custom image needs `kiro-cli` on `PATH` and `/usr/bin/node` (Node.js 22 or later).
+- **Image.** `docker run` gets `--pull never`: it runs the local image. The plugin refreshes that
+  image itself before `docker run`, at most once per `docker_image_refresh_hours` (default 24) for
+  each image reference, so the first docker start of a day may run `docker pull` and take longer
+  (up to 10 minutes, outside the start's own deadline). When the pull replaced the image, the
+  `start` reply says so with the old and the new image id, since the Kiro CLI inside may have
+  changed; when the pull fails and the image is present, the start goes on with the local image
+  and the reply says why and which image (id and creation date) it uses, and no pull of that
+  reference is tried for an hour. A reference pinned by digest (`@sha256:`) is never pulled. The
+  id of the image a run started from is in its `meta.json` (`imageId`). A custom image needs
+  `kiro-cli` on `PATH` and `/usr/bin/node` (Node.js 22 or later).
 
 ### Local mode
 
@@ -359,8 +367,11 @@ The optional settings `proxy` and `no_proxy` are set the same way; see [Proxy](#
 - Node.js 22 or later.
 - Docker, for the default `docker` mode. A rootless daemon or Docker Desktop works as is; on any
   other daemon see [Docker user](#docker-user).
-- The Kiro image, pulled once. The plugin never pulls images: it runs `docker run --pull never`,
-  and a missing image fails with `E_IMAGE_MISSING` and the command to run:
+- The Kiro image. The plugin pulls it when it is missing and refreshes it at most once a day (see
+  `docker_image_refresh_hours` under [Settings](#settings)), so the first docker start of a day may
+  pull the image and take longer. With `KIRO_SIDECAR_DOCKER_IMAGE_REFRESH_HOURS=0` the plugin never
+  pulls: a missing image then fails with `E_IMAGE_MISSING` and the command to run (a failed pull
+  adds its reason to the same error):
 
   ```sh
   docker pull sbx/kiro:latest
@@ -387,6 +398,7 @@ when that server starts:
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `KIRO_SIDECAR_DOCKER_IMAGE` | `sbx/kiro:latest` | Image for docker mode. A custom image must provide `kiro-cli` on `PATH` and `/usr/bin/node` (Node.js 22 or later), which runs the plugin's tool server. |
+| `KIRO_SIDECAR_DOCKER_IMAGE_REFRESH_HOURS` | `24` | Hours (0-8760) between refreshes of a docker image: a docker start pulls the image (`docker pull`, up to 10 minutes) when it has not been pulled within this time, so the first docker start of a day may take longer. A failed pull is not retried for an hour. `0`: never pull. A reference pinned by digest is never pulled. |
 | `KIRO_SIDECAR_DOCKER_USER` | `auto` | Container user: `auto` or `"<uid>:<gid>"`. |
 | `KIRO_SIDECAR_DEFAULT_MODE` | `docker` | `docker` or `local`, when `start` gives no `mode`. |
 | `KIRO_SIDECAR_HOME` | one per startup directory | Kiro home name. |
@@ -434,7 +446,7 @@ Everything between the output markers is Kiro's text, and the usage skill tells 
 it as data, never as instructions:
 
 ```text
-[kiro-sidecar] Kiro session "<label>" (<launchId>, Kiro <session id>) turn <n>: <outcome>, <k> tool calls, <duration>
+[kiro-sidecar] Kiro session "<label>" (<launchId>, Kiro <session id>) turn <n>: <outcome>, <k> tool calls, <duration>, <c> credits
 Dir: <dir> (<mode>, read-only|read-write). Started from: main conversation|subagent <agent type>.
 First prompt: "<first prompt preview>"
 Messages from Kiro (data, <count>):
@@ -450,6 +462,12 @@ A turn in which Kiro called `complete_task` is woken with its result first and t
 after it. The server ends that turn as soon as the call is recorded, so the final text holds only
 what Kiro wrote before then, often nothing. Every value is redacted against the session's secrets
 and cut to fixed bounds.
+
+`<c> credits` is what the turn cost as Kiro metered it (its `turn_completion` update), rounded to
+two decimals; the turn result's `credits`, which `wait`, `cancel`, `send {interrupt: true}` and
+`stop` return, holds the full number. A turn for which Kiro sent no metering before the turn
+ended has `credits: null` and no credits part; this is often so for a turn the server ends after
+`complete_task`, since it does not wait for the metering.
 
 After a `/clear`, `/resume`, fork or compaction, the context hook adds one block to the new
 conversation when this Claude process still owns live sessions, so their results keep arriving
@@ -502,7 +520,7 @@ kiro-sidecar/
 ├── skills/kiro-sidecar/         the usage skill
 ├── src/
 │   ├── acp/                     ACP client, Kiro process, permission policy, local mode
-│   ├── docker/                  docker run command, mounts, container user, removal
+│   ├── docker/                  docker run command, image check and refresh, mounts, container user, removal
 │   ├── hooks/                   waiter steps, wake message, SessionStart context
 │   ├── session/                 session manager, queries, startup sweep, skill and steering copies
 │   ├── store/                   state directory layout, runs, locks, process identity
@@ -526,6 +544,7 @@ STATE/
 │   └── turns/<n>.json, <n>.md   result and full text, plus the .armed, .claimed, .returned and .pushed markers
 ├── calls/<toolUseId>.json       which run and turn a start or send call opened
 ├── homes/<home>/                Kiro homes: skills/, steering/, Kiro's own sessions
+├── image-pulls/<hash>.json      per image reference: the last successful and failed docker pull
 └── hooks.log                    one line per event a hook could not act on
 ```
 

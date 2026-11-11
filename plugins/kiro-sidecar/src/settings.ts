@@ -22,6 +22,8 @@ export interface Settings {
   readonly presets_file: string;
   readonly home: string;
   readonly docker_image: string;
+  /** Hours between refreshes (`docker pull`) of a docker image reference; 0: never pulled. */
+  readonly docker_image_refresh_hours: number;
   readonly docker_user: string;
   readonly kiro_command: string;
   readonly default_mode: Mode;
@@ -40,6 +42,7 @@ export const DEFAULTS: Settings = Object.freeze({
   presets_file: '',
   home: '',
   docker_image: 'sbx/kiro:latest',
+  docker_image_refresh_hours: 24,
   docker_user: 'auto',
   kiro_command: 'kiro-cli',
   default_mode: 'docker',
@@ -111,6 +114,7 @@ export function loadSettings(env: Environment = process.env): Settings {
     presets_file: read('presets_file'),
     home: read('home'),
     docker_image: read('docker_image'),
+    docker_image_refresh_hours: read('docker_image_refresh_hours'),
     docker_user: read('docker_user'),
     kiro_command: read('kiro_command'),
     default_mode: read('default_mode'),
@@ -306,6 +310,7 @@ const FIELDS: { readonly [K in SettingKey]: FieldSpec<Settings[K]> } = {
   presets_file: { parse: anyString },
   home: { parse: accepting(isValidHomeName, HOME_NAME_RULE) },
   docker_image: { parse: anyString },
+  docker_image_refresh_hours: { parse: integerInRange(0, 8760) },
   docker_user: {
     parse: matching(DOCKER_USER_PATTERN, '"auto" or "<uid>:<gid>" in decimal digits'),
   },

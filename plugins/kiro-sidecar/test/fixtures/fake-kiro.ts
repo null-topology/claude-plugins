@@ -40,7 +40,11 @@
  * one), `secret-model-offered` (the token is offered as a model) and
  * `secret-config-error` (every config change fails with an error holding the
  * token), `hang-initialize` and
- * `fail-session-new` (each writes a stderr line first), `slow-cancel` (a turn
+ * `fail-session-new` (each writes a stderr line first), `auth-session-new`
+ * and `interrupted-session-new` (`session/new` fails with ACP -32000, as
+ * Kiro answers it signed out or after a dropped connection), `rpc-error`
+ * (the prompt fails with the code, message and data the prompt text gives as
+ * JSON), `slow-cancel` (a turn
  * that ends 1.5 s after its `session/cancel`) and `linger` (a turn that runs
  * until interrupted; when stdin closes the process exits with code 1 only
  * after 5 s, as v3 does after a turn). Every prompt and cancel is also
@@ -80,7 +84,9 @@
  * the turn after <ms> ms (`end_turn`) or when it is interrupted (`cancelled`);
  * `fill-then-hold <json>` sends messages, a completion and a final text of
  * the given sizes (of letters, or of a given text repeated), then holds the
- * turn until it is interrupted; any other
+ * turn until it is interrupted; `credits`, `credits-then-hold`,
+ * `credits-then-complete` and `complete-then-credits <json>` send
+ * `turn_completion` metering (see `METERED_COMMAND`); any other
  * prompt answers `ok`.
  */
 import { spawn } from 'node:child_process';
@@ -217,6 +223,17 @@ function closeMode(): string {
 
 /** `harness` `fill-then-hold <json>`: the prompt prefix, followed by a JSON `FillSizes`. */
 const FILL_COMMAND = 'fill-then-hold ';
+
+/**
+ * `harness` metering, each followed by a JSON array of `_meta.kiro` objects
+ * sent as `session_info_update`s: `credits <json>` sends them, then `ok`,
+ * `end_turn`; `credits-then-hold <json>` sends them and holds the turn until
+ * it is interrupted; `credits-then-complete <json>` sends them, calls
+ * `complete_task` and holds the turn until it is interrupted;
+ * `complete-then-credits <json>` calls `complete_task`, holds the turn until
+ * it is interrupted and sends them 20 ms after its answer.
+ */
+const METERED_COMMAND = /^(credits|credits-then-hold|credits-then-complete|complete-then-credits) (.*)$/s;
 
 /**
  * The sizes `fill-then-hold` sends: one `send_message` per entry of
@@ -454,8 +471,25 @@ async function send(record: Recorded, pending: Map<number, Promise<unknown>>): P
 // `late <ms>` (<ms> ms after the answer), `never` (it does not come, and a
 // stderr line says so), `missing-tool` (it lists `send_message` alone),
 // `failed <ms>` (a `failed` status first, then `connected` <ms> ms after the
-// answer) or `silent` (no status at all, not even `connecting`).
-const MCP_STATUS_MODE = existsSync('fake-mcp-status') ? readFileSync('fake-mcp-status', 'utf8').trim() : 'after';
+// answer), `silent` (no status at all, not even `connecting`) or `script`
+// (only the notifications of `fake-mcp-script.json`, a JSON array of
+// `_kiro/mcp/status` params sent in order after the answer, where a
+// `sessionId` of `$SESSION` is the new session's; `{"event":"mcp_script_done"}`
+// is appended to `fake-tools.jsonl` after the last). The file is read when
+// `session/new` comes, so a test may write it after the fake has started.
+function mcpStatusMode(): string {
+  return existsSync('fake-mcp-status') ? readFileSync('fake-mcp-status', 'utf8').trim() : 'after';
+}
+
+/** `script`: sends every notification of `fake-mcp-script.json`, in order. */
+async function playMcpScript(sessionId: string): Promise<void> {
+  const script = JSON.parse(readFileSync('fake-mcp-script.json', 'utf8')) as Record<string, unknown>[];
+  for (const params of script) {
+    const sent = params['sessionId'] === '$SESSION' ? { ...params, sessionId } : params;
+    await peer.notify('_kiro/mcp/status', sent);
+  }
+  appendFileSync('fake-tools.jsonl', `${JSON.stringify({ event: 'mcp_script_done' })}\n`);
+}
 
 // The names the plugin waits for; a test ties them to what the real server lists.
 const SIDECAR_TOOLS = TOOL_SERVER_TOOLS.map((name) => ({
@@ -485,9 +519,13 @@ async function reportSidecar(sessionId: string, mcpServers: readonly { readonly 
   if (!mcpServers.some((server) => server.name === 'sidecar')) {
     return;
   }
-  const [mode, value] = MCP_STATUS_MODE.split(' ');
+  const [mode, value] = mcpStatusMode().split(' ');
   const delay = Number(value ?? '0');
   if (mode === 'silent') {
+    return;
+  }
+  if (mode === 'script') {
+    setTimeout(() => void playMcpScript(sessionId).catch(() => {}), 20);
     return;
   }
   await mcpStatus(sessionId, 'connecting');
@@ -778,6 +816,13 @@ function scriptedAgent(): FakeAgent {
       await text(sessionId, 'partial answer');
       throw RequestError.internalError({ reason: 'fixture prompt failure' });
     },
+    // The prompt text is a JSON `{code, message, data?}`: the error the prompt
+    // fails with; `$TOKEN` in the message is the `KIRO_API_KEY` the fake got.
+    'rpc-error': async (sessionId, _turn, prompt) => {
+      const spec = JSON.parse(prompt[0]?.type === 'text' ? prompt[0].text : '{}') as { code: number; message: string; data?: unknown };
+      await text(sessionId, 'partial answer');
+      throw new RequestError(spec.code, spec.message.replaceAll('$TOKEN', process.env['KIRO_API_KEY'] ?? ''), spec.data);
+    },
     'crash-mid-turn': async (sessionId) => {
       await text(sessionId, 'Working on it.');
       await update(sessionId, {
@@ -916,6 +961,36 @@ function scriptedAgent(): FakeAgent {
         await text(sessionId, 'Task complete.');
         return { stopReason: ended === 'interrupted' ? 'cancelled' : 'end_turn' };
       }
+      const metered = METERED_COMMAND.exec(command);
+      if (metered !== null) {
+        // Each entry is the `_meta.kiro` of one `session_info_update`, sent in order.
+        const infos = JSON.parse(metered[2] ?? '[]') as Record<string, unknown>[];
+        const meter = async (): Promise<void> => {
+          for (const kiro of infos) {
+            await update(sessionId, { sessionUpdate: 'session_info_update', _meta: { kiro } });
+          }
+        };
+        if (metered[1] === 'credits') {
+          await meter();
+          await text(sessionId, 'ok');
+          return { stopReason: 'end_turn' };
+        }
+        if (metered[1] === 'credits-then-hold') {
+          await meter();
+          await turn.interrupted;
+          return { stopReason: 'cancelled' };
+        }
+        if (metered[1] === 'credits-then-complete') {
+          await meter();
+        }
+        await ownToolCall(sessionId, 'tooluse_complete_fixture2', { tool: 'complete_task', args: { result: COMPLETE_RESULT }, end: 'completed' });
+        await turn.interrupted;
+        if (metered[1] === 'complete-then-credits') {
+          // After the prompt's answer, as a summary that comes too late.
+          setTimeout(() => void meter().catch(() => {}), 20);
+        }
+        return { stopReason: 'cancelled' };
+      }
       if (hold !== null) {
         const toolCallId = 'run_command_tooluse_fixture32';
         const title = hold[1] === undefined ? 'Run Command' : FORGED_TITLE;
@@ -1005,6 +1080,13 @@ function scriptedAgent(): FakeAgent {
       if (config.scenario === 'fail-session-new') {
         process.stderr.write('fixture: session/new refused\n');
         throw RequestError.internalError({ reason: 'fixture session/new failure' });
+      }
+      // ACP -32000 as Kiro answers it signed out, and for a dropped backend connection.
+      if (config.scenario === 'auth-session-new') {
+        throw RequestError.authRequired();
+      }
+      if (config.scenario === 'interrupted-session-new') {
+        throw new RequestError(-32000, 'Your connection was interrupted. Please try again in a moment.');
       }
       sessions += 1;
       const token = process.env['KIRO_API_KEY'] ?? '';

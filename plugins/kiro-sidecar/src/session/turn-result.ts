@@ -19,6 +19,7 @@ const isCount: Check = (value) =>
 const isPositiveCount: Check = (value) => isCount(value) && (value as number) >= 1;
 const isDuration: Check = (value) =>
   typeof value === 'number' && Number.isFinite(value) && value >= 0;
+const isCredits: Check = isDuration;
 const isOneOf =
   (allowed: readonly string[]): Check =>
   (value) =>
@@ -47,6 +48,7 @@ const RESULT_FIELDS: { readonly [K in keyof TurnResult]-?: Check } = {
   durationS: isDuration,
   toolCalls: isCount,
   lastTool: isNullable(isString),
+  credits: isNullable(isCredits),
   messages: isStrings,
   messagesDropped: isCount,
   completion: isNullable(isCompletion),
@@ -62,6 +64,7 @@ const LEGACY_DEFAULTS: { readonly [K in keyof TurnResult]?: TurnResult[K] } = {
   messages: [],
   messagesDropped: 0,
   completion: null,
+  credits: null,
 };
 
 /** A copy of a checked field value, so the result shares no array or object with the file. */
@@ -149,6 +152,7 @@ export function endedWithoutResult(
     durationS: Math.max(0, Math.round((endedAt.getTime() - startedAt.getTime()) / 1000)),
     toolCalls: 0,
     lastTool: null,
+    credits: null,
     messages: [],
     messagesDropped: 0,
     completion: null,

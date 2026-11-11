@@ -30459,6 +30459,30 @@ var AcpClientError = class extends Error {
     this.exit = details.exit;
   }
 };
+var AUTH_REQUIRED_CODE = -32e3;
+var AUTH_WORDING = /authenticat|\bsign(?:ed)?[\s_-]?in\b|\blog(?:ged)?[\s_-]?in\b|\blogin/i;
+function isAuthenticationError(error62) {
+  if (typeof error62 !== "object" || error62 === null) {
+    return false;
+  }
+  const { code, message, data } = error62;
+  if (code !== AUTH_REQUIRED_CODE) {
+    return false;
+  }
+  if (typeof message === "string" && AUTH_WORDING.test(message)) {
+    return true;
+  }
+  if (data === void 0 || data === null) {
+    return false;
+  }
+  let text2;
+  try {
+    text2 = typeof data === "string" ? data : JSON.stringify(data);
+  } catch {
+    return false;
+  }
+  return text2 !== void 0 && AUTH_WORDING.test(text2);
+}
 
 // src/session/outcome.ts
 var CANCELLED = Object.freeze({ kind: "stop", stopReason: "cancelled" });
@@ -34142,6 +34166,41 @@ function toTurnEvent(notification, replay) {
   }
   return { kind: "update", sessionId, replay, update };
 }
+var TURN_COMPLETION_KIND = "turn_completion";
+function turnCompletionCredits(update) {
+  if (update.sessionUpdate !== "session_info_update") {
+    return void 0;
+  }
+  const kiro = update._meta?.["kiro"];
+  if (!isRecord2(kiro) || kiro["kind"] !== TURN_COMPLETION_KIND) {
+    return void 0;
+  }
+  return creditsOf(kiro["promptTurnSummaries"]);
+}
+function creditsOf(summaries) {
+  if (!Array.isArray(summaries)) {
+    return null;
+  }
+  let total = null;
+  for (const summary of summaries) {
+    if (!isRecord2(summary)) {
+      continue;
+    }
+    const { unit, usage } = summary;
+    if (typeof unit !== "string" || !CREDIT_UNITS.has(unit.trim().toLowerCase())) {
+      continue;
+    }
+    if (typeof usage !== "number" || !Number.isFinite(usage) || usage < 0) {
+      continue;
+    }
+    total = (total ?? 0) + usage;
+  }
+  return total;
+}
+var CREDIT_UNITS = /* @__PURE__ */ new Set(["credit", "credits"]);
+function isRecord2(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 // src/acp/permissions.ts
 var PERMISSION_DECISIONS = Object.freeze(["allow", "deny"]);
@@ -34201,8 +34260,10 @@ var KiroAcpClient = class {
   #loading = /* @__PURE__ */ new Set();
   #turns = /* @__PURE__ */ new Map();
   #open = /* @__PURE__ */ new Set();
-  /** The latest status of each MCP server, per session id, from any moment of the session. */
+  /** Each session's MCP servers as its latest valid `_kiro/mcp/status` snapshot lists them. */
   #mcpServers = /* @__PURE__ */ new Map();
+  /** Each session's filtered servers as its latest valid `_kiro/mcp/status` snapshot lists them. */
+  #mcpFiltered = /* @__PURE__ */ new Map();
   /** Called after every stored MCP status and config list, for the waits on them. */
   #watchers = /* @__PURE__ */ new Set();
   #closedPromise;
@@ -34328,23 +34389,37 @@ var KiroAcpClient = class {
   mcpServerStatus(sessionId, name) {
     return this.#mcpServers.get(sessionId)?.get(name);
   }
+  /** The servers of a session that organization MCP settings filtered out, as Kiro last reported them. */
+  mcpFiltered(sessionId) {
+    return this.#mcpFiltered.get(sessionId);
+  }
   /**
    * Resolves once the latest status of server `name` in the session is
    * `connected` and lists every tool in `tools`, which may already be so.
-   * Every other status is waited through. Rejects like a step: `timeout`
-   * after `timeoutMs`, `aborted` on the signal, `closed` when the client
-   * closes. Sends nothing.
+   * Every other status is waited through. Rejects `mcp_filtered` at once
+   * when the latest snapshot names the server among those organization MCP
+   * settings filtered out, and like a step: `timeout` after `timeoutMs`,
+   * `aborted` on the signal, `closed` when the client closes. Sends nothing.
    */
   async waitForMcpServer(sessionId, name, tools, options = {}) {
-    return this.#waitUntil(
+    const reached = await this.#waitUntil(
       `${name} server`,
       `the ${name} server was not connected within ${options.timeoutMs} ms`,
       () => {
         const status2 = this.mcpServerStatus(sessionId, name);
-        return status2 !== void 0 && status2.status === "connected" && tools.every((tool) => status2.tools.includes(tool)) ? status2 : void 0;
+        if (status2 !== void 0 && status2.status === "connected" && tools.every((tool) => status2.tools.includes(tool))) {
+          return { status: status2 };
+        }
+        const filtered = this.#mcpFiltered.get(sessionId);
+        return filtered !== void 0 && filtered.servers.includes(name) ? { filtered } : void 0;
       },
       options
     );
+    if ("filtered" in reached) {
+      const mode = reached.filtered.accessMode === null ? "" : ` (access mode ${reached.filtered.accessMode})`;
+      throw new AcpClientError("mcp_filtered", `organization MCP settings filtered out the ${name} server${mode}`);
+    }
+    return reached.status;
   }
   /**
    * Resolves with the session's config option `configId` once the agent
@@ -34438,6 +34513,7 @@ var KiroAcpClient = class {
     this.#configPositions.delete(sessionId);
     this.#configUpdatePositions.delete(sessionId);
     this.#mcpServers.delete(sessionId);
+    this.#mcpFiltered.delete(sessionId);
     return response;
   }
   /** Closes the connection and kills the process (SIGTERM, then SIGKILL). */
@@ -34471,28 +34547,34 @@ var KiroAcpClient = class {
     }
   }
   /**
-   * Keeps the latest status of each server a `_kiro/mcp/status` names, under
-   * its session id. Kiro sends it before the `session/new` or `session/load`
-   * answer too, so it is kept for any session id. A malformed entry is skipped.
+   * Takes a `_kiro/mcp/status` as the full snapshot of its session's MCP
+   * servers, as Kiro documents it: what it lists replaces everything known
+   * of the session, so a server it does not list is forgotten, and so are
+   * filtered servers it no longer names. Kiro sends it before the
+   * `session/new` or `session/load` answer too, so it is kept for any
+   * session id. A malformed entry is skipped; a notification without a
+   * string `sessionId` or an array `servers` changes nothing.
    */
   #onMcpStatus(params) {
-    const { sessionId, servers } = params;
+    const { sessionId, servers, accessMode, accessModeFilteredServers } = params;
     if (typeof sessionId !== "string" || !Array.isArray(servers)) {
       return;
     }
-    let known = this.#mcpServers.get(sessionId);
+    const known = /* @__PURE__ */ new Map();
     for (const server2 of servers) {
       const status2 = mcpServerStatusOf(server2);
       if (status2 === void 0) {
         continue;
       }
-      if (known === void 0) {
-        known = /* @__PURE__ */ new Map();
-        this.#mcpServers.set(sessionId, known);
-      }
       known.set(status2.name, status2);
       this.#log({ event: "mcp_status", sessionId, server: status2.name, status: status2.status, tools: status2.tools.length });
     }
+    this.#mcpServers.set(sessionId, known);
+    const filtered = Array.isArray(accessModeFilteredServers) ? accessModeFilteredServers.filter((name) => typeof name === "string") : [];
+    this.#mcpFiltered.set(
+      sessionId,
+      Object.freeze({ servers: Object.freeze(filtered), accessMode: typeof accessMode === "string" ? accessMode : null })
+    );
     this.#notifyWatchers();
   }
   #refuse(method) {
@@ -34774,18 +34856,18 @@ var KiroAcpClient = class {
   #onFrame(message) {
     this.#received += 1;
     const frame = message;
-    if (!isRecord2(frame)) {
+    if (!isRecord3(frame)) {
       return;
     }
     if (!("method" in frame)) {
       const result = frame["result"];
-      if (isRecord2(result)) {
+      if (isRecord3(result)) {
         this.#answerPositions.set(result, this.#received);
       }
       return;
     }
     const params = frame["params"];
-    if (frame["method"] === CLIENT_METHODS.session_update && isRecord2(params) && typeof params["sessionId"] === "string" && isRecord2(params["update"]) && params["update"]["sessionUpdate"] === "config_option_update") {
+    if (frame["method"] === CLIENT_METHODS.session_update && isRecord3(params) && typeof params["sessionId"] === "string" && isRecord3(params["update"]) && params["update"]["sessionUpdate"] === "config_option_update") {
       this.#configUpdatePositions.set(params["sessionId"], this.#received);
     }
   }
@@ -34908,7 +34990,7 @@ function jsonLength(value) {
     return 0;
   }
 }
-function isRecord2(value) {
+function isRecord3(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function watchIncoming(stream, seen) {
@@ -34955,6 +35037,7 @@ var DEFAULTS = Object.freeze({
   presets_file: "",
   home: "",
   docker_image: "sbx/kiro:latest",
+  docker_image_refresh_hours: 24,
   docker_user: "auto",
   kiro_command: "kiro-cli",
   default_mode: "docker",
@@ -35010,6 +35093,7 @@ function loadSettings(env = process.env) {
     presets_file: read("presets_file"),
     home: read("home"),
     docker_image: read("docker_image"),
+    docker_image_refresh_hours: read("docker_image_refresh_hours"),
     docker_user: read("docker_user"),
     kiro_command: read("kiro_command"),
     default_mode: read("default_mode"),
@@ -35137,6 +35221,7 @@ var FIELDS = {
   presets_file: { parse: anyString2 },
   home: { parse: accepting(isValidHomeName, HOME_NAME_RULE) },
   docker_image: { parse: anyString2 },
+  docker_image_refresh_hours: { parse: integerInRange(0, 8760) },
   docker_user: {
     parse: matching(DOCKER_USER_PATTERN, '"auto" or "<uid>:<gid>" in decimal digits')
   },
@@ -35235,11 +35320,16 @@ function runDocker(args, options) {
         killSignal: "SIGKILL",
         maxBuffer: MAX_OUTPUT_BYTES,
         encoding: "utf8",
-        windowsHide: true
+        windowsHide: true,
+        ...options.signal === void 0 ? {} : { signal: options.signal }
       },
       (error62, stdout, stderr) => {
         if (error62 === null) {
           resolve4({ code: 0, stdout, stderr });
+          return;
+        }
+        if (error62.name === "AbortError") {
+          reject(new SidecarError("E_DOCKER", `${label} was aborted`));
           return;
         }
         if (typeof error62.code === "number") {
@@ -35281,9 +35371,94 @@ function stderrSummary(stderr) {
   return trimmed.length > MAX_STDERR_IN_MESSAGE ? `${trimmed.slice(0, MAX_STDERR_IN_MESSAGE)}...` : trimmed;
 }
 
+// src/docker/image.ts
+import { createHash as createHash2 } from "node:crypto";
+import { join as join4 } from "node:path";
+
+// src/store/files.ts
+import { randomBytes as randomBytes2 } from "node:crypto";
+import { link, mkdir, open as open2, readFile, rename, rm } from "node:fs/promises";
+import { basename, dirname, join as join2 } from "node:path";
+var DIR_MODE = 448;
+var FILE_MODE = 384;
+function errorCode(error62) {
+  if (typeof error62 === "object" && error62 !== null && "code" in error62) {
+    const { code } = error62;
+    return typeof code === "string" ? code : void 0;
+  }
+  return void 0;
+}
+async function ensureDir(dir) {
+  await mkdir(dir, { recursive: true, mode: DIR_MODE });
+}
+function serialize(value, indent) {
+  const text2 = JSON.stringify(value, null, indent);
+  if (text2 === void 0) {
+    throw new TypeError("Value cannot be written as JSON");
+  }
+  return `${text2}
+`;
+}
+var TEMP_NAME_PATTERN = /^\..+\.[0-9a-f]{12}\.tmp$/;
+function isTempName(name) {
+  return TEMP_NAME_PATTERN.test(name);
+}
+async function writeTemp(target, data) {
+  const temp = join2(dirname(target), `.${basename(target)}.${randomBytes2(6).toString("hex")}.tmp`);
+  const handle = await open2(temp, "wx", FILE_MODE);
+  try {
+    await handle.writeFile(data, "utf8");
+    await handle.sync();
+  } catch (error62) {
+    await handle.close();
+    await rm(temp, { force: true });
+    throw error62;
+  }
+  await handle.close();
+  return temp;
+}
+async function writeJsonAtomic(path, value) {
+  await writeTextAtomic(path, serialize(value, 2));
+}
+async function writeTextAtomic(path, text2) {
+  const temp = await writeTemp(path, text2);
+  try {
+    await rename(temp, path);
+  } catch (error62) {
+    await rm(temp, { force: true });
+    throw error62;
+  }
+}
+async function createJsonOnce(path, value) {
+  const temp = await writeTemp(path, serialize(value, 2));
+  try {
+    await link(temp, path);
+    return true;
+  } catch (error62) {
+    if (errorCode(error62) === "EEXIST") {
+      return false;
+    }
+    throw error62;
+  } finally {
+    await rm(temp, { force: true });
+  }
+}
+async function readJsonIfExists(path) {
+  let text2;
+  try {
+    text2 = await readFile(path, "utf8");
+  } catch (error62) {
+    if (errorCode(error62) === "ENOENT") {
+      return void 0;
+    }
+    throw error62;
+  }
+  return JSON.parse(text2);
+}
+
 // src/docker/launch.ts
-import { lstat, readFile, realpath as realpath2, stat } from "node:fs/promises";
-import { dirname, isAbsolute as isAbsolute2, join as join2 } from "node:path";
+import { lstat, readFile as readFile2, realpath as realpath2, stat } from "node:fs/promises";
+import { dirname as dirname2, isAbsolute as isAbsolute2, join as join3 } from "node:path";
 
 // src/text/errors.ts
 var InvalidInputError = class extends SidecarError {
@@ -35935,7 +36110,7 @@ async function resolveMountSet(request) {
   });
 }
 async function gitCommonDir(dir) {
-  const dotGit = join2(dir, ".git");
+  const dotGit = join3(dir, ".git");
   const info = await lstat(dotGit).catch(() => null);
   if (info === null || !info.isFile()) {
     return null;
@@ -35948,7 +36123,7 @@ async function gitCommonDir(dir) {
   if (gitDir === null) {
     return null;
   }
-  const named = await readGitFile(join2(gitDir, "commondir"));
+  const named = await readGitFile(join3(gitDir, "commondir"));
   const commonDir = named === null || named === "" ? await submoduleGitDir(gitDir, dir) : await linkedWorktreeCommonDir(gitDir, named, dotGit);
   if (commonDir === null) {
     return null;
@@ -35964,10 +36139,10 @@ async function gitCommonDir(dir) {
 }
 async function linkedWorktreeCommonDir(gitDir, named, dotGit) {
   const commonDir = await realpathOrNull(physicalPath(gitDir, named));
-  if (commonDir === null || dirname(gitDir) !== join2(commonDir, "worktrees")) {
+  if (commonDir === null || dirname2(gitDir) !== join3(commonDir, "worktrees")) {
     return null;
   }
-  const backLink = await readGitFile(join2(gitDir, "gitdir"));
+  const backLink = await readGitFile(join3(gitDir, "gitdir"));
   if (backLink === null || backLink === "") {
     return null;
   }
@@ -35975,7 +36150,7 @@ async function linkedWorktreeCommonDir(gitDir, named, dotGit) {
   return linked !== null && linked === await realpathOrNull(dotGit) ? commonDir : null;
 }
 async function submoduleGitDir(gitDir, dir) {
-  const config2 = await readRegularFile(join2(gitDir, "config"));
+  const config2 = await readRegularFile(join3(gitDir, "config"));
   const worktree = config2 === null ? null : coreWorktree(config2);
   if (worktree === null || worktree === "") {
     return null;
@@ -36064,7 +36239,7 @@ async function readRegularFile(path) {
     if (!info.isFile() || info.size > GIT_FILE_MAX_BYTES) {
       return null;
     }
-    return await readFile(path, "utf8");
+    return await readFile2(path, "utf8");
   } catch {
     return null;
   }
@@ -36213,105 +36388,174 @@ function assertMountSafe(path) {
 
 // src/docker/image.ts
 var NO_SUCH_IMAGE = /no such image/i;
-async function checkImage(image, env = process.env) {
+var IMAGE_PULL_TIMEOUT_MS = 10 * 6e4;
+var PULL_RETRY_AFTER_MS = 60 * 6e4;
+var PULL_RECORDS_DIR = "image-pulls";
+var REASON_MAX_CHARS = 300;
+async function checkImage(image, env = process.env, context) {
   assertDockerImage(image);
-  const result = await runDocker(["image", "inspect", "--format", "{{.Id}}", image], {
-    env: stripClaudeVariables(env)
+  const docker = context?.docker ?? dockerCli(env);
+  const query = context?.query ?? ((work) => work);
+  if (context === void 0 || context.refreshHours <= 0 || isDigestPinned(image)) {
+    const local = await query(docker.inspect(image));
+    if (local === null) {
+      throw missingImage(image, null);
+    }
+    return { id: local.id, notice: null };
+  }
+  const now = context.now ?? Date.now;
+  const windowMs = context.refreshHours * 36e5;
+  const record2 = await readPullRecord(context.stateDir, image);
+  const before = await query(docker.inspect(image));
+  if (before !== null && pulledWithin(record2, now(), windowMs)) {
+    return { id: before.id, notice: null };
+  }
+  const blocked = failedWithin(record2, now());
+  if (blocked !== null) {
+    if (before !== null) {
+      return { id: before.id, notice: null };
+    }
+    throw missingImage(image, `the last pull, at ${blocked.failedAt}, failed (${blocked.failure ?? "no reason recorded"}); the next is tried an hour after it`);
+  }
+  const outcome = await context.pull(sharedPull(context, image, docker, now, windowMs, before === null));
+  const after = await query(docker.inspect(image));
+  if (outcome.ok) {
+    if (after === null) {
+      throw missingImage(image, "docker pull succeeded but the image is not present");
+    }
+    const replaced = before !== null && before.id !== after.id ? `docker pull replaced image ${image}: ${before.id} is now ${after.id}; the Kiro CLI inside may have changed.` : null;
+    return { id: after.id, notice: replaced };
+  }
+  if (after === null) {
+    throw missingImage(image, `the pull failed: ${outcome.reason}`);
+  }
+  return {
+    id: after.id,
+    notice: `The refresh of image ${image} failed (${outcome.reason}); this start uses the local image ${after.id}, created ${after.created}.`
+  };
+}
+function isDigestPinned(image) {
+  return image.includes("@sha256:");
+}
+var running = /* @__PURE__ */ new Map();
+function sharedPull(context, image, docker, now, windowMs, absent) {
+  const key2 = `${context.stateDir}\0${image}`;
+  const current = running.get(key2);
+  if (current !== void 0) {
+    return current;
+  }
+  const pull = (async () => {
+    const record2 = await readPullRecord(context.stateDir, image);
+    if (!absent && pulledWithin(record2, now(), windowMs)) {
+      return { ok: true };
+    }
+    const failed = failedWithin(record2, now());
+    if (failed !== null) {
+      return { ok: false, reason: failed.failure ?? "no reason recorded" };
+    }
+    try {
+      await docker.pull(image, { timeoutMs: IMAGE_PULL_TIMEOUT_MS, signal: context.signal });
+    } catch (error62) {
+      const reason = shortReason(error62);
+      if (context.signal?.aborted !== true) {
+        await writePullRecord(context.stateDir, {
+          reference: image,
+          pulledAt: record2?.pulledAt ?? null,
+          failedAt: isoNow(now),
+          failure: reason
+        });
+      }
+      return { ok: false, reason };
+    }
+    await writePullRecord(context.stateDir, { reference: image, pulledAt: isoNow(now), failedAt: null, failure: null });
+    return { ok: true };
+  })();
+  running.set(key2, pull);
+  void pull.finally(() => running.delete(key2)).catch(() => {
   });
-  if (result.code === 0 && result.stdout.trim() !== "") {
-    return;
+  return pull;
+}
+function pulledWithin(record2, now, windowMs) {
+  const at = timeOf(record2?.pulledAt ?? null);
+  return at !== null && at <= now && now - at < windowMs;
+}
+function failedWithin(record2, now) {
+  const at = timeOf(record2?.failedAt ?? null);
+  return at !== null && at <= now && now - at < PULL_RETRY_AFTER_MS ? record2 : null;
+}
+function timeOf(iso) {
+  if (iso === null) {
+    return null;
   }
-  if (NO_SUCH_IMAGE.test(result.stderr)) {
-    throw new SidecarError(
-      "E_IMAGE_MISSING",
-      `Docker image ${image} is not present locally. Pull it with: docker pull ${image}`
-    );
-  }
-  throw new SidecarError(
-    "E_DOCKER",
-    `docker image inspect ${image} failed: ${stderrSummary(result.stderr)}`
-  );
+  const time3 = Date.parse(iso);
+  return Number.isFinite(time3) ? time3 : null;
 }
-
-// src/store/files.ts
-import { randomBytes as randomBytes2 } from "node:crypto";
-import { link, mkdir, open as open2, readFile as readFile2, rename, rm } from "node:fs/promises";
-import { basename, dirname as dirname2, join as join3 } from "node:path";
-var DIR_MODE = 448;
-var FILE_MODE = 384;
-function errorCode(error62) {
-  if (typeof error62 === "object" && error62 !== null && "code" in error62) {
-    const { code } = error62;
-    return typeof code === "string" ? code : void 0;
-  }
-  return void 0;
+function isoNow(now) {
+  return new Date(now()).toISOString();
 }
-async function ensureDir(dir) {
-  await mkdir(dir, { recursive: true, mode: DIR_MODE });
+function pullRecordPath(stateDir, image) {
+  const name = createHash2("sha256").update(image).digest("hex").slice(0, 32);
+  return join4(stateDir, PULL_RECORDS_DIR, `${name}.json`);
 }
-function serialize(value, indent) {
-  const text2 = JSON.stringify(value, null, indent);
-  if (text2 === void 0) {
-    throw new TypeError("Value cannot be written as JSON");
-  }
-  return `${text2}
-`;
-}
-var TEMP_NAME_PATTERN = /^\..+\.[0-9a-f]{12}\.tmp$/;
-function isTempName(name) {
-  return TEMP_NAME_PATTERN.test(name);
-}
-async function writeTemp(target, data) {
-  const temp = join3(dirname2(target), `.${basename(target)}.${randomBytes2(6).toString("hex")}.tmp`);
-  const handle = await open2(temp, "wx", FILE_MODE);
+async function readPullRecord(stateDir, image) {
+  let value;
   try {
-    await handle.writeFile(data, "utf8");
-    await handle.sync();
-  } catch (error62) {
-    await handle.close();
-    await rm(temp, { force: true });
-    throw error62;
+    value = await readJsonIfExists(pullRecordPath(stateDir, image));
+  } catch {
+    return null;
   }
-  await handle.close();
-  return temp;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return null;
+  }
+  const { reference, pulledAt, failedAt, failure: failure2 } = value;
+  const nullableString = (field) => field === null || typeof field === "string";
+  if (reference !== image || !nullableString(pulledAt) || !nullableString(failedAt) || !nullableString(failure2)) {
+    return null;
+  }
+  return { reference, pulledAt, failedAt, failure: failure2 };
 }
-async function writeJsonAtomic(path, value) {
-  await writeTextAtomic(path, serialize(value, 2));
-}
-async function writeTextAtomic(path, text2) {
-  const temp = await writeTemp(path, text2);
+async function writePullRecord(stateDir, record2) {
   try {
-    await rename(temp, path);
-  } catch (error62) {
-    await rm(temp, { force: true });
-    throw error62;
+    const path = pullRecordPath(stateDir, record2.reference);
+    await ensureDir(join4(stateDir, PULL_RECORDS_DIR));
+    await writeJsonAtomic(path, record2);
+  } catch {
   }
 }
-async function createJsonOnce(path, value) {
-  const temp = await writeTemp(path, serialize(value, 2));
-  try {
-    await link(temp, path);
-    return true;
-  } catch (error62) {
-    if (errorCode(error62) === "EEXIST") {
-      return false;
+function missingImage(image, why) {
+  const base = `Docker image ${image} is not present locally. Pull it with: docker pull ${image}`;
+  return new SidecarError("E_IMAGE_MISSING", why === null ? base : `${base} (${why})`);
+}
+function shortReason(error62) {
+  const text2 = (error62 instanceof Error ? error62.message : String(error62)).replace(/\s+/g, " ").trim();
+  const reason = text2 === "" ? "no error output" : text2;
+  return reason.length > REASON_MAX_CHARS ? `${reason.slice(0, REASON_MAX_CHARS)}...` : reason;
+}
+function dockerCli(env) {
+  const cliEnv = stripClaudeVariables(env);
+  return {
+    inspect: async (image) => {
+      const result = await runDocker(["image", "inspect", "--format", "{{.Id}} {{.Created}}", image], { env: cliEnv });
+      const [id = "", ...created] = result.stdout.trim().split(" ");
+      if (result.code === 0 && id !== "") {
+        return { id, created: created.join(" ") };
+      }
+      if (NO_SUCH_IMAGE.test(result.stderr)) {
+        return null;
+      }
+      throw new SidecarError("E_DOCKER", `docker image inspect ${image} failed: ${stderrSummary(result.stderr)}`);
+    },
+    pull: async (image, options) => {
+      const result = await runDocker(["pull", "--quiet", image], {
+        env: cliEnv,
+        timeoutMs: options.timeoutMs,
+        ...options.signal === void 0 ? {} : { signal: options.signal }
+      });
+      if (result.code !== 0) {
+        throw new Error(`docker pull exited with code ${result.code}: ${stderrSummary(result.stderr)}`);
+      }
     }
-    throw error62;
-  } finally {
-    await rm(temp, { force: true });
-  }
-}
-async function readJsonIfExists(path) {
-  let text2;
-  try {
-    text2 = await readFile2(path, "utf8");
-  } catch (error62) {
-    if (errorCode(error62) === "ENOENT") {
-      return void 0;
-    }
-    throw error62;
-  }
-  return JSON.parse(text2);
+  };
 }
 
 // src/docker/remove.ts
@@ -36565,7 +36809,7 @@ async function liveness(identity) {
 }
 
 // src/store/lock.ts
-import { createHash as createHash2 } from "node:crypto";
+import { createHash as createHash3 } from "node:crypto";
 import { rm as rm2 } from "node:fs/promises";
 var ATTEMPTS = 16;
 var CONSTRUCT = /* @__PURE__ */ Symbol("RunLock");
@@ -36621,7 +36865,7 @@ async function readHolder(path) {
   return { pid: value.pid, startTime: value.startTime, hostId: value.hostId };
 }
 function breakMarker(lockPath, dead) {
-  const digest = createHash2("sha256").update(`${dead.pid}
+  const digest = createHash3("sha256").update(`${dead.pid}
 ${dead.startTime}
 ${dead.hostId}`).digest("hex").slice(0, 16);
   return `${lockPath}.break-${digest}`;
@@ -36739,6 +36983,7 @@ var META_FIELDS = {
   preset: isNullable(isString),
   tokenSource: isNullable(isOneOf(["preset", "api_key"])),
   image: isNullable(isString),
+  imageId: (value) => value === void 0 || value === null || isString(value),
   dockerUser: isNullable(isString),
   containerName: isNullable(isString),
   child: isNullable(isChild),
@@ -36876,7 +37121,7 @@ import {
   renameSync,
   writeSync
 } from "node:fs";
-import { join as join4 } from "node:path";
+import { join as join5 } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 var NO_FOLLOW = constants.O_NOFOLLOW ?? 0;
 var OPEN_APPEND = constants.O_WRONLY | constants.O_CREAT | constants.O_APPEND | NO_FOLLOW;
@@ -37098,7 +37343,7 @@ var TurnTextWriter = class _TurnTextWriter {
 
 [kiro-sidecar] The turn text reached its ${formatBytes(capBytes)} cap; the rest was not saved.
 `;
-    const path = join4(turnsDir, `${turn}.md`);
+    const path = join5(turnsDir, `${turn}.md`);
     const partPath = `${path}.part`;
     return new _TurnTextWriter(
       path,
@@ -37484,13 +37729,13 @@ async function readAtMost(handle, maxBytes) {
 
 // src/session/sweep.ts
 import { lstat as lstat2, readdir as readdir2, rename as rename2, rm as rm4 } from "node:fs/promises";
-import { join as join6 } from "node:path";
+import { join as join7 } from "node:path";
 
 // src/hooks/log.ts
-import { join as join5 } from "node:path";
+import { join as join6 } from "node:path";
 var HOOKS_LOG_NAME = "hooks.log";
 function hooksLogPath(stateDir) {
-  return join5(stateDir, HOOKS_LOG_NAME);
+  return join6(stateDir, HOOKS_LOG_NAME);
 }
 function rotatedHooksLogPath(stateDir) {
   return `${hooksLogPath(stateDir)}.1`;
@@ -37619,6 +37864,7 @@ var isBoolean2 = (value) => typeof value === "boolean";
 var isCount = (value) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 var isPositiveCount = (value) => isCount(value) && value >= 1;
 var isDuration = (value) => typeof value === "number" && Number.isFinite(value) && value >= 0;
+var isCredits = isDuration;
 var isOneOf2 = (allowed) => (value) => typeof value === "string" && allowed.includes(value);
 var isNullable2 = (check2) => (value) => value === null || check2(value);
 var isStrings = (value) => Array.isArray(value) && value.every(isString2);
@@ -37635,6 +37881,7 @@ var RESULT_FIELDS = {
   durationS: isDuration,
   toolCalls: isCount,
   lastTool: isNullable2(isString2),
+  credits: isNullable2(isCredits),
   messages: isStrings,
   messagesDropped: isCount,
   completion: isNullable2(isCompletion),
@@ -37647,7 +37894,8 @@ var RESULT_FIELDS = {
 var LEGACY_DEFAULTS = {
   messages: [],
   messagesDropped: 0,
-  completion: null
+  completion: null,
+  credits: null
 };
 function copyField(field, value) {
   if (Array.isArray(value)) {
@@ -37697,6 +37945,7 @@ function endedWithoutResult(run, turn, ending) {
     durationS: Math.max(0, Math.round((endedAt.getTime() - startedAt.getTime()) / 1e3)),
     toolCalls: 0,
     lastTool: null,
+    credits: null,
     messages: [],
     messagesDropped: 0,
     completion: null,
@@ -37965,7 +38214,7 @@ async function claimStanding(deps, launchId, marker) {
     return { kind: "held" };
   }
   try {
-    const holder = await readClaimHolder(join6(runPaths(deps.stateDir, launchId).turns, marker.name));
+    const holder = await readClaimHolder(join7(runPaths(deps.stateDir, launchId).turns, marker.name));
     if (holder === void 0) {
       return { kind: "gone" };
     }
@@ -37987,7 +38236,7 @@ async function removeStaleClaims(deps, launchId, report) {
     const standing = await claimStanding(deps, launchId, marker);
     switch (standing.kind) {
       case "stale":
-        await rm4(join6(turnsDir, marker.name), { force: true });
+        await rm4(join7(turnsDir, marker.name), { force: true });
         report.cleanedUp.push(`turns/${marker.name} removed`);
         break;
       case "kept":
@@ -38007,7 +38256,7 @@ async function removeStaleTemps(deps, launchId, report) {
   const cutoff = currentTime(deps) - TEMP_FILE_MIN_AGE_MS;
   for (const [dir, prefix] of [[paths.dir, ""], [paths.turns, "turns/"]]) {
     for (const name of await listNames(dir)) {
-      if (isTempName(name) && await removeIfOlder(join6(dir, name), cutoff)) {
+      if (isTempName(name) && await removeIfOlder(join7(dir, name), cutoff)) {
         report.cleanedUp.push(`${prefix}${name} removed`);
       }
     }
@@ -38034,7 +38283,7 @@ async function sweepCalls(deps, report) {
   let foreign = 0;
   let temps = 0;
   for (const name of await listNames(dir)) {
-    const path = join6(dir, name);
+    const path = join7(dir, name);
     if (isCallRecordName(name)) {
       const stats = await fileStats(path);
       if (stats === void 0 || stats.mtimeMs >= recordCutoff) {
@@ -38111,7 +38360,7 @@ function sweepLogLines(report) {
 
 // src/session/protocol-steering.ts
 import { readFile as readFile5 } from "node:fs/promises";
-import { join as join7 } from "node:path";
+import { join as join8 } from "node:path";
 var PROTOCOL_STEERING_FILE = "sidecar-protocol.md";
 var PROTOCOL_STEERING = `---
 inclusion: always
@@ -38128,7 +38377,7 @@ tool_load before the first call.
   right after the call: put everything in the result, nothing written after it is delivered.
 `;
 async function writeProtocolSteering(dir) {
-  const path = join7(dir, PROTOCOL_STEERING_FILE);
+  const path = join8(dir, PROTOCOL_STEERING_FILE);
   let current;
   try {
     current = await readFile5(path, "utf8");
@@ -38145,7 +38394,7 @@ async function writeProtocolSteering(dir) {
 // src/session/run-copies.ts
 import { constants as constants3 } from "node:fs";
 import { chmod, copyFile, mkdir as mkdir3, open as open4, readdir as readdir3, realpath as realpath3, stat as stat2 } from "node:fs/promises";
-import { isAbsolute as isAbsolute4, join as join8, relative, sep } from "node:path";
+import { isAbsolute as isAbsolute4, join as join9, relative, sep } from "node:path";
 var SKILL_COPY_LIMITS = Object.freeze({ entries: 1e4, bytes: 100 * 1024 * 1024 });
 var SkillTreeError = class extends Error {
   constructor(message) {
@@ -38174,23 +38423,23 @@ async function checkSkillTrees(skills, limits = SKILL_COPY_LIMITS) {
 async function copySkills(skills, dir, options = {}) {
   const budget = new CopyBudget(options.limits ?? SKILL_COPY_LIMITS);
   for (const skill of skills) {
-    const target = join8(dir, skill.name);
+    const target = join9(dir, skill.name);
     await walkSkill(skill, budget, options.signal, {
       // No `recursive`: a directory already there fails the copy.
       enter: async (to) => {
-        await mkdir3(join8(target, to));
+        await mkdir3(join9(target, to));
       },
       // Set once the directory is filled, since its mode may forbid writing into it.
       leave: async (to, stats) => {
-        await chmod(join8(target, to), stats.mode & 4095);
+        await chmod(join9(target, to), stats.mode & 4095);
       },
-      file: (real, to) => copyFileBounded(real, join8(target, to), budget, options.signal)
+      file: (real, to) => copyFileBounded(real, join9(target, to), budget, options.signal)
     });
   }
 }
 async function copySteering(files, dir) {
   for (const file2 of files) {
-    await copyFile(file2.file, join8(dir, file2.name), constants3.COPYFILE_EXCL);
+    await copyFile(file2.file, join9(dir, file2.name), constants3.COPYFILE_EXCL);
   }
 }
 var CopyBudget = class {
@@ -38226,8 +38475,8 @@ async function walkSkill(skill, budget, signal, visitor) {
     await visitor.enter(to);
     for (const entry of (await readdir3(real)).sort()) {
       signal?.throwIfAborted();
-      const path = join8(real, entry);
-      const entryTo = join8(to, entry);
+      const path = join9(real, entry);
+      const entryTo = join9(to, entry);
       const entryReal = await realpath3(path);
       if (!isInside(root, entryReal)) {
         throw new SkillTreeError(`skill ${name}: ${JSON.stringify(path)} is a link that leads outside the skill`);
@@ -38363,6 +38612,10 @@ var TOOL_SERVER_TOOLS = Object.freeze(["send_message", "complete_task"]);
 var CONTAINER_NODE = "/usr/bin/node";
 var TOOL_SERVER_MISSING = "the plugin's tool server is missing; reinstall the plugin";
 var TOOL_SERVER_NOT_CONNECTED = "Kiro did not connect the plugin's tool server; an account policy that disables MCP servers is one cause";
+function toolServerFiltered(accessMode) {
+  const mode = accessMode === null ? "" : ` (access mode ${accessMode})`;
+  return `organization MCP settings filtered out the plugin's tool server ${TOOL_SERVER_NAME}${mode}; Kiro cannot use it in this account until those settings allow it`;
+}
 function toolServerNotConnected(last) {
   const status2 = last === void 0 ? "none" : last.status === "connected" ? `connected with tools ${last.tools.length === 0 ? "(none)" : last.tools.join(", ")}` : last.status;
   return `${TOOL_SERVER_NOT_CONNECTED}; last status of server ${TOOL_SERVER_NAME}: ${status2}`;
@@ -38497,7 +38750,7 @@ var SidecarCalls = class {
 // src/session/skills.ts
 import { readFile as readFile6, realpath as realpath4, stat as stat3 } from "node:fs/promises";
 import { homedir as homedir2 } from "node:os";
-import { isAbsolute as isAbsolute5, join as join9, relative as relative2, resolve as resolve3, sep as sep2 } from "node:path";
+import { isAbsolute as isAbsolute5, join as join10, relative as relative2, resolve as resolve3, sep as sep2 } from "node:path";
 var FIELD2 = "skills";
 var SKILL_FILE = "SKILL.md";
 var NAME_PART = /^[A-Za-z0-9._-]+$/;
@@ -38508,10 +38761,10 @@ function skillSourcesFromEnv(env = process.env) {
   const configEnv = nonEmpty(env["CLAUDE_CONFIG_DIR"]);
   if (configEnv !== null) {
     const configDir = resolve3(configEnv);
-    return { configDir, claudeJsonPath: join9(configDir, ".claude.json"), projectDir };
+    return { configDir, claudeJsonPath: join10(configDir, ".claude.json"), projectDir };
   }
   const home = nonEmpty(env["HOME"]) ?? homedir2();
-  return { configDir: join9(home, ".claude"), claudeJsonPath: join9(home, ".claude.json"), projectDir };
+  return { configDir: join10(home, ".claude"), claudeJsonPath: join10(home, ".claude.json"), projectDir };
 }
 async function resolveSkills(names2, sources, limits = SKILL_COPY_LIMITS) {
   const resolved = await resolveNames(names2, sources);
@@ -38577,9 +38830,9 @@ var SkillSearch = class {
     const searched = [];
     const roots = [];
     if (projectDir !== null) {
-      roots.push({ parent: join9(projectDir, ".claude", "skills"), label: "project" });
+      roots.push({ parent: join10(projectDir, ".claude", "skills"), label: "project" });
     }
-    roots.push({ parent: join9(configDir, "skills"), label: "user" });
+    roots.push({ parent: join10(configDir, "skills"), label: "user" });
     for (const root of roots) {
       const hit2 = await findOne(name, [root]);
       if (hit2 !== null) {
@@ -38667,8 +38920,8 @@ async function findOne(name, dirs) {
   return first.dir;
 }
 async function skillDir(parent, skill) {
-  const dir = join9(parent, skill);
-  const file2 = join9(dir, SKILL_FILE);
+  const dir = join10(parent, skill);
+  const file2 = join10(dir, SKILL_FILE);
   try {
     if (!(await stat3(file2)).isFile()) {
       return null;
@@ -38687,14 +38940,14 @@ async function readAccountSkills(sources) {
   if (json2 === void 0) {
     return null;
   }
-  if (!isRecord3(json2)) {
+  if (!isRecord4(json2)) {
     throw malformed(path, "is not a JSON object");
   }
   const account = json2["oauthAccount"];
   if (account === void 0 || account === null) {
     return null;
   }
-  if (!isRecord3(account)) {
+  if (!isRecord4(account)) {
     throw malformed(path, 'has an "oauthAccount" that is not an object');
   }
   const organization = account["organizationUuid"];
@@ -38702,13 +38955,13 @@ async function readAccountSkills(sources) {
   if (!isAccountId(organization) || !isAccountId(accountId)) {
     throw malformed(path, 'has an "oauthAccount" without a valid organizationUuid and accountUuid');
   }
-  return join9(sources.configDir, "skills", "synced", `${organization}_${accountId}`);
+  return join10(sources.configDir, "skills", "synced", `${organization}_${accountId}`);
 }
 async function readEnabledPlugins(sources) {
   const { configDir, projectDir } = sources;
-  const settingsFiles = [join9(configDir, "settings.json")];
+  const settingsFiles = [join10(configDir, "settings.json")];
   if (projectDir !== null) {
-    settingsFiles.push(join9(projectDir, ".claude", "settings.json"), join9(projectDir, ".claude", "settings.local.json"));
+    settingsFiles.push(join10(projectDir, ".claude", "settings.json"), join10(projectDir, ".claude", "settings.local.json"));
   }
   const enabled = /* @__PURE__ */ new Map();
   for (const file2 of settingsFiles) {
@@ -38720,7 +38973,7 @@ async function readEnabledPlugins(sources) {
   if (keys.length === 0) {
     return [];
   }
-  const registryPath = join9(configDir, "plugins", "installed_plugins.json");
+  const registryPath = join10(configDir, "plugins", "installed_plugins.json");
   const registry2 = await readRegistry(registryPath);
   const plugins = [];
   for (const key2 of keys) {
@@ -38729,7 +38982,7 @@ async function readEnabledPlugins(sources) {
       continue;
     }
     const extra = await readPluginSkillDirs(installPath);
-    plugins.push({ key: key2, name: pluginName(key2), skillParents: [join9(installPath, "skills"), ...extra] });
+    plugins.push({ key: key2, name: pluginName(key2), skillParents: [join10(installPath, "skills"), ...extra] });
   }
   return plugins;
 }
@@ -38738,14 +38991,14 @@ async function readEnabledSetting(path) {
   if (json2 === void 0) {
     return [];
   }
-  if (!isRecord3(json2)) {
+  if (!isRecord4(json2)) {
     throw malformed(path, "is not a JSON object");
   }
   const value = json2["enabledPlugins"];
   if (value === void 0) {
     return [];
   }
-  if (!isRecord3(value)) {
+  if (!isRecord4(value)) {
     throw malformed(path, 'has an "enabledPlugins" that is not an object');
   }
   const entries = [];
@@ -38762,7 +39015,7 @@ async function readRegistry(path) {
   if (json2 === void 0) {
     return {};
   }
-  if (!isRecord3(json2) || !isRecord3(json2["plugins"])) {
+  if (!isRecord4(json2) || !isRecord4(json2["plugins"])) {
     throw malformed(path, 'has no "plugins" object');
   }
   return json2["plugins"];
@@ -38772,7 +39025,7 @@ function pickInstallPath(registry2, key2, projectDir, registryPath) {
   if (entries === void 0) {
     return null;
   }
-  if (!Array.isArray(entries) || !entries.every(isRecord3)) {
+  if (!Array.isArray(entries) || !entries.every(isRecord4)) {
     throw malformed(registryPath, `has a ${quote(key2)} entry that is not a list of objects`);
   }
   const forProject = (scope) => entries.find(
@@ -38789,12 +39042,12 @@ function pickInstallPath(registry2, key2, projectDir, registryPath) {
   return installPath;
 }
 async function readPluginSkillDirs(installPath) {
-  const path = join9(installPath, ".claude-plugin", "plugin.json");
+  const path = join10(installPath, ".claude-plugin", "plugin.json");
   const json2 = await readJson(path);
   if (json2 === void 0) {
     return [];
   }
-  if (!isRecord3(json2)) {
+  if (!isRecord4(json2)) {
     throw malformed(path, "is not a JSON object");
   }
   const value = json2["skills"];
@@ -38838,7 +39091,7 @@ function isAbsent(error62) {
   const code = errorCode(error62);
   return code === "ENOENT" || code === "ENOTDIR";
 }
-function isRecord3(value) {
+function isRecord4(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function isAccountId(value) {
@@ -39036,6 +39289,8 @@ var TurnRecorder = class _TurnRecorder {
   #lastChar = "";
   /** A tool call came after agent text and before the next agent text. */
   #toolSinceText = false;
+  /** The credits of the turn's `turn_completion` updates so far; null before the first that has any. */
+  #credits = null;
   /** The error that kept `turns/<n>.md` from being finalized, if any. */
   textError;
   /** The error that kept `turns/<n>.json` from being written or read, if any. */
@@ -39103,6 +39358,17 @@ var TurnRecorder = class _TurnRecorder {
   toolCallUpdate(toolCallId, status2) {
     return this.#finishing ? void 0 : this.#calls.update(toolCallId, status2);
   }
+  /**
+   * The credits of a `turn_completion` update of this turn (null: it had
+   * none), added to the turn's. One that comes once the turn is ending is
+   * not counted: the turn does not wait for it.
+   */
+  credits(credits) {
+    if (this.#finishing || credits === null) {
+      return;
+    }
+    this.#credits = (this.#credits ?? 0) + credits;
+  }
   /** The running counters. `lastTool` is redacted. */
   live() {
     const progress = this.#accumulator.progress();
@@ -39163,6 +39429,7 @@ var TurnRecorder = class _TurnRecorder {
       durationS: Math.max(0, Math.round((endedAt.getTime() - this.startedAt.getTime()) / 1e3)),
       toolCalls: summary.toolCalls,
       lastTool: summary.lastTool,
+      credits: this.#credits,
       messages: [...calls.messages],
       messagesDropped: calls.messagesDropped,
       completion: calls.completion,
@@ -39252,6 +39519,8 @@ var SessionManager = class {
   #closing;
   /** Turns that were running when the shutdown killed their process. */
   #shutDownTurns = /* @__PURE__ */ new WeakSet();
+  /** Aborted by the shutdown: ends a running image pull. */
+  #pullsEnd = new AbortController();
   #sweep;
   constructor(options) {
     this.#settings = options.settings;
@@ -39290,8 +39559,8 @@ var SessionManager = class {
   }
   /** The result of turn n of a driven session, once it ends; undefined if it is not running. */
   turnEnded(launchId, turn) {
-    const running = this.#sessions.get(launchId)?.turn;
-    return running !== null && running !== void 0 && running.turn === turn ? running.ended : void 0;
+    const running2 = this.#sessions.get(launchId)?.turn;
+    return running2 !== null && running2 !== void 0 && running2.turn === turn ? running2.ended : void 0;
   }
   /** Resolves when the background work started so far (turn ends, exits) is done. */
   async settled() {
@@ -39507,6 +39776,7 @@ var SessionManager = class {
       preset: null,
       tokenSource: "api_key",
       image: plan.image,
+      imageId: null,
       dockerUser: null,
       containerName: null,
       child: null,
@@ -39588,6 +39858,7 @@ var SessionManager = class {
         await guard(recording);
       }
       const options = (cap) => stepOptions(step, cap, deadline, abort.signal);
+      let imageRefresh = null;
       let spec;
       let toolServerFile;
       if (plan.mode === "docker") {
@@ -39599,7 +39870,26 @@ var SessionManager = class {
         session.meta = { ...session.meta, dockerUser: user };
         step = "docker_image";
         const image = plan.image;
-        await bounded(this.#deps.checkImage(image, this.#env), options(this.#startLimits.deadlineMs));
+        const imageContext = {
+          stateDir: this.#stateDir,
+          refreshHours: this.#settings.docker_image_refresh_hours,
+          query: (work2) => bounded(work2, options(this.#startLimits.deadlineMs)),
+          // The pull has its own limit; the time it takes moves the start deadline.
+          pull: async (work2) => {
+            const began = performance.now();
+            try {
+              return await bounded(work2, { signal: abort.signal });
+            } finally {
+              deadline += performance.now() - began;
+            }
+          },
+          signal: this.#pullsEnd.signal
+        };
+        const checked = await bounded(this.#deps.checkImage(image, this.#env, imageContext), { signal: abort.signal });
+        if (checked !== void 0) {
+          session.meta = { ...session.meta, imageId: checked.id };
+          imageRefresh = checked.notice === null ? null : session.secrets.redact(checked.notice);
+        }
         step = "tool_server";
         toolServerFile = await guard(checkToolServerFile(this.#toolServerFile));
         step = "spawn";
@@ -39738,7 +40028,8 @@ var SessionManager = class {
         steering: plan.steering.map((file2) => file2.name),
         permissions: plan.permissions,
         turn,
-        trailer: turn === null ? null : formatTurnTrailer(launchId, turn)
+        trailer: turn === null ? null : formatTurnTrailer(launchId, turn),
+        ...imageRefresh === null ? {} : { imageRefresh }
       };
     } catch (error62) {
       failed = true;
@@ -39801,7 +40092,8 @@ var SessionManager = class {
     } else {
       const tail = stderrTail(session.paths.stderrLog);
       const reason = error62 instanceof AcpClientError && error62.code === "aborted" ? "the start was aborted" : describeError(error62);
-      const text2 = `start step ${step} failed: ${reason}${tail === null ? "" : `
+      const hint = isAuthenticationError(error62) ? `. ${notSignedInHint(session.mode)}` : "";
+      const text2 = `start step ${step} failed: ${reason}${hint}${tail === null ? "" : `
 Kiro stderr (last lines):
 ${tail}`}`;
       answer = new SidecarError(`E_STEP_${step.toUpperCase()}`, session.secrets.redact(text2));
@@ -40393,7 +40685,8 @@ ${tail}`}`;
       const requested = decideOutcome(ending, recorder.requested, recorder.completionEnd);
       const decided = requested.endedBy === "interrupt" && recorder.completion !== null ? { ...requested, endedBy: null } : requested;
       const shutDown = decided.outcome === "exited" && this.#shutDownTurns.has(recorder);
-      const decision = shutDown ? { ...decided, error: SHUTDOWN_ERROR } : decided;
+      const shown = shutDown ? { ...decided, error: SHUTDOWN_ERROR } : decided;
+      const decision = ending.kind === "failure" && shown.error !== null && isAuthenticationError(ending.error) ? { ...shown, error: `${shown.error}. ${notSignedInHint(session.mode)}` } : shown;
       if (this.#connectionDead(session) || decision.outcome === "exited") {
         await this.#stopProcess(session);
       }
@@ -40552,6 +40845,14 @@ ${tail}`}`;
           session.turn?.toolCall(event.title, event.toolCallId, event.update);
         }
         return;
+      case "update":
+        if (!event.replay) {
+          const credits = turnCompletionCredits(event.update);
+          if (credits !== void 0) {
+            session.turn?.credits(credits);
+          }
+        }
+        return;
       case "tool_call_update": {
         const recorder = session.turn;
         if (event.replay || recorder === null) {
@@ -40628,6 +40929,7 @@ ${tail}`}`;
   }
   async #shutdown() {
     const began = performance.now();
+    this.#pullsEnd.abort(new Error("the server is shutting down"));
     const sessions = [...this.#sessions.values()];
     for (const session of sessions) {
       session.startAbort.abort(new Error("the server is shutting down"));
@@ -40802,6 +41104,10 @@ async function removeContainerNow(name, env) {
 function completedError(launchId) {
   return new InvalidInputError("session", `${launchId}: the session completed by itself; start a new session`);
 }
+function notSignedInHint(mode) {
+  const where = mode === "docker" ? "which the container gets as KIRO_API_KEY" : "which local mode passes to Kiro CLI as KIRO_API_KEY";
+  return `Kiro is not signed in: check that the plugin setting api_key holds a valid Kiro API token, ${where}.`;
+}
 function closeAcpLog(session) {
   if (!session.acpClosed) {
     session.acpClosed = true;
@@ -40906,6 +41212,9 @@ async function waitForToolServer(client2, sessionId, options) {
   } catch (error62) {
     if (error62 instanceof AcpClientError && error62.code === "timeout") {
       throw new StepFailure(toolServerNotConnected(client2.mcpServerStatus(sessionId, TOOL_SERVER_NAME)));
+    }
+    if (error62 instanceof AcpClientError && error62.code === "mcp_filtered") {
+      throw new StepFailure(toolServerFiltered(client2.mcpFiltered(sessionId)?.accessMode ?? null));
     }
     throw error62;
   }
@@ -41197,15 +41506,15 @@ function currentTurnOf(run) {
   return run.live?.currentTurn ?? run.meta.currentTurn;
 }
 function countersOf(live, turn, now) {
-  const running = live?.runningTurn;
-  if (running === null || running === void 0 || running.turn !== turn) {
+  const running2 = live?.runningTurn;
+  if (running2 === null || running2 === void 0 || running2.turn !== turn) {
     return { elapsedS: null, toolCalls: null, lastTool: null };
   }
-  const started = Date.parse(running.startedAt);
+  const started = Date.parse(running2.startedAt);
   return {
     elapsedS: Number.isNaN(started) ? null : Math.max(0, Math.floor((now - started) / 1e3)),
-    toolCalls: running.toolCalls,
-    lastTool: running.lastTool
+    toolCalls: running2.toolCalls,
+    lastTool: running2.lastTool
   };
 }
 function isRunningTurn(run, turn) {
@@ -41297,15 +41606,15 @@ async function waitTurn(deps, args, options = {}) {
       `Turn ${turn} of ${run.launchId} does not exist; the latest is ${latest}`
     );
   }
-  const running = isRunningTurn(run, turn);
-  if (run.relation === "own" && running) {
+  const running2 = isRunningTurn(run, turn);
+  if (run.relation === "own" && running2) {
     return blockOnTurn(deps, run, turn, checked, options);
   }
   const result = await readValidTurnResult(deps.stateDir, run.launchId, turn);
   if (result !== void 0) {
     return finishedTurn(deps, run, turn, result, checked, options.signal);
   }
-  if (running) {
+  if (running2) {
     throw new SidecarError(
       "E_BUSY",
       `Turn ${turn} of ${run.launchId} is still running; wait reads only finished turns of a session owned by another process`
@@ -41368,8 +41677,8 @@ async function isWaiterArmed(stateDir, launchId, turn, now) {
 async function statusOf(deps, run) {
   const now = (deps.now ?? Date.now)();
   const currentTurn = currentTurnOf(run);
-  const running = run.live?.runningTurn;
-  const counters = running === null || running === void 0 ? { elapsedS: null, toolCalls: null, lastTool: null } : countersOf(run.live, running.turn, now);
+  const running2 = run.live?.runningTurn;
+  const counters = running2 === null || running2 === void 0 ? { elapsedS: null, toolCalls: null, lastTool: null } : countersOf(run.live, running2.turn, now);
   const files = await turnFiles(deps.stateDir, run.launchId);
   const answered = run.live?.permissionsAnswered;
   return {

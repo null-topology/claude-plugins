@@ -82,6 +82,7 @@ function result(overrides: Partial<TurnResult> = {}): TurnResult {
     durationS: 250,
     toolCalls: 12,
     lastTool: 'run_command: npm test',
+    credits: null,
     messages: [MESSAGE],
     messagesDropped: 0,
     completion: null,
@@ -676,5 +677,29 @@ describe('formatDuration', () => {
     assert.equal(formatDuration(250), '4m10s');
     assert.equal(formatDuration(3_725), '1h2m5s');
     assert.equal(formatDuration(Number.NaN), '0s');
+  });
+});
+
+describe('wake header: credits (A2)', () => {
+  const HEADER = `[kiro-sidecar] Kiro session "review-a" (${LAUNCH_ID}, Kiro ${KIRO_SESSION}) turn 3`;
+
+  test('a turn with credits shows them rounded to two decimals after the tool calls and duration', () => {
+    assert.equal(
+      wake({ result: { credits: 0.06553350699834162 } }).split('\n')[0],
+      `${HEADER}: end_turn, 12 tool calls, 4m10s, 0.07 credits`,
+    );
+    assert.equal(wake({ result: { credits: 12.345 } }).split('\n')[0], `${HEADER}: end_turn, 12 tool calls, 4m10s, 12.35 credits`);
+    assert.equal(wake({ result: { credits: 0 } }).split('\n')[0], `${HEADER}: end_turn, 12 tool calls, 4m10s, 0.00 credits`);
+  });
+
+  test('the completed layout shows them too', () => {
+    assert.equal(
+      wake({ result: { credits: 1.5, completion: { result: 'Done.', at: '2026-10-18T00:35:30Z' } } }).split('\n')[0],
+      `${HEADER}: completed by Kiro, end_turn, 12 tool calls, 4m10s, 1.50 credits`,
+    );
+  });
+
+  test('a turn without credits shows no credits part', () => {
+    assert.equal(wake({ result: { credits: null } }).split('\n')[0], `${HEADER}: end_turn, 12 tool calls, 4m10s`);
   });
 });

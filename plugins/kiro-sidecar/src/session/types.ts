@@ -46,6 +46,12 @@ export interface TurnResult {
   readonly durationS: number;
   readonly toolCalls: number;
   readonly lastTool: string | null;
+  /**
+   * The credits the turn cost, as Kiro metered it: the sum of the credit
+   * `usage` of the turn's `turn_completion` updates that came before the
+   * turn ended, unrounded; null when none came.
+   */
+  readonly credits: number | null;
   /** The `send_message` texts of the turn, redacted and cut (4.4). */
   readonly messages: readonly string[];
   /** Earlier messages not kept within the turn's total bound. */

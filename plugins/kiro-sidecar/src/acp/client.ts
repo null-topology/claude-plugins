@@ -91,6 +91,19 @@ export interface NewSessionResult {
 /** The notification in which Kiro reports the state of a session's MCP servers. */
 export const MCP_STATUS_METHOD = '_kiro/mcp/status';
 
+/**
+ * What the latest `_kiro/mcp/status` of a session said about servers that
+ * organization MCP settings filtered out (Kiro 2.35 and later). Kiro sends
+ * `accessModeFilteredServers`, a list of server names, and `accessMode`
+ * only when a registry is configured; an absent list is empty here.
+ */
+export interface McpFiltered {
+  /** The names of the filtered servers. */
+  readonly servers: readonly string[];
+  /** `accessMode` as sent (`registry`, `nonRegistry`, ...), or null when absent. */
+  readonly accessMode: string | null;
+}
+
 /** The status of one MCP server of a session, as Kiro last reported it. */
 export interface McpServerStatus {
   readonly name: string;
@@ -125,8 +138,10 @@ export class KiroAcpClient {
   readonly #loading = new Set<string>();
   readonly #turns = new Map<string, number>();
   readonly #open = new Set<OpenPermission>();
-  /** The latest status of each MCP server, per session id, from any moment of the session. */
+  /** Each session's MCP servers as its latest valid `_kiro/mcp/status` snapshot lists them. */
   readonly #mcpServers = new Map<string, Map<string, McpServerStatus>>();
+  /** Each session's filtered servers as its latest valid `_kiro/mcp/status` snapshot lists them. */
+  readonly #mcpFiltered = new Map<string, McpFiltered>();
   /** Called after every stored MCP status and config list, for the waits on them. */
   readonly #watchers = new Set<() => void>();
   readonly #closedPromise: Promise<AcpClientError>;
@@ -258,12 +273,18 @@ export class KiroAcpClient {
     return this.#mcpServers.get(sessionId)?.get(name);
   }
 
+  /** The servers of a session that organization MCP settings filtered out, as Kiro last reported them. */
+  mcpFiltered(sessionId: string): McpFiltered | undefined {
+    return this.#mcpFiltered.get(sessionId);
+  }
+
   /**
    * Resolves once the latest status of server `name` in the session is
    * `connected` and lists every tool in `tools`, which may already be so.
-   * Every other status is waited through. Rejects like a step: `timeout`
-   * after `timeoutMs`, `aborted` on the signal, `closed` when the client
-   * closes. Sends nothing.
+   * Every other status is waited through. Rejects `mcp_filtered` at once
+   * when the latest snapshot names the server among those organization MCP
+   * settings filtered out, and like a step: `timeout` after `timeoutMs`,
+   * `aborted` on the signal, `closed` when the client closes. Sends nothing.
    */
   async waitForMcpServer(
     sessionId: string,
@@ -271,17 +292,24 @@ export class KiroAcpClient {
     tools: readonly string[],
     options: StepOptions = {},
   ): Promise<McpServerStatus> {
-    return this.#waitUntil(
+    const reached = await this.#waitUntil(
       `${name} server`,
       `the ${name} server was not connected within ${options.timeoutMs} ms`,
-      () => {
+      (): { readonly status: McpServerStatus } | { readonly filtered: McpFiltered } | undefined => {
         const status = this.mcpServerStatus(sessionId, name);
-        return status !== undefined && status.status === 'connected' && tools.every((tool) => status.tools.includes(tool))
-          ? status
-          : undefined;
+        if (status !== undefined && status.status === 'connected' && tools.every((tool) => status.tools.includes(tool))) {
+          return { status };
+        }
+        const filtered = this.#mcpFiltered.get(sessionId);
+        return filtered !== undefined && filtered.servers.includes(name) ? { filtered } : undefined;
       },
       options,
     );
+    if ('filtered' in reached) {
+      const mode = reached.filtered.accessMode === null ? '' : ` (access mode ${reached.filtered.accessMode})`;
+      throw new AcpClientError('mcp_filtered', `organization MCP settings filtered out the ${name} server${mode}`);
+    }
+    return reached.status;
   }
 
   /**
@@ -389,6 +417,7 @@ export class KiroAcpClient {
     this.#configPositions.delete(sessionId);
     this.#configUpdatePositions.delete(sessionId);
     this.#mcpServers.delete(sessionId);
+    this.#mcpFiltered.delete(sessionId);
     return response;
   }
 
@@ -436,28 +465,36 @@ export class KiroAcpClient {
   }
 
   /**
-   * Keeps the latest status of each server a `_kiro/mcp/status` names, under
-   * its session id. Kiro sends it before the `session/new` or `session/load`
-   * answer too, so it is kept for any session id. A malformed entry is skipped.
+   * Takes a `_kiro/mcp/status` as the full snapshot of its session's MCP
+   * servers, as Kiro documents it: what it lists replaces everything known
+   * of the session, so a server it does not list is forgotten, and so are
+   * filtered servers it no longer names. Kiro sends it before the
+   * `session/new` or `session/load` answer too, so it is kept for any
+   * session id. A malformed entry is skipped; a notification without a
+   * string `sessionId` or an array `servers` changes nothing.
    */
   #onMcpStatus(params: Record<string, unknown>): void {
-    const { sessionId, servers } = params;
+    const { sessionId, servers, accessMode, accessModeFilteredServers } = params;
     if (typeof sessionId !== 'string' || !Array.isArray(servers)) {
       return;
     }
-    let known = this.#mcpServers.get(sessionId);
+    const known = new Map<string, McpServerStatus>();
     for (const server of servers) {
       const status = mcpServerStatusOf(server);
       if (status === undefined) {
         continue;
       }
-      if (known === undefined) {
-        known = new Map();
-        this.#mcpServers.set(sessionId, known);
-      }
       known.set(status.name, status);
       this.#log({ event: 'mcp_status', sessionId, server: status.name, status: status.status, tools: status.tools.length });
     }
+    this.#mcpServers.set(sessionId, known);
+    const filtered = Array.isArray(accessModeFilteredServers)
+      ? accessModeFilteredServers.filter((name: unknown): name is string => typeof name === 'string')
+      : [];
+    this.#mcpFiltered.set(
+      sessionId,
+      Object.freeze({ servers: Object.freeze(filtered), accessMode: typeof accessMode === 'string' ? accessMode : null }),
+    );
     this.#notifyWatchers();
   }
 

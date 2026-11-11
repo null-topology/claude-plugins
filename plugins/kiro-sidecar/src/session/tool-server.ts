@@ -33,6 +33,19 @@ export const TOOL_SERVER_NOT_CONNECTED =
   "Kiro did not connect the plugin's tool server; an account policy that disables MCP servers is one cause";
 
 /**
+ * The cause of `E_STEP_TOOLS` when Kiro names the tool server among the
+ * servers its organization MCP settings filtered out (`_kiro/mcp/status`
+ * `accessModeFilteredServers`); `accessMode` is the mode Kiro reported, if any.
+ */
+export function toolServerFiltered(accessMode: string | null): string {
+  const mode = accessMode === null ? '' : ` (access mode ${accessMode})`;
+  return (
+    `organization MCP settings filtered out the plugin's tool server ${TOOL_SERVER_NAME}${mode}; ` +
+    'Kiro cannot use it in this account until those settings allow it'
+  );
+}
+
+/**
  * The cause of `E_STEP_TOOLS`: the hint, then the last status Kiro reported
  * for the server (`none` when it reported none), with the tools it listed
  * when that status is `connected`.

@@ -392,6 +392,7 @@ var META_FIELDS = {
   preset: isNullable(isString),
   tokenSource: isNullable(isOneOf(["preset", "api_key"])),
   image: isNullable(isString),
+  imageId: (value) => value === void 0 || value === null || isString(value),
   dockerUser: isNullable(isString),
   containerName: isNullable(isString),
   child: isNullable(isChild),
@@ -599,6 +600,7 @@ var isBoolean2 = (value) => typeof value === "boolean";
 var isCount = (value) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 var isPositiveCount = (value) => isCount(value) && value >= 1;
 var isDuration = (value) => typeof value === "number" && Number.isFinite(value) && value >= 0;
+var isCredits = isDuration;
 var isOneOf2 = (allowed) => (value) => typeof value === "string" && allowed.includes(value);
 var isNullable2 = (check) => (value) => value === null || check(value);
 var isStrings = (value) => Array.isArray(value) && value.every(isString2);
@@ -615,6 +617,7 @@ var RESULT_FIELDS = {
   durationS: isDuration,
   toolCalls: isCount,
   lastTool: isNullable2(isString2),
+  credits: isNullable2(isCredits),
   messages: isStrings,
   messagesDropped: isCount,
   completion: isNullable2(isCompletion),
@@ -627,7 +630,8 @@ var RESULT_FIELDS = {
 var LEGACY_DEFAULTS = {
   messages: [],
   messagesDropped: 0,
-  completion: null
+  completion: null,
+  credits: null
 };
 function copyField(field, value) {
   if (Array.isArray(value)) {
@@ -675,6 +679,7 @@ function endedWithoutResult(run, turn, ending) {
     durationS: Math.max(0, Math.round((endedAt.getTime() - startedAt2.getTime()) / 1e3)),
     toolCalls: 0,
     lastTool: null,
+    credits: null,
     messages: [],
     messagesDropped: 0,
     completion: null,
@@ -693,6 +698,7 @@ var DEFAULTS = Object.freeze({
   presets_file: "",
   home: "",
   docker_image: "sbx/kiro:latest",
+  docker_image_refresh_hours: 24,
   docker_user: "auto",
   kiro_command: "kiro-cli",
   default_mode: "docker",
@@ -759,6 +765,7 @@ var FIELDS = {
   presets_file: { parse: anyString },
   home: { parse: accepting(isValidHomeName, HOME_NAME_RULE) },
   docker_image: { parse: anyString },
+  docker_image_refresh_hours: { parse: integerInRange(0, 8760) },
   docker_user: {
     parse: matching(DOCKER_USER_PATTERN, '"auto" or "<uid>:<gid>" in decimal digits')
   },
@@ -1267,7 +1274,8 @@ function buildWakeMessage(input) {
   const kiroSessionId = run.kiroSessionId ?? result.sessionId;
   const label = run.label ?? result.label;
   const completed = result.completion !== null ? "completed by Kiro, " : "";
-  const status = `${completed}${result.outcome}, ${toolCallCount(result.toolCalls)}, ${formatDuration(result.durationS)}`;
+  const credits = result.credits === null ? "" : `, ${formatCredits(result.credits)}`;
+  const status = `${completed}${result.outcome}, ${toolCallCount(result.toolCalls)}, ${formatDuration(result.durationS)}${credits}`;
   const header = [
     `${sessionHeader(run.launchId, label, kiroSessionId, turn, secrets)}: ${status}`,
     ...contextLines(run, input.agentType, secrets)
@@ -1336,6 +1344,9 @@ function formatDuration(seconds) {
     return `${hours}h${minutes}m${rest}s`;
   }
   return minutes > 0 ? `${minutes}m${rest}s` : `${rest}s`;
+}
+function formatCredits(credits) {
+  return `${credits.toFixed(2)} credits`;
 }
 function checkedTurn(launchId, turn) {
   if (!LAUNCH_ID_PATTERN2.test(launchId)) {

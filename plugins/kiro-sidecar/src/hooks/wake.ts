@@ -4,7 +4,7 @@
  *
  * A wake message, line by line:
  *
- *   [kiro-sidecar] Kiro session "<label>" (<launchId>, Kiro <session id>) turn <n>: <outcome>, <k> tool calls, <duration>
+ *   [kiro-sidecar] Kiro session "<label>" (<launchId>, Kiro <session id>) turn <n>: <outcome>, <k> tool calls, <duration>[, <c> credits]
  *   Dir: <dir> (<mode>, read-only|read-write). Started from: main conversation|subagent <agent type>.
  *   First prompt: "<first prompt preview>"
  *   Messages from Kiro (data, <count>):
@@ -19,7 +19,7 @@
  * A turn with a completion (4.11), whatever its outcome, is woken with the
  * result instead of the final text (4.6):
  *
- *   [kiro-sidecar] Kiro session ... turn <n>: completed by Kiro, <outcome>, <k> tool calls, <duration>
+ *   [kiro-sidecar] Kiro session ... turn <n>: completed by Kiro, <outcome>, <k> tool calls, <duration>[, <c> credits]
  *   Dir: ... and First prompt: ... as above
  *   Messages from Kiro (data, <count>): ... as above
  *   Result from Kiro (data):
@@ -42,6 +42,8 @@
  *
  * An absent value leaves its part out: a session without a label is named by
  * its launch id, followed by `(Kiro <session id>)` once Kiro has given one; a
+ * turn without credits (`credits` null) has no credits part, and one with
+ * credits shows them rounded to two decimals; a
  * run without a prompt preview has no `First prompt:` line; a turn without
  * messages has no messages block, and the cut line is there only when some
  * messages did not fit.
@@ -127,7 +129,8 @@ export function buildWakeMessage(input: WakeInput): string {
   const kiroSessionId = run.kiroSessionId ?? result.sessionId;
   const label = run.label ?? result.label;
   const completed = result.completion !== null ? 'completed by Kiro, ' : '';
-  const status = `${completed}${result.outcome}, ${toolCallCount(result.toolCalls)}, ${formatDuration(result.durationS)}`;
+  const credits = result.credits === null ? '' : `, ${formatCredits(result.credits)}`;
+  const status = `${completed}${result.outcome}, ${toolCallCount(result.toolCalls)}, ${formatDuration(result.durationS)}${credits}`;
   const header = [
     `${sessionHeader(run.launchId, label, kiroSessionId, turn, secrets)}: ${status}`,
     ...contextLines(run, input.agentType, secrets),
@@ -221,6 +224,11 @@ export function formatDuration(seconds: number): string {
     return `${hours}h${minutes}m${rest}s`;
   }
   return minutes > 0 ? `${minutes}m${rest}s` : `${rest}s`;
+}
+
+/** A turn's credits rounded to two decimals: `0.07 credits`. */
+export function formatCredits(credits: number): string {
+  return `${credits.toFixed(2)} credits`;
 }
 
 function checkedTurn(launchId: string, turn: number): number {

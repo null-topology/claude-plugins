@@ -85,6 +85,7 @@ describe('TurnRecorder', () => {
       durationS: 0,
       toolCalls: 1,
       lastTool: 'Run Command',
+      credits: null,
       messages: [],
       messagesDropped: 0,
       completion: null,

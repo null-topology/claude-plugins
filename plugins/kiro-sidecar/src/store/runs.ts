@@ -83,6 +83,12 @@ export interface RunMeta {
   /** Every run started now has a token; null is accepted only in records written without one. */
   readonly tokenSource: TokenSource | null;
   readonly image: string | null;
+  /**
+   * The id of the local image the container was started from, once the
+   * image check found it; null in local mode and before the check. Absent
+   * in records written before it existed.
+   */
+  readonly imageId?: string | null;
   readonly dockerUser: string | null;
   readonly containerName: string | null;
   /** The Kiro child process of a local run. */
@@ -139,6 +145,7 @@ const META_FIELDS: { readonly [K in keyof RunMeta]-?: Check } = {
   preset: isNullable(isString),
   tokenSource: isNullable(isOneOf(['preset', 'api_key'])),
   image: isNullable(isString),
+  imageId: (value) => value === undefined || value === null || isString(value),
   dockerUser: isNullable(isString),
   containerName: isNullable(isString),
   child: isNullable(isChild),

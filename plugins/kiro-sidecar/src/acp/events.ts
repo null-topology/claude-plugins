@@ -43,7 +43,11 @@ export type TurnEvent =
       readonly kind: 'config_options';
       readonly configOptions: readonly SessionConfigOption[];
     })
-  /** Any other session update, unchanged. */
+  /**
+   * Any other session update, unchanged; a `turn_completion`
+   * `session_info_update` among them carries the turn's credits
+   * (`turnCompletionCredits`).
+   */
   | (SessionEventBase & { readonly kind: 'update'; readonly update: SessionUpdate })
   | {
       readonly kind: 'permission_requested';
@@ -151,4 +155,58 @@ export function toTurnEvent(notification: SessionNotification, replay: boolean):
       break;
   }
   return { kind: 'update', sessionId, replay, update };
+}
+
+/** The `_meta.kiro.kind` of the `session_info_update` that meters a turn. */
+export const TURN_COMPLETION_KIND = 'turn_completion';
+
+/**
+ * The credits of a `session_info_update` whose `_meta.kiro.kind` is
+ * `turn_completion`, Kiro's metering of a turn: the sum of `usage` over its
+ * `promptTurnSummaries` entries in the credit unit, or null when no entry
+ * is one. Undefined for every other update, which says nothing of credits.
+ * Pure.
+ */
+export function turnCompletionCredits(update: SessionUpdate): number | null | undefined {
+  if (update.sessionUpdate !== 'session_info_update') {
+    return undefined;
+  }
+  const kiro = update._meta?.['kiro'];
+  if (!isRecord(kiro) || kiro['kind'] !== TURN_COMPLETION_KIND) {
+    return undefined;
+  }
+  return creditsOf(kiro['promptTurnSummaries']);
+}
+
+/**
+ * The sum of `usage` over the `promptTurnSummaries` entries whose `unit` is
+ * the credit unit, or null when none is. Kiro itself counts a unit that,
+ * trimmed and lower-cased, is `credit` or `credits`, and only a `usage` that
+ * is a finite number of at least 0; any other entry is skipped here too.
+ */
+export function creditsOf(summaries: unknown): number | null {
+  if (!Array.isArray(summaries)) {
+    return null;
+  }
+  let total: number | null = null;
+  for (const summary of summaries) {
+    if (!isRecord(summary)) {
+      continue;
+    }
+    const { unit, usage } = summary;
+    if (typeof unit !== 'string' || !CREDIT_UNITS.has(unit.trim().toLowerCase())) {
+      continue;
+    }
+    if (typeof usage !== 'number' || !Number.isFinite(usage) || usage < 0) {
+      continue;
+    }
+    total = (total ?? 0) + usage;
+  }
+  return total;
+}
+
+const CREDIT_UNITS: ReadonlySet<string> = new Set(['credit', 'credits']);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

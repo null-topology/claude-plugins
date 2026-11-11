@@ -86,6 +86,7 @@ export function sampleResult(
     durationS: 250,
     toolCalls: 2,
     lastTool: 'read_file: README.md',
+    credits: null,
     messages: [],
     messagesDropped: 0,
     completion: null,

@@ -55,6 +55,8 @@ export interface DockerCallOptions {
   /** The complete environment of the CLI process. */
   readonly env: Readonly<Record<string, string>>;
   readonly timeoutMs?: number;
+  /** Ends the CLI process (SIGKILL) and fails the call with `E_DOCKER` when it aborts. */
+  readonly signal?: AbortSignal;
 }
 
 /**
@@ -87,10 +89,15 @@ export function runDocker(args: readonly string[], options: DockerCallOptions): 
         maxBuffer: MAX_OUTPUT_BYTES,
         encoding: 'utf8',
         windowsHide: true,
+        ...(options.signal === undefined ? {} : { signal: options.signal }),
       },
       (error, stdout, stderr) => {
         if (error === null) {
           resolve({ code: 0, stdout, stderr });
+          return;
+        }
+        if (error.name === 'AbortError') {
+          reject(new SidecarError('E_DOCKER', `${label} was aborted`));
           return;
         }
         if (typeof error.code === 'number') {

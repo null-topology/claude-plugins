@@ -27,7 +27,7 @@ const RECORDED_SESSION = 'sess_00000000-0000-4000-8000-000000000001';
 
 const RESULT_KEYS = [
   'launchId', 'sessionId', 'label', 'turn', 'outcome', 'endedBy', 'startedAt', 'endedAt', 'durationS', 'toolCalls',
-  'lastTool', 'messages', 'messagesDropped', 'completion', 'final', 'textChars', 'truncated', 'error',
+  'lastTool', 'credits', 'messages', 'messagesDropped', 'completion', 'final', 'textChars', 'truncated', 'error',
   'stderrTail',
 ].sort();
 

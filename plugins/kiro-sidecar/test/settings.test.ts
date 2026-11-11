@@ -20,6 +20,7 @@ const EXPECTED_DEFAULTS = {
   presets_file: '',
   home: '',
   docker_image: 'sbx/kiro:latest',
+  docker_image_refresh_hours: 24,
   docker_user: 'auto',
   kiro_command: 'kiro-cli',
   default_mode: 'docker',
@@ -96,6 +97,10 @@ describe('settings', () => {
     ['home', '...', '...'],
     ['home', '.hidden', '.hidden'],
     ['docker_image', 'example/kiro-image:1.2.3', 'example/kiro-image:1.2.3'],
+    ['docker_image_refresh_hours', '0', 0],
+    ['docker_image_refresh_hours', '1', 1],
+    ['docker_image_refresh_hours', '168', 168],
+    ['docker_image_refresh_hours', '8760', 8760],
     ['docker_user', 'auto', 'auto'],
     ['docker_user', '1000:1000', '1000:1000'],
     ['docker_user', '0:0', '0:0'],
@@ -147,6 +152,10 @@ describe('settings', () => {
     ['retention_days', 'fourteen'],
     ['debug_acp', 'on'],
     ['debug_acp', '0'],
+    ['docker_image_refresh_hours', '-1'],
+    ['docker_image_refresh_hours', '8761'],
+    ['docker_image_refresh_hours', '1.5'],
+    ['docker_image_refresh_hours', 'daily'],
   ];
 
   for (const [key, raw] of invalidCases) {

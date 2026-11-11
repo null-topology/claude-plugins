@@ -45,14 +45,16 @@ import type { SessionConfigOption } from '@agentclientprotocol/sdk';
 import { KiroAcpClient } from '../acp/client.ts';
 import type { StepOptions } from '../acp/client.ts';
 import { missingOptionError } from '../acp/config.ts';
-import { AcpClientError } from '../acp/errors.ts';
+import { AcpClientError, isAuthenticationError } from '../acp/errors.ts';
 import type { LifecycleEntry, TurnEvent } from '../acp/events.ts';
+import { turnCompletionCredits } from '../acp/events.ts';
 import { localKiroSpec } from '../acp/local.ts';
 import type { LocalEnvironmentOverrides } from '../acp/local.ts';
 import { spawnProcess } from '../acp/process.ts';
 import type { ProcessHandle, ProcessOptions, ProcessSpec } from '../acp/process.ts';
 import { TOKEN_VARIABLE, runDocker, stderrSummary, stripClaudeVariables } from '../docker/cli.ts';
 import { checkImage } from '../docker/image.ts';
+import type { ImageCheck, ImageCheckContext } from '../docker/image.ts';
 import {
   TASK_FILE_PROMPT,
   assertDockerImage,
@@ -124,6 +126,7 @@ import { TurnRecorder } from './turn.ts';
 import { SHUTDOWN_ERROR } from './turn-result.ts';
 import {
   TOOL_SERVER_NAME,
+  toolServerFiltered,
   toolServerNotConnected,
   TOOL_SERVER_TOOLS,
   bundledToolServerFile,
@@ -144,7 +147,7 @@ const EFFORT_OPTION = 'effortLevel';
 const KIRO_MODE_OPTION = 'mode';
 
 export interface StartLimits {
-  /** The whole `start` call, host checks included. */
+  /** The whole `start` call, host checks included; the time an image pull takes is not counted (it has its own limit). */
   readonly deadlineMs: number;
   /** Spawn and `initialize`. */
   readonly initializeMs: number;
@@ -200,7 +203,12 @@ const CONTAINER_REMOVE_TIMEOUT_MS = 30_000;
 export interface ManagerDeps {
   readonly spawn: (spec: ProcessSpec, options: ProcessOptions) => ProcessHandle;
   readonly resolveDockerUser: (setting: string, env: Environment) => Promise<string>;
-  readonly checkImage: (image: string, env: Environment) => Promise<void>;
+  /**
+   * The image check of a docker start, with the image refresh (`image.ts`):
+   * resolves with the local image's id and what the reply says about the
+   * refresh. `context` bounds its docker queries and its pull.
+   */
+  readonly checkImage: (image: string, env: Environment, context: ImageCheckContext) => Promise<ImageCheck | void>;
   /** Starts a removal and returns at once (shutdown, a failed start). */
   readonly removeContainers: (names: readonly string[], env: Environment) => void;
   /**
@@ -296,6 +304,11 @@ export interface StartResult {
   readonly turn: number | null;
   /** `kiro-turn: <launchId>#<n>` when a prompt was sent. */
   readonly trailer: string | null;
+  /**
+   * Docker only, and only when there is something to say: the image refresh
+   * failed and the local image is used, or a pull replaced the image.
+   */
+  readonly imageRefresh?: string;
 }
 
 /** A turn whose result a call returns in its reply. */
@@ -510,6 +523,8 @@ export class SessionManager implements LiveRegistry {
   #closing: Promise<void> | undefined;
   /** Turns that were running when the shutdown killed their process. */
   readonly #shutDownTurns = new WeakSet<TurnRecorder>();
+  /** Aborted by the shutdown: ends a running image pull. */
+  readonly #pullsEnd = new AbortController();
   #sweep: Promise<SweepReport> | undefined;
 
   constructor(options: SessionManagerOptions) {
@@ -791,6 +806,7 @@ export class SessionManager implements LiveRegistry {
       preset: null,
       tokenSource: 'api_key',
       image: plan.image,
+      imageId: null,
       dockerUser: null,
       containerName: null,
       child: null,
@@ -873,6 +889,8 @@ export class SessionManager implements LiveRegistry {
         await guard(recording);
       }
       const options = (cap: number): StepOptions => stepOptions(step, cap, deadline, abort.signal);
+      /** What the reply says about the image refresh; null when nothing. */
+      let imageRefresh: string | null = null;
 
       let spec: ProcessSpec;
       // Checked after the host checks and before anything is written or spawned (4.11).
@@ -886,7 +904,26 @@ export class SessionManager implements LiveRegistry {
         session.meta = { ...session.meta, dockerUser: user };
         step = 'docker_image';
         const image = plan.image as string;
-        await bounded(this.#deps.checkImage(image, this.#env), options(this.#startLimits.deadlineMs));
+        const imageContext: ImageCheckContext = {
+          stateDir: this.#stateDir,
+          refreshHours: this.#settings.docker_image_refresh_hours,
+          query: (work) => bounded(work, options(this.#startLimits.deadlineMs)),
+          // The pull has its own limit; the time it takes moves the start deadline.
+          pull: async (work) => {
+            const began = performance.now();
+            try {
+              return await bounded(work, { signal: abort.signal });
+            } finally {
+              deadline += performance.now() - began;
+            }
+          },
+          signal: this.#pullsEnd.signal,
+        };
+        const checked = await bounded(this.#deps.checkImage(image, this.#env, imageContext), { signal: abort.signal });
+        if (checked !== undefined) {
+          session.meta = { ...session.meta, imageId: checked.id };
+          imageRefresh = checked.notice === null ? null : session.secrets.redact(checked.notice);
+        }
         step = 'tool_server';
         toolServerFile = await guard(checkToolServerFile(this.#toolServerFile));
         step = 'spawn';
@@ -1041,6 +1078,7 @@ export class SessionManager implements LiveRegistry {
         permissions: plan.permissions,
         turn,
         trailer: turn === null ? null : formatTurnTrailer(launchId, turn),
+        ...(imageRefresh === null ? {} : { imageRefresh }),
       };
     } catch (error) {
       failed = true;
@@ -1108,7 +1146,8 @@ export class SessionManager implements LiveRegistry {
     } else {
       const tail = stderrTail(session.paths.stderrLog);
       const reason = error instanceof AcpClientError && error.code === 'aborted' ? 'the start was aborted' : describeError(error);
-      const text = `start step ${step} failed: ${reason}${tail === null ? '' : `\nKiro stderr (last lines):\n${tail}`}`;
+      const hint = isAuthenticationError(error) ? `. ${notSignedInHint(session.mode)}` : '';
+      const text = `start step ${step} failed: ${reason}${hint}${tail === null ? '' : `\nKiro stderr (last lines):\n${tail}`}`;
       answer = new SidecarError(`E_STEP_${step.toUpperCase()}`, session.secrets.redact(text));
     }
     const code = (answer as { code?: string }).code ?? 'E_INTERNAL';
@@ -1757,7 +1796,12 @@ export class SessionManager implements LiveRegistry {
         requested.endedBy === 'interrupt' && recorder.completion !== null ? { ...requested, endedBy: null } : requested;
       // The shutdown closed the connection: the result says so, not how the connection ended.
       const shutDown = decided.outcome === 'exited' && this.#shutDownTurns.has(recorder);
-      const decision = shutDown ? { ...decided, error: SHUTDOWN_ERROR } : decided;
+      const shown = shutDown ? { ...decided, error: SHUTDOWN_ERROR } : decided;
+      // A prompt Kiro refused because it is not signed in says what to check.
+      const decision =
+        ending.kind === 'failure' && shown.error !== null && isAuthenticationError(ending.error)
+          ? { ...shown, error: `${shown.error}. ${notSignedInHint(session.mode)}` }
+          : shown;
       if (this.#connectionDead(session) || decision.outcome === 'exited') {
         await this.#stopProcess(session);
       }
@@ -1937,6 +1981,14 @@ export class SessionManager implements LiveRegistry {
           session.turn?.toolCall(event.title, event.toolCallId, event.update);
         }
         return;
+      case 'update':
+        if (!event.replay) {
+          const credits = turnCompletionCredits(event.update);
+          if (credits !== undefined) {
+            session.turn?.credits(credits);
+          }
+        }
+        return;
       case 'tool_call_update': {
         const recorder = session.turn;
         if (event.replay || recorder === null) {
@@ -2022,6 +2074,7 @@ export class SessionManager implements LiveRegistry {
 
   async #shutdown(): Promise<void> {
     const began = performance.now();
+    this.#pullsEnd.abort(new Error('the server is shutting down'));
     const sessions = [...this.#sessions.values()];
     for (const session of sessions) {
       session.startAbort.abort(new Error('the server is shutting down'));
@@ -2231,6 +2284,17 @@ function completedError(launchId: string): InvalidInputError {
   return new InvalidInputError('session', `${launchId}: the session completed by itself; start a new session`);
 }
 
+/**
+ * The sentence an error gains when Kiro refused a request because it is not
+ * signed in (see `isAuthenticationError`). Kiro signs in with the token of
+ * the plugin setting `api_key` in both modes; the sentence holds no part of it.
+ */
+export function notSignedInHint(mode: Mode): string {
+  const where =
+    mode === 'docker' ? 'which the container gets as KIRO_API_KEY' : 'which local mode passes to Kiro CLI as KIRO_API_KEY';
+  return `Kiro is not signed in: check that the plugin setting api_key holds a valid Kiro API token, ${where}.`;
+}
+
 function closeAcpLog(session: Session): void {
   if (!session.acpClosed) {
     session.acpClosed = true;
@@ -2372,6 +2436,8 @@ function stepOptions(step: string, capMs: number, deadline: number, signal: Abor
  * connected with both its tools, which may already be so. Every other status
  * is logged by the client and waited through; the cap fails the step, so
  * `E_STEP_TOOLS` names the last status seen and carries the stderr tail.
+ * When Kiro's latest snapshot names the server among those organization MCP
+ * settings filtered out, the step fails at once and says so.
  */
 async function waitForToolServer(client: KiroAcpClient, sessionId: string, options: StepOptions): Promise<void> {
   try {
@@ -2379,6 +2445,9 @@ async function waitForToolServer(client: KiroAcpClient, sessionId: string, optio
   } catch (error) {
     if (error instanceof AcpClientError && error.code === 'timeout') {
       throw new StepFailure(toolServerNotConnected(client.mcpServerStatus(sessionId, TOOL_SERVER_NAME)));
+    }
+    if (error instanceof AcpClientError && error.code === 'mcp_filtered') {
+      throw new StepFailure(toolServerFiltered(client.mcpFiltered(sessionId)?.accessMode ?? null));
     }
     throw error;
   }
