@@ -31,6 +31,7 @@ import type {
   RequestPermissionRequest,
   RequestPermissionResponse,
   SessionConfigOption,
+  SendRequestOptions,
   SessionNotification,
   SetSessionConfigOptionRequest,
   Stream,
@@ -52,6 +53,9 @@ export const ACP_PROTOCOL_VERSION = 1;
 /** How long to let stdout drain after the process exits before the stream is closed. */
 export const DEFAULT_EXIT_DRAIN_MS = 200;
 
+/** Passed to `#step` by the steps that withdraw their request when its deadline passes. */
+const CANCEL_ON_DEADLINE = true;
+
 export const DEFAULT_CLIENT_INFO: Implementation = Object.freeze({ name: 'kiro-sidecar', version: SERVER_VERSION });
 
 /** Decides a permission request; may be asynchronous. */
@@ -72,7 +76,12 @@ export interface AcpClientOptions {
   readonly exitDrainMs?: number;
 }
 
-/** Per-step limits; a step that exceeds them rejects, the request is not withdrawn. */
+/**
+ * Per-step limits; a step that exceeds them rejects. A start step (`initialize`,
+ * `session/new`, `session/load`, `session/set_config_option`) whose deadline
+ * passes also withdraws its request with `$/cancel_request`; other requests
+ * are not withdrawn.
+ */
 export interface StepOptions {
   readonly timeoutMs?: number;
   readonly signal?: AbortSignal;
@@ -224,19 +233,37 @@ export class KiroAcpClient {
   }
 
   initialize(options: StepOptions = {}): Promise<InitializeResponse> {
-    return this.#step('initialize', undefined, options, () =>
-      this.#connection.agent.request(methods.agent.initialize, {
-        protocolVersion: ACP_PROTOCOL_VERSION,
-        clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
-        clientInfo: this.#clientInfo,
-      }),
+    return this.#step(
+      'initialize',
+      undefined,
+      options,
+      (send) =>
+        this.#connection.agent.request(
+          methods.agent.initialize,
+          {
+            protocolVersion: ACP_PROTOCOL_VERSION,
+            clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
+            clientInfo: this.#clientInfo,
+          },
+          send,
+        ),
+      CANCEL_ON_DEADLINE,
     );
   }
 
   /** Creates a session. The id is `sessionId`, else `_meta.id`. */
   async newSession(params: SessionParams, options: StepOptions = {}): Promise<NewSessionResult> {
-    const response = await this.#step('session/new', undefined, options, () =>
-      this.#connection.agent.request(methods.agent.session.new, { cwd: params.cwd, mcpServers: [...(params.mcpServers ?? [])] }),
+    const response = await this.#step(
+      'session/new',
+      undefined,
+      options,
+      (send) =>
+        this.#connection.agent.request(
+          methods.agent.session.new,
+          { cwd: params.cwd, mcpServers: [...(params.mcpServers ?? [])] },
+          send,
+        ),
+      CANCEL_ON_DEADLINE,
     );
     const sessionId = sessionIdOf(response);
     if (sessionId === undefined) {
@@ -254,12 +281,17 @@ export class KiroAcpClient {
     const { sessionId } = params;
     this.#loading.add(sessionId);
     try {
-      const response = await this.#step('session/load', sessionId, options, () =>
-        this.#connection.agent.request(methods.agent.session.load, {
-          sessionId,
-          cwd: params.cwd,
-          mcpServers: [...(params.mcpServers ?? [])],
-        }),
+      const response = await this.#step(
+        'session/load',
+        sessionId,
+        options,
+        (send) =>
+          this.#connection.agent.request(
+            methods.agent.session.load,
+            { sessionId, cwd: params.cwd, mcpServers: [...(params.mcpServers ?? [])] },
+            send,
+          ),
+        CANCEL_ON_DEADLINE,
       );
       this.#storeConfig(sessionId, response.configOptions, this.#answerPosition(response));
       return response;
@@ -359,8 +391,12 @@ export class KiroAcpClient {
       option.type === 'boolean' && typeof value === 'boolean'
         ? { sessionId, configId, type: 'boolean', value }
         : { sessionId, configId, value: String(value) };
-    const response = await this.#step('session/set_config_option', sessionId, options, () =>
-      this.#connection.agent.request(methods.agent.session.setConfigOption, request),
+    const response = await this.#step(
+      'session/set_config_option',
+      sessionId,
+      options,
+      (send) => this.#connection.agent.request(methods.agent.session.setConfigOption, request, send),
+      CANCEL_ON_DEADLINE,
     );
     this.#storeConfig(sessionId, response.configOptions, this.#answerPosition(response));
     return this.#config.get(sessionId) ?? [];
@@ -596,11 +632,21 @@ export class KiroAcpClient {
     return count;
   }
 
+  /**
+   * Sends one request and waits for its answer within the step's limits.
+   * With `cancelOnDeadline`, a step that gives up because its deadline
+   * passed also sends `$/cancel_request` for the request and stops waiting
+   * for it; the SDK then drops the late answer, and a closed connection
+   * releases the request, so neither reaches anyone. The step still fails
+   * with its `timeout` error. Without it (`session/prompt`, which has
+   * `session/cancel`, and `session/close`) the request is left as it is.
+   */
   async #step<T>(
     method: string,
     sessionId: string | undefined,
     options: StepOptions,
-    run: () => Promise<T>,
+    run: (send: SendRequestOptions) => Promise<T>,
+    cancelOnDeadline = false,
   ): Promise<T> {
     if (this.#closed !== undefined) {
       throw this.#closed;
@@ -610,9 +656,27 @@ export class KiroAcpClient {
     }
     this.#log(sessionId === undefined ? { event: 'request', method } : { event: 'request', method, sessionId });
     const started = performance.now();
-    const { guards, dispose } = this.#guards(method, options, `${method} did not finish within ${options.timeoutMs} ms`);
+    const giveUp = cancelOnDeadline && options.timeoutMs !== undefined ? new AbortController() : undefined;
+    const send: SendRequestOptions =
+      giveUp === undefined ? {} : { cancellationSignal: giveUp.signal, stopWaitingOnCancel: true };
+    const onDeadline =
+      giveUp === undefined
+        ? undefined
+        : () => {
+            if (this.#closed !== undefined) {
+              return;
+            }
+            this.#log({ event: 'cancel_request', method });
+            giveUp.abort(new AcpClientError('timeout', `${method} did not finish within ${options.timeoutMs} ms`));
+          };
+    const { guards, dispose } = this.#guards(
+      method,
+      options,
+      `${method} did not finish within ${options.timeoutMs} ms`,
+      onDeadline,
+    );
     try {
-      const result = await Promise.race([run(), ...guards]);
+      const result = await Promise.race([run(send), ...guards]);
       // Updates that arrived before the response are dispatched through
       // promise chains; let them reach the sinks before the caller resumes.
       await new Promise<void>((resolve) => setImmediate(resolve));
@@ -679,6 +743,7 @@ export class KiroAcpClient {
     what: string,
     options: StepOptions,
     timeoutText: string,
+    onDeadline?: () => void,
   ): { readonly guards: Promise<never>[]; readonly dispose: () => void } {
     const { timeoutMs, signal } = options;
     const guards: Promise<never>[] = [this.#closedRejection];
@@ -687,7 +752,11 @@ export class KiroAcpClient {
     if (timeoutMs !== undefined) {
       guards.push(
         new Promise<never>((_resolve, reject) => {
-          timer = setTimeout(() => reject(new AcpClientError('timeout', timeoutText)), timeoutMs);
+          timer = setTimeout(() => {
+            // Rejected first, so the step fails with this error, not the cancellation's.
+            reject(new AcpClientError('timeout', timeoutText));
+            onDeadline?.();
+          }, timeoutMs);
         }),
       );
     }

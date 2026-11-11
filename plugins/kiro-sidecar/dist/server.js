@@ -30460,7 +30460,7 @@ var AcpClientError = class extends Error {
   }
 };
 var AUTH_REQUIRED_CODE = -32e3;
-var AUTH_WORDING = /authenticat|\bsign(?:ed)?[\s_-]?in\b|\blog(?:ged)?[\s_-]?in\b|\blogin/i;
+var AUTH_WORDING = /authenticat|\bsign[\s_-]?in\b|\bsigned[\s_]in\b|\bsigned-in\b(?!\s+\w)|\blog[\s_-]?in\b|\blogged[\s_]in\b|\blogged-in\b(?!\s+\w)|\blogin/i;
 function isAuthenticationError(error62) {
   if (typeof error62 !== "object" || error62 === null) {
     return false;
@@ -34239,6 +34239,7 @@ function selected(option) {
 // src/acp/client.ts
 var ACP_PROTOCOL_VERSION = 1;
 var DEFAULT_EXIT_DRAIN_MS = 200;
+var CANCEL_ON_DEADLINE = true;
 var DEFAULT_CLIENT_INFO = Object.freeze({ name: "kiro-sidecar", version: SERVER_VERSION });
 var MCP_STATUS_METHOD = "_kiro/mcp/status";
 var KiroAcpClient = class {
@@ -34342,11 +34343,16 @@ var KiroAcpClient = class {
       "initialize",
       void 0,
       options,
-      () => this.#connection.agent.request(methods.agent.initialize, {
-        protocolVersion: ACP_PROTOCOL_VERSION,
-        clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
-        clientInfo: this.#clientInfo
-      })
+      (send2) => this.#connection.agent.request(
+        methods.agent.initialize,
+        {
+          protocolVersion: ACP_PROTOCOL_VERSION,
+          clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
+          clientInfo: this.#clientInfo
+        },
+        send2
+      ),
+      CANCEL_ON_DEADLINE
     );
   }
   /** Creates a session. The id is `sessionId`, else `_meta.id`. */
@@ -34355,7 +34361,12 @@ var KiroAcpClient = class {
       "session/new",
       void 0,
       options,
-      () => this.#connection.agent.request(methods.agent.session.new, { cwd: params.cwd, mcpServers: [...params.mcpServers ?? []] })
+      (send2) => this.#connection.agent.request(
+        methods.agent.session.new,
+        { cwd: params.cwd, mcpServers: [...params.mcpServers ?? []] },
+        send2
+      ),
+      CANCEL_ON_DEADLINE
     );
     const sessionId = sessionIdOf(response);
     if (sessionId === void 0) {
@@ -34373,11 +34384,12 @@ var KiroAcpClient = class {
         "session/load",
         sessionId,
         options,
-        () => this.#connection.agent.request(methods.agent.session.load, {
-          sessionId,
-          cwd: params.cwd,
-          mcpServers: [...params.mcpServers ?? []]
-        })
+        (send2) => this.#connection.agent.request(
+          methods.agent.session.load,
+          { sessionId, cwd: params.cwd, mcpServers: [...params.mcpServers ?? []] },
+          send2
+        ),
+        CANCEL_ON_DEADLINE
       );
       this.#storeConfig(sessionId, response.configOptions, this.#answerPosition(response));
       return response;
@@ -34457,7 +34469,8 @@ var KiroAcpClient = class {
       "session/set_config_option",
       sessionId,
       options,
-      () => this.#connection.agent.request(methods.agent.session.setConfigOption, request)
+      (send2) => this.#connection.agent.request(methods.agent.session.setConfigOption, request, send2),
+      CANCEL_ON_DEADLINE
     );
     this.#storeConfig(sessionId, response.configOptions, this.#answerPosition(response));
     return this.#config.get(sessionId) ?? [];
@@ -34665,7 +34678,16 @@ var KiroAcpClient = class {
     }
     return count;
   }
-  async #step(method, sessionId, options, run) {
+  /**
+   * Sends one request and waits for its answer within the step's limits.
+   * With `cancelOnDeadline`, a step that gives up because its deadline
+   * passed also sends `$/cancel_request` for the request and stops waiting
+   * for it; the SDK then drops the late answer, and a closed connection
+   * releases the request, so neither reaches anyone. The step still fails
+   * with its `timeout` error. Without it (`session/prompt`, which has
+   * `session/cancel`, and `session/close`) the request is left as it is.
+   */
+  async #step(method, sessionId, options, run, cancelOnDeadline = false) {
     if (this.#closed !== void 0) {
       throw this.#closed;
     }
@@ -34674,9 +34696,23 @@ var KiroAcpClient = class {
     }
     this.#log(sessionId === void 0 ? { event: "request", method } : { event: "request", method, sessionId });
     const started = performance.now();
-    const { guards, dispose } = this.#guards(method, options, `${method} did not finish within ${options.timeoutMs} ms`);
+    const giveUp = cancelOnDeadline && options.timeoutMs !== void 0 ? new AbortController() : void 0;
+    const send2 = giveUp === void 0 ? {} : { cancellationSignal: giveUp.signal, stopWaitingOnCancel: true };
+    const onDeadline = giveUp === void 0 ? void 0 : () => {
+      if (this.#closed !== void 0) {
+        return;
+      }
+      this.#log({ event: "cancel_request", method });
+      giveUp.abort(new AcpClientError("timeout", `${method} did not finish within ${options.timeoutMs} ms`));
+    };
+    const { guards, dispose } = this.#guards(
+      method,
+      options,
+      `${method} did not finish within ${options.timeoutMs} ms`,
+      onDeadline
+    );
     try {
-      const result = await Promise.race([run(), ...guards]);
+      const result = await Promise.race([run(send2), ...guards]);
       await new Promise((resolve4) => setImmediate(resolve4));
       this.#log({
         event: "response",
@@ -34735,7 +34771,7 @@ var KiroAcpClient = class {
    * (`timeout`, with `timeoutText`) and the abort (`aborted`, naming `what`).
    * `dispose` clears the timer and the abort listener.
    */
-  #guards(what, options, timeoutText) {
+  #guards(what, options, timeoutText, onDeadline) {
     const { timeoutMs, signal } = options;
     const guards = [this.#closedRejection];
     let timer;
@@ -34743,7 +34779,10 @@ var KiroAcpClient = class {
     if (timeoutMs !== void 0) {
       guards.push(
         new Promise((_resolve, reject) => {
-          timer = setTimeout(() => reject(new AcpClientError("timeout", timeoutText)), timeoutMs);
+          timer = setTimeout(() => {
+            reject(new AcpClientError("timeout", timeoutText));
+            onDeadline?.();
+          }, timeoutMs);
         })
       );
     }
@@ -37889,8 +37928,10 @@ var RESULT_FIELDS = {
   textChars: isCount,
   truncated: isBoolean2,
   error: isNullable2(isString2),
-  stderrTail: isNullable2(isString2)
+  stderrTail: isNullable2(isString2),
+  notice: isString2
 };
+var OPTIONAL_FIELDS = /* @__PURE__ */ new Set(["notice"]);
 var LEGACY_DEFAULTS = {
   messages: [],
   messagesDropped: 0,
@@ -37914,6 +37955,9 @@ function parseTurnResult(value, launchId, turn) {
   const record2 = value;
   const copy = {};
   for (const [field, check2] of Object.entries(RESULT_FIELDS)) {
+    if (OPTIONAL_FIELDS.has(field) && record2[field] === void 0) {
+      continue;
+    }
     const fieldValue2 = Object.hasOwn(LEGACY_DEFAULTS, field) && !Object.hasOwn(record2, field) ? LEGACY_DEFAULTS[field] : record2[field];
     if (!check2(fieldValue2)) {
       throw new Error(`bad field ${field}`);
@@ -38650,15 +38694,26 @@ function ownToolTitle(tool) {
 function ownToolOf(title) {
   return Object.keys(OWN_TOOLS).find((tool) => title === ownToolTitle(tool));
 }
-function isOwnToolRequest(request) {
+var MCP_TOOL_ENVELOPE_VERSION = 1;
+function checkOwnToolRequest(request) {
   const tool = ownToolOf(request.toolCall.title ?? void 0);
   if (tool === void 0) {
-    return false;
+    return { own: false };
   }
   const kiro = isObject2(request._meta) ? request._meta["kiro"] : void 0;
   const mcpTool = isObject2(kiro) ? kiro["mcpTool"] : void 0;
+  if (isObject2(mcpTool) && "version" in mcpTool && mcpTool["version"] !== MCP_TOOL_ENVELOPE_VERSION) {
+    const version2 = mcpTool["version"];
+    return { own: false, unreadVersion: typeof version2 === "number" ? version2 : version2 === null ? "null" : typeof version2 };
+  }
   const identity = isObject2(mcpTool) ? mcpTool["identity"] : void 0;
-  return isObject2(identity) && identity["serverName"] === TOOL_SERVER_NAME && identity["toolName"] === tool;
+  return { own: isObject2(identity) && identity["serverName"] === TOOL_SERVER_NAME && identity["toolName"] === tool };
+}
+var OWN_TOOL_PROOFS_KEPT = 256;
+function currentFormValue(update, tool) {
+  const rawInput = update["rawInput"];
+  const value = isObject2(rawInput) ? rawInput[OWN_TOOLS[tool]] : void 0;
+  return typeof value === "string" ? value : void 0;
 }
 function isObject2(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -38667,6 +38722,8 @@ var SidecarCalls = class {
   #secrets;
   #now;
   #open = /* @__PURE__ */ new Map();
+  /** The own tool each permission request taken as the plugin's own was for, by tool call id (`prove`). */
+  #proofs = /* @__PURE__ */ new Map();
   /** The kept messages, sorted by call order. */
   #messages = [];
   #noted = 0;
@@ -38682,26 +38739,78 @@ var SidecarCalls = class {
   /** Notes a `tool_call` when it is a call of an own tool; `update` is the raw session update. */
   call(toolCallId, title, update) {
     const tool = ownToolOf(title);
-    if (tool === void 0 || !isObject2(update) || !isObject2(update["rawInput"])) {
+    if (tool === void 0 || !isObject2(update)) {
       return;
     }
     const rawInput = update["rawInput"];
-    if (rawInput["tool_id"] !== `${TOOL_SERVER_NAME}::${tool}`) {
+    if (isObject2(rawInput) && rawInput["tool_id"] === `${TOOL_SERVER_NAME}::${tool}`) {
+      const args = rawInput["arguments"];
+      this.#noted += 1;
+      this.#open.set(toolCallId, {
+        order: this.#noted,
+        tool,
+        form: "legacy",
+        value: isObject2(args) ? args[OWN_TOOLS[tool]] : void 0
+      });
       return;
     }
-    const args = rawInput["arguments"];
+    const known = this.#open.get(toolCallId);
+    if (known !== void 0) {
+      if (known.form === "current" && known.tool === tool) {
+        known.value = currentFormValue(update, tool) ?? known.value;
+      }
+      return;
+    }
     this.#noted += 1;
-    this.#open.set(toolCallId, { order: this.#noted, tool, value: isObject2(args) ? args[OWN_TOOLS[tool]] : void 0 });
+    this.#open.set(toolCallId, { order: this.#noted, tool, form: "current", value: currentFormValue(update, tool) });
   }
-  /** Records a noted call on its `completed` update and forgets it on a `failed` one. */
-  update(toolCallId, status2) {
+  /**
+   * Notes that the permission request for `toolCallId`, titled `title`, was
+   * taken as the plugin's own (`isOwnToolRequest`): the proof a current-form
+   * call of that tool needs to be recorded. It is kept after the request is
+   * answered, until the call ends or the bound pushes it out.
+   */
+  prove(toolCallId, title) {
+    const tool = ownToolOf(title);
+    if (tool === void 0) {
+      return;
+    }
+    this.#proofs.delete(toolCallId);
+    this.#proofs.set(toolCallId, tool);
+    for (const oldest of this.#proofs.keys()) {
+      if (this.#proofs.size <= OWN_TOOL_PROOFS_KEPT) {
+        break;
+      }
+      this.#proofs.delete(oldest);
+    }
+  }
+  /**
+   * Records a noted call on its `completed` update and forgets it on a
+   * `failed` one; `update` is the raw session update, whose `rawInput` may
+   * bring a current-form call's value.
+   */
+  update(toolCallId, status2, update) {
     const noted = this.#open.get(toolCallId);
-    if (noted === void 0 || status2 !== "completed" && status2 !== "failed") {
+    const ends = status2 === "completed" || status2 === "failed";
+    const proven = this.#proofs.get(toolCallId);
+    if (ends) {
+      this.#proofs.delete(toolCallId);
+    }
+    if (noted === void 0) {
+      return void 0;
+    }
+    if (noted.form === "current" && isObject2(update)) {
+      noted.value = currentFormValue(update, noted.tool) ?? noted.value;
+    }
+    if (!ends) {
       return void 0;
     }
     this.#open.delete(toolCallId);
     if (status2 === "failed" || typeof noted.value !== "string") {
       return void 0;
+    }
+    if (noted.form === "current" && proven !== noted.tool) {
+      return "unproven";
     }
     const text2 = this.#secrets.redact(noted.value);
     if (noted.tool === "complete_task") {
@@ -39264,6 +39373,7 @@ var TurnAccumulator = class {
 };
 
 // src/session/turn.ts
+var UNPROVEN_CALL_NOTICE = `Kiro ran a call titled as a sidecar tool (send_message or complete_task) without a permission request this plugin could verify, so the call was not recorded.`;
 var FAILED_OUTCOMES = /* @__PURE__ */ new Set(["error", "exited", "lost"]);
 function isLineBreak(char) {
   return char === "\n" || char === "\r";
@@ -39291,6 +39401,11 @@ var TurnRecorder = class _TurnRecorder {
   #toolSinceText = false;
   /** The credits of the turn's `turn_completion` updates so far; null before the first that has any. */
   #credits = null;
+  /**
+   * The turn's notices for the caller by kind, at most one of each, in the
+   * order they first happened (`noteUnreadToolEnvelope`, an unproven call).
+   */
+  #notices = /* @__PURE__ */ new Map();
   /** The error that kept `turns/<n>.md` from being finalized, if any. */
   textError;
   /** The error that kept `turns/<n>.json` from being written or read, if any. */
@@ -39354,9 +39469,29 @@ var TurnRecorder = class _TurnRecorder {
       this.#calls.call(toolCallId, title, update);
     }
   }
-  /** A `tool_call_update` of this turn: records a noted own-tool call once it completes. */
-  toolCallUpdate(toolCallId, status2) {
-    return this.#finishing ? void 0 : this.#calls.update(toolCallId, status2);
+  /**
+   * A `tool_call_update` of this turn, with its raw update: records a noted
+   * own-tool call once it completes. A current-form call that completes with
+   * no permission proof is not recorded, and the turn gets a notice.
+   */
+  toolCallUpdate(toolCallId, status2, update) {
+    if (this.#finishing) {
+      return void 0;
+    }
+    const recorded = this.#calls.update(toolCallId, status2, update);
+    if (recorded === "unproven" && !this.#notices.has("unproven")) {
+      this.#notices.set("unproven", UNPROVEN_CALL_NOTICE);
+    }
+    return recorded;
+  }
+  /**
+   * A permission request of this turn that was taken as the plugin's own
+   * (`isOwnToolRequest`): the proof a current-form call with that id needs.
+   */
+  ownToolRequest(toolCallId, title) {
+    if (!this.#finishing) {
+      this.#calls.prove(toolCallId, title);
+    }
   }
   /**
    * The credits of a `turn_completion` update of this turn (null: it had
@@ -39368,6 +39503,20 @@ var TurnRecorder = class _TurnRecorder {
       return;
     }
     this.#credits = (this.#credits ?? 0) + credits;
+  }
+  /**
+   * Notes that Kiro asked permission for a sidecar tool with a
+   * `_meta.kiro.mcpTool` envelope version the plugin does not read. The
+   * turn's result then carries one `notice`, however often it happened.
+   */
+  noteUnreadToolEnvelope(version2) {
+    if (this.#finishing || this.#notices.has("envelope")) {
+      return;
+    }
+    this.#notices.set(
+      "envelope",
+      `Kiro asked permission for a sidecar tool in an identity layout this plugin does not read (_meta.kiro.mcpTool.version ${version2}); the permission policy decided it, and its send_message or complete_task may not be recorded. Update the plugin.`
+    );
   }
   /** The running counters. `lastTool` is redacted. */
   live() {
@@ -39437,7 +39586,8 @@ var TurnRecorder = class _TurnRecorder {
       textChars: summary.textChars + this.#writer.insertedChars,
       truncated,
       error: error62,
-      stderrTail: tail
+      stderrTail: tail,
+      ...this.#notices.size === 0 ? {} : { notice: [...this.#notices.values()].join(" ") }
     };
     let stored = result;
     try {
@@ -40052,11 +40202,25 @@ var SessionManager = class {
     const client2 = new KiroAcpClient(handle, {
       // The plugin's own tools are allowed whatever the policy (4.5).
       decidePermission: (request) => {
-        if (!isOwnToolRequest(request)) {
+        const check2 = checkOwnToolRequest(request);
+        if (!check2.own) {
+          if (check2.unreadVersion !== void 0) {
+            this.#logLine(
+              session,
+              {
+                event: "mcp_tool_version_unread",
+                toolCallId: request.toolCall.toolCallId,
+                version: check2.unreadVersion
+              },
+              true
+            );
+            session.turn?.noteUnreadToolEnvelope(check2.unreadVersion);
+          }
           return permissions;
         }
         const id = request.toolCall.toolCallId;
         session.ownToolRequests.set(id, (session.ownToolRequests.get(id) ?? 0) + 1);
+        session.turn?.ownToolRequest(id, request.toolCall.title ?? void 0);
         return "allow";
       },
       events: (event) => this.#onEvent(session, event),
@@ -40858,9 +41022,11 @@ ${tail}`}`;
         if (event.replay || recorder === null) {
           return;
         }
-        const recorded = recorder.toolCallUpdate(event.toolCallId, event.status);
+        const recorded = recorder.toolCallUpdate(event.toolCallId, event.status, event.update);
         if (recorded === "ignored") {
           this.#logLine(session, { event: "complete_task_ignored", turn: recorder.turn }, true);
+        } else if (recorded === "unproven") {
+          this.#logLine(session, { event: "own_tool_unproven", turn: recorder.turn, toolCallId: event.toolCallId }, true);
         } else if (recorded === "completion") {
           this.#track(this.#endCompletedTurn(session, recorder), `end of turn ${recorder.turn} of ${session.launchId}`);
         }

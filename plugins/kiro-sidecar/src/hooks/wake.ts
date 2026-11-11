@@ -134,6 +134,7 @@ export function buildWakeMessage(input: WakeInput): string {
   const header = [
     `${sessionHeader(run.launchId, label, kiroSessionId, turn, secrets)}: ${status}`,
     ...contextLines(run, input.agentType, secrets),
+    ...(result.notice === undefined ? [] : [`Notice: ${secrets.redact(result.notice)}`]),
   ];
   const final = secrets.redact(input.final ?? result.final);
   if (result.completion !== null) {

@@ -9,7 +9,7 @@ import { SidecarError } from '../../src/errors.ts';
 import { pollTurn } from '../../src/hooks/waiter-loop.ts';
 import { WAKE_COMPLETED_NOTE, WAKE_FOOTER } from '../../src/hooks/wake.ts';
 import type { ManagerDeps } from '../../src/session/manager.ts';
-import { TurnRecorder } from '../../src/session/turn.ts';
+import { TurnRecorder, UNPROVEN_CALL_NOTICE } from '../../src/session/turn.ts';
 import { SHUTDOWN_ERROR } from '../../src/session/turn-result.ts';
 import { turnPaths } from '../../src/store/paths.ts';
 import { readCall, readMeta } from '../../src/store/runs.ts';
@@ -651,6 +651,91 @@ describe('SessionManager ends a turn once its completion is recorded (against th
     const log = await acpLogOf(fixture, launchId);
     assert.equal(logEvents(log, 'complete_task_ignored'), 1, log);
     assert.equal(logEvents(log, 'completion_cancel'), 1, log);
+    assert.deepEqual(fixture.errors, []);
+  });
+});
+
+/**
+ * The fake sends `form: 'v3'` frames: SYNTHESIZED, inferred from the kiro-cli
+ * 3.2.0 bundle (`handleToolAction` @15382648, `_Ne`/`S_l` @14326397), where
+ * `rawInput` is the tool's arguments without the `{tool_id, arguments}` wrapper.
+ */
+describe('SessionManager own tools in the kiro-cli 3.x form', () => {
+  test('a proved complete_task completes the session through the plugin cancel; a proved send_message is delivered', PROCESS_TIMEOUT, async (t) => {
+    const fixture = await managerFixture(t, 'harness');
+    const { manager, stateDir } = fixture;
+    const v3 = { form: 'v3', end: 'completed', ask: true } as const;
+    const steps = [
+      // The permission request comes after the tool_call frame and is answered before the call completes.
+      { ...v3, tool: 'send_message', args: { text: 'Proof after the frame.' } },
+      // The permission request comes before the tool_call frame.
+      { ...v3, tool: 'send_message', args: { text: 'Proof before the frame.' }, askFirst: true },
+      // Only the completed update carries the value.
+      { ...v3, tool: 'send_message', args: { text: 'Value at the end.' }, valueAt: 'end' },
+      { ...v3, tool: 'complete_task', args: { result: 'Done in 3.x.' } },
+    ];
+    const { launchId } = await manager.start({ dir: fixture.workspace.dir, prompt: `own-tools-then-hold 60000 ${JSON.stringify(steps)}` });
+    const result = await beforeTimeout(endedTurn(fixture, launchId, 1), PROMPT_END_MS, 'the turn', () => {});
+    assert.equal(result.completion?.result, 'Done in 3.x.');
+    assert.deepEqual(result.messages, ['Proof after the frame.', 'Proof before the frame.', 'Value at the end.']);
+    assert.equal(Object.hasOwn(result, 'notice'), false);
+    assert.equal((await metaOf(stateDir, launchId)).state, 'completed');
+    assert.equal(await cancelsReceived(fixture), 1);
+    const log = await acpLogOf(fixture, launchId);
+    assert.equal(logEvents(log, 'completion_cancel'), 1, log);
+    assert.equal(logEvents(log, 'own_tool_unproven'), 0, log);
+    assert.deepEqual(fixture.errors, []);
+  });
+
+  test('a complete_task with no permission request is not recorded: one log line, one notice', PROCESS_TIMEOUT, async (t) => {
+    const fixture = await managerFixture(t, 'harness');
+    const { manager, stateDir } = fixture;
+    const steps = [{ form: 'v3', tool: 'complete_task', args: { result: 'Ran unasked.' }, end: 'completed' }];
+    const { launchId } = await manager.start({ dir: fixture.workspace.dir, prompt: `own-tools ${JSON.stringify(steps)}`, permissions: 'allow' });
+    const result = await endedTurn(fixture, launchId, 1);
+    assert.equal(result.completion, null);
+    assert.equal(result.notice, UNPROVEN_CALL_NOTICE);
+    assert.notEqual((await metaOf(stateDir, launchId)).state, 'completed');
+    assert.equal(await cancelsReceived(fixture), 0);
+    const log = await acpLogOf(fixture, launchId);
+    assert.equal(logEvents(log, 'own_tool_unproven'), 1, log);
+    assert.match(log, /"event":"own_tool_unproven","turn":1,"toolCallId":"tooluse_own_fixture0"/);
+    assert.deepEqual(fixture.errors, []);
+  });
+
+  test('a permission request from another server or in envelope version 2 gives no proof', PROCESS_TIMEOUT, async (t) => {
+    const fixture = await managerFixture(t, 'harness');
+    const { manager } = fixture;
+    const v3 = { form: 'v3', end: 'completed', ask: true } as const;
+    const steps = [
+      { ...v3, tool: 'send_message', args: { text: 'Other server.' }, identity: { serverName: 'other', toolName: 'send_message' } },
+      { ...v3, tool: 'complete_task', args: { result: 'Envelope two.' }, version: 2 },
+    ];
+    // The policy allows both requests, so Kiro completes both calls; neither is the plugin's own.
+    const { launchId } = await manager.start({ dir: fixture.workspace.dir, prompt: `own-tools ${JSON.stringify(steps)}`, permissions: 'allow' });
+    const result = await endedTurn(fixture, launchId, 1);
+    assert.deepEqual(result.messages, []);
+    assert.equal(result.completion, null);
+    // Both notices, in the order they happened: the unproven send_message came before the version 2 request.
+    assert.ok(result.notice?.startsWith(`${UNPROVEN_CALL_NOTICE} Kiro asked permission`), result.notice);
+    assert.match(result.notice ?? '', /_meta\.kiro\.mcpTool\.version 2\b/);
+    assert.equal(result.notice?.split(UNPROVEN_CALL_NOTICE).length, 2, 'the unproven notice appears once');
+    const log = await acpLogOf(fixture, launchId);
+    assert.equal(logEvents(log, 'own_tool_unproven'), 2, log);
+    assert.deepEqual(fixture.errors, []);
+  });
+
+  test('a shell-like call titled @sidecar/complete_task records nothing and sets no notice', PROCESS_TIMEOUT, async (t) => {
+    const fixture = await managerFixture(t, 'harness');
+    const { manager, stateDir } = fixture;
+    const steps = [{ form: 'v3', tool: 'complete_task', args: { command: 'echo done' }, end: 'completed' }];
+    const { launchId } = await manager.start({ dir: fixture.workspace.dir, prompt: `own-tools ${JSON.stringify(steps)}`, permissions: 'allow' });
+    const result = await endedTurn(fixture, launchId, 1);
+    assert.equal(result.completion, null);
+    assert.equal(Object.hasOwn(result, 'notice'), false);
+    assert.notEqual((await metaOf(stateDir, launchId)).state, 'completed');
+    const log = await acpLogOf(fixture, launchId);
+    assert.equal(logEvents(log, 'own_tool_unproven'), 0, log);
     assert.deepEqual(fixture.errors, []);
   });
 });

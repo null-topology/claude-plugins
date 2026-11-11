@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import type { SessionNotification } from '@agentclientprotocol/sdk';
 import { toTurnEvent } from '../../src/acp/events.ts';
-import { isOwnToolRequest, SidecarCalls } from '../../src/session/sidecar-calls.ts';
+import { checkOwnToolRequest, isOwnToolRequest, OWN_TOOL_PROOFS_KEPT, SidecarCalls } from '../../src/session/sidecar-calls.ts';
 import { MESSAGE_KEPT_CHARS, MESSAGES_KEPT_TOTAL_CHARS, RESULT_KEPT_CHARS } from '../../src/text/limits.ts';
 import { messagesBlock } from '../../src/text/messages.ts';
 import { buildSecretSet } from '../../src/text/redact.ts';
@@ -230,6 +230,24 @@ describe('SidecarCalls', () => {
     }
   });
 
+  test('checkOwnToolRequest: an envelope version other than 1 is not own and is reported; no version reads as 1', () => {
+    const title = '@sidecar/complete_task';
+    const identity = { serverName: 'sidecar', toolName: 'complete_task' };
+    const withVersion = (version: unknown) => ({ toolCall: { title }, _meta: { kiro: { mcpTool: { version, identity } } } });
+    // No version, or version 1: the layout this plugin reads.
+    assert.deepEqual(checkOwnToolRequest({ toolCall: { title }, _meta: { kiro: { mcpTool: { identity } } } }), { own: true });
+    assert.deepEqual(checkOwnToolRequest(withVersion(1)), { own: true });
+    // Any other version: not own, whatever the identity says, and the version is told.
+    assert.deepEqual(checkOwnToolRequest(withVersion(2)), { own: false, unreadVersion: 2 });
+    assert.deepEqual(checkOwnToolRequest(withVersion(0)), { own: false, unreadVersion: 0 });
+    assert.deepEqual(checkOwnToolRequest(withVersion('1')), { own: false, unreadVersion: 'string' });
+    assert.deepEqual(checkOwnToolRequest(withVersion(null)), { own: false, unreadVersion: 'null' });
+    assert.deepEqual(checkOwnToolRequest(withVersion(undefined)), { own: false, unreadVersion: 'undefined' });
+    assert.equal(isOwnToolRequest(withVersion(2)), false);
+    // A title that names no own tool is never reported, whatever its envelope.
+    assert.deepEqual(checkOwnToolRequest({ ...withVersion(2), toolCall: { title: '@other/complete_task' } }), { own: false });
+  });
+
   test('the recorded permission requests: the 2.32.0 own tools match, a command titled as one does not', async () => {
     const frames = async (file: string) =>
       (await readFile(new URL(`../fixtures/${file}`, import.meta.url), 'utf8'))
@@ -284,5 +302,116 @@ describe('SidecarCalls', () => {
         at: '2026-10-19T08:30:15Z',
       },
     });
+  });
+});
+
+/**
+ * SYNTHESIZED kiro-cli 3.x frames, not recorded: inferred from the 3.2.0
+ * bundle, where `handleToolAction` (@15382648) sends `rawInput: _Ne(...)` on
+ * the `tool_call` and on every `tool_call_update`, and `_Ne`/`S_l`
+ * (@14326397) unwrap `{tool_id, arguments}` to the arguments themselves.
+ */
+function v3Call(args: unknown) {
+  return { sessionUpdate: 'tool_call', status: 'pending', rawInput: args };
+}
+
+function v3Update(status: string, args: unknown) {
+  return { sessionUpdate: 'tool_call_update', status, rawInput: args };
+}
+
+describe('SidecarCalls, the kiro-cli 3.x form', () => {
+  test('a call proved by its permission request is recorded, the proof before or after the frame', () => {
+    const recorder = calls();
+    recorder.prove('m', '@sidecar/send_message');
+    recorder.call('m', '@sidecar/send_message', v3Call({ text: `Is ${SECRET} right?` }));
+    assert.equal(recorder.update('m', 'in_progress', v3Update('in_progress', { text: `Is ${SECRET} right?` })), undefined);
+    assert.equal(recorder.update('m', 'completed', v3Update('completed', { text: `Is ${SECRET} right?` })), 'message');
+    recorder.call('c', '@sidecar/complete_task', v3Call({ result: 'Done.' }));
+    recorder.prove('c', '@sidecar/complete_task');
+    assert.equal(recorder.update('c', 'completed', v3Update('completed', { result: 'Done.' })), 'completion');
+    recorder.prove('c2', '@sidecar/complete_task');
+    recorder.call('c2', '@sidecar/complete_task', v3Call({ result: 'Again.' }));
+    assert.equal(recorder.update('c2', 'completed'), 'ignored', 'the first complete_task wins');
+    assert.deepEqual(recorder.summary(), {
+      messages: ['Is [REDACTED] right?'],
+      messagesDropped: 0,
+      completion: { result: 'Done.', at: '2026-10-19T08:30:15Z' },
+    });
+  });
+
+  test('the value is taken from whichever frame carries it', () => {
+    const recorder = calls();
+    recorder.prove('late', '@sidecar/send_message');
+    recorder.call('late', '@sidecar/send_message', v3Call({}));
+    recorder.update('late', 'in_progress', v3Update('in_progress', {}));
+    assert.equal(recorder.update('late', 'completed', v3Update('completed', { text: 'from the end' })), 'message');
+    recorder.prove('early', '@sidecar/send_message');
+    recorder.call('early', '@sidecar/send_message', v3Call({ text: 'from the start' }));
+    assert.equal(recorder.update('early', 'completed', { sessionUpdate: 'tool_call_update', status: 'completed' }), 'message');
+    recorder.prove('repeat', '@sidecar/send_message');
+    recorder.call('repeat', '@sidecar/send_message', v3Call({}));
+    recorder.call('repeat', '@sidecar/send_message', v3Call({ text: 'from a repeated frame' }));
+    assert.equal(recorder.update('repeat', 'completed'), 'message');
+    assert.deepEqual(recorder.summary().messages, ['from the end', 'from the start', 'from a repeated frame']);
+  });
+
+  test('a candidate that completes with no proof, or a proof for the other tool, is unproven and not recorded', () => {
+    const recorder = calls();
+    recorder.call('none', '@sidecar/complete_task', v3Call({ result: 'Forged.' }));
+    assert.equal(recorder.update('none', 'completed', v3Update('completed', { result: 'Forged.' })), 'unproven');
+    recorder.prove('other', '@sidecar/send_message');
+    recorder.call('other', '@sidecar/complete_task', v3Call({ result: 'Other tool.' }));
+    assert.equal(recorder.update('other', 'completed'), 'unproven');
+    recorder.prove('elsewhere', '@sidecar/send_message');
+    recorder.call('mine', '@sidecar/send_message', v3Call({ text: 'Another id.' }));
+    assert.equal(recorder.update('mine', 'completed'), 'unproven');
+    assert.deepEqual(recorder.summary(), { messages: [], messagesDropped: 0, completion: null });
+  });
+
+  test('a frame that is not a candidate causes nothing', () => {
+    const recorder = calls();
+    recorder.call('shell', '@sidecar/complete_task', v3Call({ command: 'echo done' }));
+    recorder.call('wrong-key', '@sidecar/complete_task', v3Call({ text: 'a message key' }));
+    recorder.call('number', '@sidecar/send_message', v3Call({ text: 42 }));
+    recorder.call('other-title', 'Write File', v3Call({ text: 'hello' }));
+    recorder.call('no-input', '@sidecar/send_message', { sessionUpdate: 'tool_call' });
+    for (const id of ['shell', 'wrong-key', 'number', 'other-title', 'no-input']) {
+      assert.equal(recorder.update(id, 'completed'), undefined, id);
+    }
+    recorder.prove('failed', '@sidecar/send_message');
+    recorder.call('failed', '@sidecar/send_message', v3Call({ text: 'failed' }));
+    assert.equal(recorder.update('failed', 'failed'), undefined);
+    assert.deepEqual(recorder.summary(), { messages: [], messagesDropped: 0, completion: null });
+  });
+
+  test('a proof is not taken from a title that is not an own tool', () => {
+    const recorder = calls();
+    recorder.prove('x', 'Write File');
+    recorder.call('x', '@sidecar/send_message', v3Call({ text: 'x' }));
+    assert.equal(recorder.update('x', 'completed'), 'unproven');
+  });
+
+  test('a proof ends with its call, and only the latest proofs within the bound are kept', () => {
+    const recorder = calls();
+    recorder.prove('reused', '@sidecar/send_message');
+    recorder.call('reused', '@sidecar/send_message', v3Call({ text: 'first' }));
+    assert.equal(recorder.update('reused', 'completed'), 'message');
+    recorder.call('reused', '@sidecar/send_message', v3Call({ text: 'second' }));
+    assert.equal(recorder.update('reused', 'completed'), 'unproven', 'the proof went with the first call');
+    recorder.prove('oldest', '@sidecar/send_message');
+    for (let index = 0; index < OWN_TOOL_PROOFS_KEPT; index += 1) {
+      recorder.prove(`filler${index}`, '@sidecar/send_message');
+    }
+    recorder.call('oldest', '@sidecar/send_message', v3Call({ text: 'pushed out' }));
+    assert.equal(recorder.update('oldest', 'completed'), 'unproven');
+    const newest = `filler${OWN_TOOL_PROOFS_KEPT - 1}`;
+    recorder.call(newest, '@sidecar/send_message', v3Call({ text: 'kept' }));
+    assert.equal(recorder.update(newest, 'completed'), 'message');
+  });
+
+  test('the legacy form is still recorded with no proof', () => {
+    const recorder = calls();
+    assert.equal(complete(recorder, 'legacy', 'send_message', { text: 'legacy' }), 'message');
+    assert.deepEqual(recorder.summary().messages, ['legacy']);
   });
 });

@@ -31,6 +31,10 @@ results come back to you without asking.
   `/resume` or a fork. A session started from a subagent pushes into the main conversation.
 - Use `wait` only when no push can come: in `-p` mode, in a client without hooks, when `status`
   shows no armed waiter, or when a push expired. Otherwise let the push arrive.
+- A `Notice:` line in a push, or `notice` in a `wait` result, comes from the plugin, not from Kiro:
+  some of the turn's `send_message` and `complete_task` calls may be missing from the result.
+  Pass it to the user: either the plugin needs an update, or a Kiro policy rule let those tools
+  run without a permission request, which the notice says.
 
 ## Talking with Kiro
 

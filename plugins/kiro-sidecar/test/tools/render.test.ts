@@ -174,6 +174,12 @@ describe('turn result fields in a reply (4.4)', () => {
   const failed = (error: string | null, stderrTail: string | null) =>
     resultFields(sampleResult(meta, 1, { outcome: 'error', error, stderrTail, final: 'Done.' }));
 
+  test('carry a turn notice when the result has one, and no notice key otherwise', () => {
+    const notice = 'Kiro used an envelope version this plugin does not read.';
+    assert.equal(resultFields(sampleResult(meta, 1, { notice })).notice, notice);
+    assert.equal(Object.hasOwn(resultFields(sampleResult(meta, 1, {})), 'notice'), false);
+  });
+
   test('leave out the text fields and keep null or short failure fields as recorded', () => {
     const fields = failed(null, null);
     assert.deepEqual(Object.keys(fields).filter((key) => ['final', 'messages', 'completion'].includes(key)), []);

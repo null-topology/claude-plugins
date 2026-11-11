@@ -227,6 +227,48 @@ describe('SessionManager.start', () => {
     assert.deepEqual(fixture.manager.get(result.launchId)?.permissionsAnswered, { allowed: 0, denied: 3 });
   });
 
+  test('an own-tool request with an unread envelope version is left to the policy, logged and noted once', PROCESS_TIMEOUT, async (t) => {
+    const fixture = await managerFixture(t, 'harness');
+    const ask = { tool: 'send_message', end: 'completed', ask: true } as const;
+    const steps = [
+      { ...ask, args: { text: 'Envelope two.' }, version: 2 },
+      { ...ask, args: { text: 'Envelope three.' }, version: 3 },
+      { ...ask, args: { text: 'Envelope one.' } },
+    ];
+    const prompt = `own-tools ${JSON.stringify(steps)}`;
+    const result = await fixture.manager.start({ dir: fixture.workspace.dir, prompt, permissions: 'deny' });
+    const turn = await endedTurn(fixture, result.launchId, 1);
+    assert.equal(
+      turn.final,
+      ['@sidecar/send_message: reject_once', '@sidecar/send_message: reject_once', '@sidecar/send_message: allow_once'].join('\n'),
+    );
+    assert.deepEqual(turn.messages, ['Envelope one.']);
+    assert.deepEqual(fixture.manager.get(result.launchId)?.permissionsAnswered, { allowed: 0, denied: 2 });
+    // One notice for the turn, naming the first version seen.
+    assert.match(turn.notice ?? '', /_meta\.kiro\.mcpTool\.version 2\b/);
+    const log = await readFile(join(fixture.stateDir, 'runs', result.launchId, 'acp.jsonl'), 'utf8');
+    const unread = log
+      .split('\n')
+      .filter((line) => line !== '')
+      .map((line) => JSON.parse(line) as { event?: string; toolCallId?: string; version?: unknown })
+      .filter((entry) => entry.event === 'mcp_tool_version_unread')
+      .map(({ toolCallId, version }) => ({ toolCallId, version }));
+    assert.deepEqual(unread, [
+      { toolCallId: 'tooluse_own_fixture0', version: 2 },
+      { toolCallId: 'tooluse_own_fixture1', version: 3 },
+    ]);
+  });
+
+  test('a turn without an unread envelope has no notice field', PROCESS_TIMEOUT, async (t) => {
+    const fixture = await managerFixture(t, 'harness');
+    const steps = [{ tool: 'send_message', args: { text: 'Envelope one.' }, end: 'completed', ask: true }];
+    const result = await fixture.manager.start({ dir: fixture.workspace.dir, prompt: `own-tools ${JSON.stringify(steps)}` });
+    const turn = await endedTurn(fixture, result.launchId, 1);
+    assert.equal(Object.hasOwn(turn, 'notice'), false);
+    const stored = JSON.parse(await readFile(join(fixture.stateDir, 'runs', result.launchId, 'turns', '1.json'), 'utf8')) as object;
+    assert.equal(Object.hasOwn(stored, 'notice'), false);
+  });
+
   test('model, effort and kiro_mode are set and read back', PROCESS_TIMEOUT, async (t) => {
     const fixture = await managerFixture(t, 'default');
     const result = await fixture.manager.start({

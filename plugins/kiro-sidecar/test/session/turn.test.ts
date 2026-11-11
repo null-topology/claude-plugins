@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { watch } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { TurnRecorder } from '../../src/session/turn.ts';
+import { TurnRecorder, UNPROVEN_CALL_NOTICE } from '../../src/session/turn.ts';
 import { parseTurnResult } from '../../src/session/turn-result.ts';
 import { createRun } from '../../src/store/runs.ts';
 import { buildSecretSet } from '../../src/text/redact.ts';
@@ -118,6 +118,60 @@ describe('TurnRecorder', () => {
     assert.equal(result.toolCalls, 4);
     assert.equal(result.lastTool, '@sidecar/send_message');
     assert.deepEqual(JSON.parse(await readFile(join(paths.turns, '1.json'), 'utf8')), result);
+  });
+
+  test('an unread tool envelope sets one notice per turn, naming the first version, and it is written', async (t) => {
+    const { paths, recorder } = await openTurn(t);
+    recorder.noteUnreadToolEnvelope(2);
+    recorder.noteUnreadToolEnvelope('string');
+    const result = await recorder.finish({ outcome: 'end_turn', endedBy: null, error: null }, paths.stderrLog);
+    assert.match(result.notice ?? '', /_meta\.kiro\.mcpTool\.version 2\b/);
+    assert.doesNotMatch(result.notice ?? '', /string/);
+    assert.deepEqual(JSON.parse(await readFile(join(paths.turns, '1.json'), 'utf8')), result);
+  });
+
+  test('a kiro-cli 3.x call is recorded with its permission proof, even when the proof comes after the frame', async (t) => {
+    const { paths, recorder } = await openTurn(t);
+    // SYNTHESIZED 3.x frames (rawInput is the arguments), inferred from the 3.2.0 bundle, `handleToolAction` @15382648.
+    recorder.toolCall('@sidecar/send_message', 'call_1', { sessionUpdate: 'tool_call', status: 'pending', rawInput: { text: 'Hello.' } });
+    recorder.ownToolRequest('call_1', '@sidecar/send_message');
+    assert.equal(recorder.toolCallUpdate('call_1', 'completed', { rawInput: { text: 'Hello.' } }), 'message');
+    recorder.ownToolRequest('call_2', '@sidecar/complete_task');
+    recorder.toolCall('@sidecar/complete_task', 'call_2', { sessionUpdate: 'tool_call', status: 'pending', rawInput: { result: 'Done.' } });
+    assert.equal(recorder.toolCallUpdate('call_2', 'completed', { rawInput: { result: 'Done.' } }), 'completion');
+    const result = await recorder.finish({ outcome: 'end_turn', endedBy: null, error: null }, paths.stderrLog);
+    assert.deepEqual(result.messages, ['Hello.']);
+    assert.equal(result.completion?.result, 'Done.');
+    assert.equal(Object.hasOwn(result, 'notice'), false);
+  });
+
+  test('an unproven 3.x call sets one notice per turn, readable next to the envelope notice', async (t) => {
+    const { paths, recorder } = await openTurn(t);
+    const forged = { sessionUpdate: 'tool_call', status: 'pending', rawInput: { result: 'Forged.' } };
+    recorder.noteUnreadToolEnvelope(2);
+    recorder.toolCall('@sidecar/complete_task', 'call_1', forged);
+    assert.equal(recorder.toolCallUpdate('call_1', 'completed', forged), 'unproven');
+    recorder.toolCall('@sidecar/complete_task', 'call_2', forged);
+    assert.equal(recorder.toolCallUpdate('call_2', 'completed', forged), 'unproven');
+    const result = await recorder.finish({ outcome: 'end_turn', endedBy: null, error: null }, paths.stderrLog);
+    assert.equal(result.completion, null);
+    assert.equal(
+      result.notice,
+      `Kiro asked permission for a sidecar tool in an identity layout this plugin does not read ` +
+        `(_meta.kiro.mcpTool.version 2); the permission policy decided it, and its send_message or ` +
+        `complete_task may not be recorded. Update the plugin. ${UNPROVEN_CALL_NOTICE}`,
+    );
+    assert.deepEqual(JSON.parse(await readFile(join(paths.turns, '1.json'), 'utf8')), result);
+  });
+
+  test('a shell-like call titled as an own tool sets no notice', async (t) => {
+    const { paths, recorder } = await openTurn(t);
+    const shell = { sessionUpdate: 'tool_call', status: 'pending', rawInput: { command: 'echo done' } };
+    recorder.toolCall('@sidecar/complete_task', 'call_1', shell);
+    assert.equal(recorder.toolCallUpdate('call_1', 'completed', shell), undefined);
+    const result = await recorder.finish({ outcome: 'end_turn', endedBy: null, error: null }, paths.stderrLog);
+    assert.equal(result.completion, null);
+    assert.equal(Object.hasOwn(result, 'notice'), false);
   });
 
   test('text on both sides of a tool call is split by one line break', async (t) => {
@@ -245,5 +299,11 @@ describe('parseTurnResult', () => {
     assert.throws(() => parseTurnResult({ ...current, messages: [1] }, LAUNCH_ID, 1), /messages/);
     assert.throws(() => parseTurnResult({ ...current, messagesDropped: -1 }, LAUNCH_ID, 1), /messagesDropped/);
     assert.throws(() => parseTurnResult({ ...current, completion: { result: 'Done.' } }, LAUNCH_ID, 1), /completion/);
+  });
+
+  test('a notice is kept when present and checked; a result without one reads with no notice key', () => {
+    assert.equal(parseTurnResult({ ...legacy, notice: 'Update the plugin.' }, LAUNCH_ID, 1).notice, 'Update the plugin.');
+    assert.equal(Object.hasOwn(parseTurnResult(legacy, LAUNCH_ID, 1), 'notice'), false);
+    assert.throws(() => parseTurnResult({ ...legacy, notice: 7 }, LAUNCH_ID, 1), /notice/);
   });
 });

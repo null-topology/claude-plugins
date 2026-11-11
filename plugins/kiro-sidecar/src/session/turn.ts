@@ -33,6 +33,11 @@ export interface TurnContext {
   readonly secrets: SecretSet;
 }
 
+/** The notice of a turn in which a current-form call of an own tool completed with no permission proof. */
+export const UNPROVEN_CALL_NOTICE =
+  `Kiro ran a call titled as a sidecar tool (send_message or complete_task) without a permission ` +
+  `request this plugin could verify, so the call was not recorded.`;
+
 /** Outcomes whose result carries `error` and `stderrTail`. */
 const FAILED_OUTCOMES: ReadonlySet<string> = new Set(['error', 'exited', 'lost']);
 
@@ -62,6 +67,11 @@ export class TurnRecorder {
   #toolSinceText = false;
   /** The credits of the turn's `turn_completion` updates so far; null before the first that has any. */
   #credits: number | null = null;
+  /**
+   * The turn's notices for the caller by kind, at most one of each, in the
+   * order they first happened (`noteUnreadToolEnvelope`, an unproven call).
+   */
+  readonly #notices = new Map<'envelope' | 'unproven', string>();
   /** The error that kept `turns/<n>.md` from being finalized, if any. */
   textError: unknown;
   /** The error that kept `turns/<n>.json` from being written or read, if any. */
@@ -132,9 +142,30 @@ export class TurnRecorder {
     }
   }
 
-  /** A `tool_call_update` of this turn: records a noted own-tool call once it completes. */
-  toolCallUpdate(toolCallId: string, status: string | undefined): SidecarCallRecord {
-    return this.#finishing ? undefined : this.#calls.update(toolCallId, status);
+  /**
+   * A `tool_call_update` of this turn, with its raw update: records a noted
+   * own-tool call once it completes. A current-form call that completes with
+   * no permission proof is not recorded, and the turn gets a notice.
+   */
+  toolCallUpdate(toolCallId: string, status: string | undefined, update?: unknown): SidecarCallRecord {
+    if (this.#finishing) {
+      return undefined;
+    }
+    const recorded = this.#calls.update(toolCallId, status, update);
+    if (recorded === 'unproven' && !this.#notices.has('unproven')) {
+      this.#notices.set('unproven', UNPROVEN_CALL_NOTICE);
+    }
+    return recorded;
+  }
+
+  /**
+   * A permission request of this turn that was taken as the plugin's own
+   * (`isOwnToolRequest`): the proof a current-form call with that id needs.
+   */
+  ownToolRequest(toolCallId: string, title: string | undefined): void {
+    if (!this.#finishing) {
+      this.#calls.prove(toolCallId, title);
+    }
   }
 
   /**
@@ -147,6 +178,23 @@ export class TurnRecorder {
       return;
     }
     this.#credits = (this.#credits ?? 0) + credits;
+  }
+
+  /**
+   * Notes that Kiro asked permission for a sidecar tool with a
+   * `_meta.kiro.mcpTool` envelope version the plugin does not read. The
+   * turn's result then carries one `notice`, however often it happened.
+   */
+  noteUnreadToolEnvelope(version: number | string): void {
+    if (this.#finishing || this.#notices.has('envelope')) {
+      return;
+    }
+    this.#notices.set(
+      'envelope',
+      `Kiro asked permission for a sidecar tool in an identity layout this plugin does not read ` +
+        `(_meta.kiro.mcpTool.version ${version}); the permission policy decided it, and its ` +
+        `send_message or complete_task may not be recorded. Update the plugin.`,
+    );
   }
 
   /** The running counters. `lastTool` is redacted. */
@@ -220,6 +268,7 @@ export class TurnRecorder {
       truncated,
       error,
       stderrTail: tail,
+      ...(this.#notices.size === 0 ? {} : { notice: [...this.#notices.values()].join(' ') }),
     };
     let stored = result;
     try {

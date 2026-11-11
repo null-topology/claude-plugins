@@ -39,7 +39,8 @@
  * `secret-model-value` (the token is offered as a model and is the current
  * one), `secret-model-offered` (the token is offered as a model) and
  * `secret-config-error` (every config change fails with an error holding the
- * token), `hang-initialize` and
+ * token), `hang-session-new`, `hang-session-load` and `hang-set-config`
+ * (the step never answers), `hang-initialize` and
  * `fail-session-new` (each writes a stderr line first), `auth-session-new`
  * and `interrupted-session-new` (`session/new` fails with ACP -32000, as
  * Kiro answers it signed out or after a dropped connection), `rpc-error`
@@ -281,6 +282,21 @@ interface OwnToolStep {
   toolId?: string;
   /** The permission request's `_meta.kiro.mcpTool.identity`; null sends no `_meta`. */
   identity?: { serverName: string; toolName: string } | null;
+  /** The permission request's `_meta.kiro.mcpTool.version`; 1 when not given. */
+  version?: number;
+  /**
+   * `legacy` (default): `rawInput` is `{tool_id, arguments}`, as kiro-cli 2.32.0
+   * sends it (recorded). `v3`: `rawInput` is the arguments themselves.
+   * SYNTHESIZED, not recorded: inferred from the kiro-cli 3.2.0 bundle,
+   * `handleToolAction` (@15382648) sends `rawInput: _Ne(...)` on the
+   * `tool_call` and on every `tool_call_update`, and `_Ne`/`S_l`
+   * (@14326397) unwrap `{tool_id, arguments}` to `arguments`.
+   */
+  form?: 'legacy' | 'v3';
+  /** With `ask`: the permission request comes before the `tool_call` frame instead of after it. */
+  askFirst?: boolean;
+  /** `v3` only: `end` sends `rawInput: {}` until the final update, which carries the arguments. */
+  valueAt?: 'every' | 'end';
 }
 
 /** `harness` `complete-then-*`: the result of the `complete_task` call. */
@@ -1033,18 +1049,18 @@ function scriptedAgent(): FakeAgent {
   /** One own-tool call; the permission answer as `<title>: <kind>`, or null when it did not ask. */
   const ownToolCall = async (sessionId: string, toolCallId: string, step: OwnToolStep): Promise<string | null> => {
     const title = step.title ?? `@sidecar/${step.tool}`;
-    const rawInput = { tool_id: step.toolId ?? `sidecar::${step.tool}`, arguments: step.args };
-    await update(sessionId, { sessionUpdate: 'tool_call', toolCallId, title, kind: 'other', status: 'pending', rawInput });
+    const finalInput = step.form === 'v3' ? step.args : { tool_id: step.toolId ?? `sidecar::${step.tool}`, arguments: step.args };
+    const rawInput = step.form === 'v3' && step.valueAt === 'end' ? {} : finalInput;
     let end = step.end;
     let answer: string | null = null;
-    if (step.ask === true) {
+    const ask = async (): Promise<void> => {
       // kiro-cli 2.32.0 attaches the host-resolved MCP identity of the tool to the request.
       const identity = step.identity === undefined ? { serverName: 'sidecar', toolName: step.tool } : step.identity;
       const response = await peer.request(methods.client.session.requestPermission, {
         sessionId,
         toolCall: { toolCallId, title, status: 'pending' },
         options: RECORDED_OPTIONS,
-        ...(identity === null ? {} : { _meta: { kiro: { mcpTool: { version: 1, identity } } } }),
+        ...(identity === null ? {} : { _meta: { kiro: { mcpTool: { version: step.version ?? 1, identity } } } }),
       });
       const outcome = response.outcome;
       const kind = outcome.outcome === 'selected'
@@ -1054,15 +1070,22 @@ function scriptedAgent(): FakeAgent {
       if (kind !== 'allow_once' && kind !== 'allow_always') {
         end = 'failed';
       }
+    };
+    if (step.ask === true && step.askFirst === true) {
+      await ask();
+    }
+    await update(sessionId, { sessionUpdate: 'tool_call', toolCallId, title, kind: 'other', status: 'pending', rawInput });
+    if (step.ask === true && step.askFirst !== true) {
+      await ask();
     }
     if (end === 'failed') {
-      await update(sessionId, { sessionUpdate: 'tool_call_update', toolCallId, title, status: 'failed', rawInput });
+      await update(sessionId, { sessionUpdate: 'tool_call_update', toolCallId, title, status: 'failed', rawInput: finalInput });
       return answer;
     }
     await update(sessionId, { sessionUpdate: 'tool_call_update', toolCallId, status: 'in_progress', rawInput });
     if (end === 'completed') {
       const rawOutput = { items: [{ Text: 'Delivered.' }] };
-      await update(sessionId, { sessionUpdate: 'tool_call_update', toolCallId, title, status: 'completed', rawInput, rawOutput });
+      await update(sessionId, { sessionUpdate: 'tool_call_update', toolCallId, title, status: 'completed', rawInput: finalInput, rawOutput });
     }
     return answer;
   };
@@ -1077,6 +1100,9 @@ function scriptedAgent(): FakeAgent {
     },
     authenticate: async () => ({}),
     newSession: async (params) => {
+      if (config.scenario === 'hang-session-new') {
+        return new Promise<NewSessionResponse>(() => {});
+      }
       if (config.scenario === 'fail-session-new') {
         process.stderr.write('fixture: session/new refused\n');
         throw RequestError.internalError({ reason: 'fixture session/new failure' });
@@ -1130,6 +1156,9 @@ function scriptedAgent(): FakeAgent {
       return result;
     },
     loadSession: async (params) => {
+      if (config.scenario === 'hang-session-load') {
+        return new Promise<never>(() => {});
+      }
       await reportSidecar(params.sessionId, params.mcpServers);
       await text(params.sessionId, 'Earlier question', 'user_message_chunk');
       await text(params.sessionId, 'Earlier answer');
@@ -1160,6 +1189,9 @@ function scriptedAgent(): FakeAgent {
       return {};
     },
     setSessionConfigOption: async (params) => {
+      if (config.scenario === 'hang-set-config') {
+        return new Promise<never>(() => {});
+      }
       if (config.scenario === 'secret-config-error') {
         throw RequestError.internalError({ reason: `refused the key ${process.env['KIRO_API_KEY'] ?? ''}` });
       }

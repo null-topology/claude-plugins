@@ -98,7 +98,10 @@ sequenceDiagram
 ```
 
 Every step of `start` runs within one deadline. A step that fails kills the process, marks the
-run `failed` and answers `E_STEP_<step>` with the tail of Kiro's stderr. The reply's last line,
+run `failed` and answers `E_STEP_<step>` with the tail of Kiro's stderr. A step whose ACP request
+(`initialize`, `session/new`, `session/load` or `session/set_config_option`) is still unanswered
+when the deadline passes is withdrawn with `$/cancel_request`, logged as `cancel_request` in
+`acp.jsonl`, and the start fails with the same timeout error as before. The reply's last line,
 `kiro-turn: <launchId>#<n>`, is how the waiter finds the turn; without it (the call moved to the
 background or failed) the waiter reads the call record `calls/<toolUseId>.json` instead, which the
 server writes before any slow step.
@@ -129,6 +132,27 @@ sequenceDiagram
 Kiro's messages do not interrupt the conversation one by one: they arrive together with the push
 of the turn that sent them. With `kiro_mode: plan` Kiro gets no tools from the plugin, so its
 questions and its plan are in the turn's text, and the session is ended with `stop`.
+
+The server recognises a call to `send_message` or `complete_task` by its title
+(`@sidecar/<tool>`) and records it once its update reports `completed`. The permission request
+for such a call is allowed whatever the policy, but only when its `_meta.kiro.mcpTool.identity`
+names the `sidecar` server and the tool. The call itself comes in one of two forms:
+
+- Kiro CLI 2.x (seen with 2.32.0 and 2.37.1): `rawInput` holds `tool_id: "sidecar::<tool>"` and
+  the arguments. Such a call is recorded as it is.
+- Kiro CLI 3.2.0: `rawInput` holds the arguments directly (`{"text": ...}` or `{"result": ...}`),
+  with no `tool_id`. The title and these arguments can come from the model for some tool kinds, so
+  such a call is recorded only when a permission request for the same tool call id was allowed as
+  the plugin's own, as above. The value is taken from whichever frame of the call carries it.
+
+A call in the 3.2.0 form that completes without that permission request is not recorded:
+`acp.jsonl` gets an `own_tool_unproven` line, and the turn result gets one `notice` saying Kiro ran a
+call titled as a sidecar tool without a permission request the plugin could verify. A call with that
+title whose `rawInput` holds no such string, such as a shell command, is ignored. When a permission request for a
+sidecar tool carries `_meta.kiro.mcpTool.version` other than 1, the server does not read its
+identity: the policy decides the request, `acp.jsonl` gets an `mcp_tool_version_unread` line, and
+the turn result (the push and `wait`) gets one `notice` line per turn saying the plugin needs an
+update. A request without `version` reads as version 1.
 
 ### Session states
 
@@ -281,7 +305,11 @@ flowchart LR
   and the reply says why and which image (id and creation date) it uses, and no pull of that
   reference is tried for an hour. A reference pinned by digest (`@sha256:`) is never pulled. The
   id of the image a run started from is in its `meta.json` (`imageId`). A custom image needs
-  `kiro-cli` on `PATH` and `/usr/bin/node` (Node.js 22 or later).
+  `kiro-cli` on `PATH` and `/usr/bin/node` (Node.js 22 or later). A custom image that exists only
+  locally (built with `docker build`, in no registry) needs
+  `KIRO_SIDECAR_DOCKER_IMAGE_REFRESH_HOURS=0`: otherwise every refresh tries to pull it, the pull
+  fails, and a docker start at least an hour after the last failure carries the failure notice in
+  its reply.
 
 ### Local mode
 
@@ -509,6 +537,13 @@ result and answer Kiro's questions.
   plugin layout answers `E_INVALID` that the skill was not found.
 - Every setting except `api_key`, `proxy` and `no_proxy` is set only through environment
   variables.
+- With Kiro CLI 3.2.0, a `send_message` or `complete_task` call is recorded only when Kiro asked
+  permission for it. When a Kiro policy rule (user, organization or preset) lets the tool run
+  without asking, the call is not recorded: the turn result has no message or completion from it,
+  the session does not end on that `complete_task`, and the turn carries a `notice`. Kiro CLI 2.x
+  calls are recorded either way.
+- The Kiro CLI 3.2.0 form was read from Kiro's code, not captured from a live session; the tests
+  use frames built to match it.
 
 ## Layout
 

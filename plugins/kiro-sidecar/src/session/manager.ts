@@ -116,7 +116,7 @@ import type { SweepReport } from './sweep.ts';
 import { decideOutcome, describeError } from './outcome.ts';
 import { writeProtocolSteering } from './protocol-steering.ts';
 import { copySkills, copySteering } from './run-copies.ts';
-import { isOwnToolRequest } from './sidecar-calls.ts';
+import { checkOwnToolRequest } from './sidecar-calls.ts';
 import { resolveSkills, skillSourcesFromEnv } from './skills.ts';
 import type { ResolvedSkill } from './skills.ts';
 import { resolveSteering } from './steering.ts';
@@ -1103,12 +1103,28 @@ export class SessionManager implements LiveRegistry {
     const client = new KiroAcpClient(handle, {
       // The plugin's own tools are allowed whatever the policy (4.5).
       decidePermission: (request) => {
-        if (!isOwnToolRequest(request)) {
+        const check = checkOwnToolRequest(request);
+        if (!check.own) {
+          if (check.unreadVersion !== undefined) {
+            // A newer identity layout: not taken as the plugin's own, the policy decides (4.5).
+            this.#logLine(
+              session,
+              {
+                event: 'mcp_tool_version_unread',
+                toolCallId: request.toolCall.toolCallId,
+                version: check.unreadVersion,
+              },
+              true,
+            );
+            session.turn?.noteUnreadToolEnvelope(check.unreadVersion);
+          }
           return permissions;
         }
         // Noted so that its answer is not counted (`#onEvent`).
         const id = request.toolCall.toolCallId;
         session.ownToolRequests.set(id, (session.ownToolRequests.get(id) ?? 0) + 1);
+        // The proof a Kiro CLI 3.x call of this tool needs to be recorded (4.11).
+        session.turn?.ownToolRequest(id, request.toolCall.title ?? undefined);
         return 'allow';
       },
       events: (event) => this.#onEvent(session, event),
@@ -1994,10 +2010,13 @@ export class SessionManager implements LiveRegistry {
         if (event.replay || recorder === null) {
           return;
         }
-        const recorded = recorder.toolCallUpdate(event.toolCallId, event.status);
+        const recorded = recorder.toolCallUpdate(event.toolCallId, event.status, event.update);
         if (recorded === 'ignored') {
           // Only the turn's first complete_task is its completion (4.11).
           this.#logLine(session, { event: 'complete_task_ignored', turn: recorder.turn }, true);
+        } else if (recorded === 'unproven') {
+          // Titled as an own tool, but no permission request proved it: not recorded; the turn has a notice.
+          this.#logLine(session, { event: 'own_tool_unproven', turn: recorder.turn, toolCallId: event.toolCallId }, true);
         } else if (recorded === 'completion') {
           // The call has completed, so Kiro has the tool's reply: the plugin ends the turn now.
           this.#track(this.#endCompletedTurn(session, recorder), `end of turn ${recorder.turn} of ${session.launchId}`);

@@ -66,6 +66,15 @@ export interface TurnResult {
   readonly error: string | null;
   /** The last lines of `stderr.log`, for `error`, `exited` and `lost`. */
   readonly stderrTail: string | null;
+  /**
+   * A short note for the caller about something the plugin could not read
+   * or verify in the turn: a sidecar tool permission request in an identity
+   * layout newer than it knows, or a call titled as a sidecar tool that ran
+   * without a permission request proving it. Each kind at most once, joined
+   * by a space in the order they happened. The one field that is omitted,
+   * not null, when absent, so results without a notice keep their exact shape.
+   */
+  readonly notice?: string;
 }
 
 /** Counters of the turn a live session is running now. */

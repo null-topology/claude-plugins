@@ -476,8 +476,10 @@ var RESULT_FIELDS = {
   textChars: isCount,
   truncated: isBoolean2,
   error: isNullable2(isString2),
-  stderrTail: isNullable2(isString2)
+  stderrTail: isNullable2(isString2),
+  notice: isString2
 };
+var OPTIONAL_FIELDS = /* @__PURE__ */ new Set(["notice"]);
 var LEGACY_DEFAULTS = {
   messages: [],
   messagesDropped: 0,
@@ -501,6 +503,9 @@ function parseTurnResult(value, launchId, turn) {
   const record = value;
   const copy = {};
   for (const [field, check] of Object.entries(RESULT_FIELDS)) {
+    if (OPTIONAL_FIELDS.has(field) && record[field] === void 0) {
+      continue;
+    }
     const fieldValue2 = Object.hasOwn(LEGACY_DEFAULTS, field) && !Object.hasOwn(record, field) ? LEGACY_DEFAULTS[field] : record[field];
     if (!check(fieldValue2)) {
       throw new Error(`bad field ${field}`);

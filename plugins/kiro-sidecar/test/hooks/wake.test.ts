@@ -167,6 +167,22 @@ describe('wake message layout', () => {
     );
   });
 
+  test('a turn notice is one header line, redacted, in both layouts; no notice adds no line', () => {
+    const notice = `Kiro used envelope version 2 (${TOKEN}).`;
+    const shown = `Notice: Kiro used envelope version 2 (${REDACTED}).`;
+    const without = wake().split('\n');
+    // The header ends with the context lines; the notice follows the last of them.
+    const headerEnd = without.findIndex((line) => line.startsWith('First prompt:')) + 1;
+    assert.ok(headerEnd > 0);
+    const plain = wake({ result: { notice } }).split('\n');
+    assert.deepEqual(plain, [...without.slice(0, headerEnd), shown, ...without.slice(headerEnd)]);
+    const done = { completion: { result: 'Done.', at: '2026-10-19T08:30:15Z' } };
+    const completedWithout = wake({ result: done }).split('\n');
+    const completed = wake({ result: { ...done, notice } }).split('\n');
+    assert.deepEqual(completed, [...completedWithout.slice(0, headerEnd), shown, ...completedWithout.slice(headerEnd)]);
+    assert.equal(without.some((line) => line.startsWith('Notice:')), false);
+  });
+
   test('a turn opened by a subagent names its agent type', () => {
     assert.equal(
       wake({ agentType: 'code-reviewer' }).split('\n')[1],

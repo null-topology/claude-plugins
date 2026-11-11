@@ -106,6 +106,8 @@ export type LifecycleEntry =
       readonly via: 'policy' | 'fallback' | 'withdrawn';
     }
   | { readonly event: 'cancel'; readonly sessionId: string; readonly openPermissions: number }
+  /** A start step's deadline passed: its request was withdrawn with `$/cancel_request`. */
+  | { readonly event: 'cancel_request'; readonly method: string }
   | { readonly event: 'closed'; readonly reason: CloseReason; readonly error: string }
   | {
       readonly event: 'exit';

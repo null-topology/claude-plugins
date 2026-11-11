@@ -2,12 +2,23 @@
  * Kiro's calls of the plugin's own tools in one turn (4.11).
  *
  * A `tool_call` whose title is exactly `@sidecar/send_message` or
- * `@sidecar/complete_task` and whose `rawInput.tool_id` is exactly
- * `sidecar::<that tool>` is noted with its id and its arguments. A later
- * `tool_call_update` of that id with status `completed` records it. A failed
- * call, a call still open when the turn ends, a non-string `text` or `result`
- * and an update of an id never noted (Kiro's "Tool Load" frames) record
- * nothing. A recorded text is redacted, then cut keeping its start.
+ * `@sidecar/complete_task` is noted with its id, in one of two forms:
+ * - legacy (Kiro CLI 2.x): `rawInput.tool_id` is exactly `sidecar::<that
+ *   tool>` and the value is `rawInput.arguments.text` or `.result`;
+ * - current (Kiro CLI 3.x): any other `rawInput`; the value is `rawInput.text`
+ *   or `.result`, taken from whichever frame of the call carries it (the
+ *   `tool_call` or a later `tool_call_update`).
+ *
+ * A later `tool_call_update` of that id with status `completed` records it.
+ * The title and the current form's `rawInput` come from the model's side for
+ * some tool kinds, so a call in the current form is recorded only when a
+ * permission request for the same id and the same tool was taken as the
+ * plugin's own (`isOwnToolRequest`) before it completed (`prove`). One that
+ * completes with a string value and no such proof is reported `unproven`
+ * and records nothing. A failed call, a call still open when the turn ends, a
+ * non-string `text` or `result` and an update of an id never noted (Kiro's
+ * "Tool Load" frames) record nothing. A recorded text is redacted, then cut
+ * keeping its start.
  *
  * Messages are kept in call order, the order of their `tool_call` frames,
  * whatever order the calls complete in; the bound keeps the latest calls.
@@ -50,14 +61,38 @@ export interface PermissionRequestIdentity {
  * never trusted (4.5).
  */
 export function isOwnToolRequest(request: PermissionRequestIdentity): boolean {
+  return checkOwnToolRequest(request).own;
+}
+
+/** The `_meta.kiro.mcpTool` envelope version this plugin reads; no `version` means this one. */
+export const MCP_TOOL_ENVELOPE_VERSION = 1;
+
+/**
+ * How a permission request was judged. `unreadVersion` is set when the
+ * title names an own tool but `_meta.kiro.mcpTool.version` is present and
+ * not {@link MCP_TOOL_ENVELOPE_VERSION}: the identity is in a layout this
+ * plugin does not know, so the request is not taken as its own and the
+ * permission policy decides it. It holds the version when it is a number,
+ * else its JSON type.
+ */
+export type OwnToolCheck =
+  | { readonly own: true }
+  | { readonly own: false; readonly unreadVersion?: number | string };
+
+/** {@link isOwnToolRequest}, telling also when the envelope version was not one it reads. */
+export function checkOwnToolRequest(request: PermissionRequestIdentity): OwnToolCheck {
   const tool = ownToolOf(request.toolCall.title ?? undefined);
   if (tool === undefined) {
-    return false;
+    return { own: false };
   }
   const kiro = isObject(request._meta) ? request._meta['kiro'] : undefined;
   const mcpTool = isObject(kiro) ? kiro['mcpTool'] : undefined;
+  if (isObject(mcpTool) && 'version' in mcpTool && mcpTool['version'] !== MCP_TOOL_ENVELOPE_VERSION) {
+    const version = mcpTool['version'];
+    return { own: false, unreadVersion: typeof version === 'number' ? version : version === null ? 'null' : typeof version };
+  }
   const identity = isObject(mcpTool) ? mcpTool['identity'] : undefined;
-  return isObject(identity) && identity['serverName'] === TOOL_SERVER_NAME && identity['toolName'] === tool;
+  return { own: isObject(identity) && identity['serverName'] === TOOL_SERVER_NAME && identity['toolName'] === tool };
 }
 
 export interface SidecarCallsSummary {
@@ -70,9 +105,32 @@ export interface SidecarCallsSummary {
 
 /**
  * What a `tool_call_update` did; `message` is a recorded message, kept or
- * counted as dropped, and `ignored` is a later `complete_task`.
+ * counted as dropped, `ignored` is a later `complete_task`, and `unproven` is
+ * a call in the current form that completed with no permission proof, so it
+ * was not recorded.
  */
-export type SidecarCallRecord = 'message' | 'completion' | 'ignored' | undefined;
+export type SidecarCallRecord = 'message' | 'completion' | 'ignored' | 'unproven' | undefined;
+
+/**
+ * The most permission proofs a turn keeps for calls that have not ended; the
+ * oldest is forgotten first. A proof is forgotten as soon as its call ends.
+ */
+export const OWN_TOOL_PROOFS_KEPT = 256;
+
+/** A noted call: `legacy` is the Kiro CLI 2.x `{tool_id, arguments}` form, `current` the 3.x form. */
+interface NotedCall {
+  readonly order: number;
+  readonly tool: OwnTool;
+  readonly form: 'legacy' | 'current';
+  value: unknown;
+}
+
+/** The value a current-form `rawInput` of `tool` carries, or undefined when it carries none. */
+function currentFormValue(update: Record<string, unknown>, tool: OwnTool): string | undefined {
+  const rawInput = update['rawInput'];
+  const value = isObject(rawInput) ? rawInput[OWN_TOOLS[tool]] : undefined;
+  return typeof value === 'string' ? value : undefined;
+}
 
 interface KeptMessage {
   /** The position of its `tool_call` among the noted calls of the turn. */
@@ -93,7 +151,9 @@ function isObject(value: unknown): value is Record<string, unknown> {
 export class SidecarCalls {
   readonly #secrets: Pick<SecretSet, 'redact'>;
   readonly #now: () => Date;
-  readonly #open = new Map<string, { readonly order: number; readonly tool: OwnTool; readonly value: unknown }>();
+  readonly #open = new Map<string, NotedCall>();
+  /** The own tool each permission request taken as the plugin's own was for, by tool call id (`prove`). */
+  readonly #proofs = new Map<string, OwnTool>();
   /** The kept messages, sorted by call order. */
   readonly #messages: KeptMessage[] = [];
   #noted = 0;
@@ -111,27 +171,81 @@ export class SidecarCalls {
   /** Notes a `tool_call` when it is a call of an own tool; `update` is the raw session update. */
   call(toolCallId: string, title: string | undefined, update: unknown): void {
     const tool = ownToolOf(title);
-    if (tool === undefined || !isObject(update) || !isObject(update['rawInput'])) {
+    if (tool === undefined || !isObject(update)) {
       return;
     }
     const rawInput = update['rawInput'];
-    if (rawInput['tool_id'] !== `${TOOL_SERVER_NAME}::${tool}`) {
+    if (isObject(rawInput) && rawInput['tool_id'] === `${TOOL_SERVER_NAME}::${tool}`) {
+      const args = rawInput['arguments'];
+      this.#noted += 1;
+      this.#open.set(toolCallId, {
+        order: this.#noted,
+        tool,
+        form: 'legacy',
+        value: isObject(args) ? args[OWN_TOOLS[tool]] : undefined,
+      });
       return;
     }
-    const args = rawInput['arguments'];
+    const known = this.#open.get(toolCallId);
+    if (known !== undefined) {
+      // A repeated frame of a noted call: a current-form one may bring the value.
+      if (known.form === 'current' && known.tool === tool) {
+        known.value = currentFormValue(update, tool) ?? known.value;
+      }
+      return;
+    }
     this.#noted += 1;
-    this.#open.set(toolCallId, { order: this.#noted, tool, value: isObject(args) ? args[OWN_TOOLS[tool]] : undefined });
+    this.#open.set(toolCallId, { order: this.#noted, tool, form: 'current', value: currentFormValue(update, tool) });
   }
 
-  /** Records a noted call on its `completed` update and forgets it on a `failed` one. */
-  update(toolCallId: string, status: string | undefined): SidecarCallRecord {
+  /**
+   * Notes that the permission request for `toolCallId`, titled `title`, was
+   * taken as the plugin's own (`isOwnToolRequest`): the proof a current-form
+   * call of that tool needs to be recorded. It is kept after the request is
+   * answered, until the call ends or the bound pushes it out.
+   */
+  prove(toolCallId: string, title: string | undefined): void {
+    const tool = ownToolOf(title);
+    if (tool === undefined) {
+      return;
+    }
+    this.#proofs.delete(toolCallId);
+    this.#proofs.set(toolCallId, tool);
+    for (const oldest of this.#proofs.keys()) {
+      if (this.#proofs.size <= OWN_TOOL_PROOFS_KEPT) {
+        break;
+      }
+      this.#proofs.delete(oldest);
+    }
+  }
+
+  /**
+   * Records a noted call on its `completed` update and forgets it on a
+   * `failed` one; `update` is the raw session update, whose `rawInput` may
+   * bring a current-form call's value.
+   */
+  update(toolCallId: string, status: string | undefined, update?: unknown): SidecarCallRecord {
     const noted = this.#open.get(toolCallId);
-    if (noted === undefined || (status !== 'completed' && status !== 'failed')) {
+    const ends = status === 'completed' || status === 'failed';
+    const proven = this.#proofs.get(toolCallId);
+    if (ends) {
+      this.#proofs.delete(toolCallId);
+    }
+    if (noted === undefined) {
+      return undefined;
+    }
+    if (noted.form === 'current' && isObject(update)) {
+      noted.value = currentFormValue(update, noted.tool) ?? noted.value;
+    }
+    if (!ends) {
       return undefined;
     }
     this.#open.delete(toolCallId);
     if (status === 'failed' || typeof noted.value !== 'string') {
       return undefined;
+    }
+    if (noted.form === 'current' && proven !== noted.tool) {
+      return 'unproven';
     }
     const text = this.#secrets.redact(noted.value);
     if (noted.tool === 'complete_task') {

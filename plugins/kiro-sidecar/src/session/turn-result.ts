@@ -57,7 +57,11 @@ const RESULT_FIELDS: { readonly [K in keyof TurnResult]-?: Check } = {
   truncated: isBoolean,
   error: isNullable(isString),
   stderrTail: isNullable(isString),
+  notice: isString,
 };
+
+/** Fields that may be missing: they stay missing in the copy. */
+const OPTIONAL_FIELDS: ReadonlySet<string> = new Set<keyof TurnResult>(['notice']);
 
 /** What a result written before these fields existed reads as (4.4). */
 const LEGACY_DEFAULTS: { readonly [K in keyof TurnResult]?: TurnResult[K] } = {
@@ -93,6 +97,9 @@ export function parseTurnResult(value: unknown, launchId: string, turn: number):
   const record = value as Record<string, unknown>;
   const copy: Record<string, unknown> = {};
   for (const [field, check] of Object.entries(RESULT_FIELDS)) {
+    if (OPTIONAL_FIELDS.has(field) && record[field] === undefined) {
+      continue;
+    }
     const fieldValue = Object.hasOwn(LEGACY_DEFAULTS, field) && !Object.hasOwn(record, field)
       ? LEGACY_DEFAULTS[field as keyof TurnResult]
       : record[field];
