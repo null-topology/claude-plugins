@@ -23769,17 +23769,17 @@ var tupleProcessor = (schema, ctx, _json, params) => {
     minItems--;
   }
   const maxItems = def.items.length;
-  const isClosed = !def.rest;
+  const isClosed2 = !def.rest;
   if (ctx.target === "draft-2020-12") {
     json2.prefixItems = prefixItems;
-    if (isClosed) {
+    if (isClosed2) {
       json2.items = false;
     } else if (rest) {
       json2.items = rest;
     }
     if (minItems > 0)
       json2.minItems = minItems;
-    if (isClosed)
+    if (isClosed2)
       json2.maxItems = maxItems;
   } else if (ctx.target === "openapi-3.0") {
     json2.items = {
@@ -23790,18 +23790,18 @@ var tupleProcessor = (schema, ctx, _json, params) => {
     }
     if (minItems > 0)
       json2.minItems = minItems;
-    if (isClosed)
+    if (isClosed2)
       json2.maxItems = maxItems;
   } else {
     json2.items = prefixItems;
-    if (isClosed) {
+    if (isClosed2) {
       json2.additionalItems = false;
     } else if (rest) {
       json2.additionalItems = rest;
     }
     if (minItems > 0)
       json2.minItems = minItems;
-    if (isClosed)
+    if (isClosed2)
       json2.maxItems = maxItems;
   }
   const { minimum, maximum } = aggregateChecks(schema);
@@ -30461,8 +30461,15 @@ var AcpClientError = class extends Error {
 };
 
 // src/session/outcome.ts
+var CANCELLED = Object.freeze({ kind: "stop", stopReason: "cancelled" });
 var PASSED_THROUGH = /* @__PURE__ */ new Set(["end_turn", "refusal", "max_tokens", "max_turn_requests"]);
-function decideOutcome(ending, requested) {
+function decideOutcome(ending, requested, completionEnd = null) {
+  if (completionEnd === "close" && isClosed(ending)) {
+    ending = CANCELLED;
+  }
+  if (completionEnd !== null && requested === null && ending.kind === "stop" && ending.stopReason === "cancelled") {
+    return { outcome: "end_turn", endedBy: null, error: null };
+  }
   if (ending.kind === "stop") {
     const { stopReason } = ending;
     if (PASSED_THROUGH.has(stopReason)) {
@@ -30487,6 +30494,9 @@ function decideOutcome(ending, requested) {
     return { outcome: "exited", endedBy: null, error: describeError(error62) };
   }
   return { outcome: "error", endedBy: null, error: describeError(error62) };
+}
+function isClosed(ending) {
+  return ending.kind === "failure" && ending.error instanceof AcpClientError && ending.error.code === "closed" && ending.error.closeReason !== "message_too_large";
 }
 function describeError(error62) {
   if (error62 instanceof Error) {
@@ -38693,8 +38703,8 @@ tool_load before the first call.
   turn ends. To ask, call send_message with the question and then end your turn; the answer comes
   as your next prompt. Never end a turn waiting for an answer without calling send_message.
 - complete_task {result}: call it once, when the whole task you were given is finished, with a
-  short result; put a long report in a file and name the file in the result. Then end your turn:
-  the session ends after it. Do not call send_message after complete_task.
+  short result; put a long report in a file and name the file in the result. The session ends
+  right after the call: put everything in the result, nothing written after it is delivered.
 `;
 async function writeProtocolSteering(dir) {
   const path = join7(dir, PROTOCOL_STEERING_FILE);
@@ -39589,6 +39599,10 @@ var TurnRecorder = class _TurnRecorder {
   startedAt;
   /** The end this plugin asked for while the turn ran (cancel, interrupt, stop). */
   requested = null;
+  /** How this plugin is ending the turn itself after its completion (4.11), or null. */
+  completionEnd = null;
+  /** Set once `session/prompt` has settled: the turn is ending. */
+  settled = false;
   #context;
   #writer;
   #accumulator;
@@ -40935,9 +40949,10 @@ ${tail}`}`;
     return turn;
   }
   async #endTurn(session, recorder, ending) {
+    recorder.settled = true;
     let completed = false;
     try {
-      const requested = decideOutcome(ending, recorder.requested);
+      const requested = decideOutcome(ending, recorder.requested, recorder.completionEnd);
       const decided = requested.endedBy === "interrupt" && recorder.completion !== null ? { ...requested, endedBy: null } : requested;
       const shutDown = decided.outcome === "exited" && this.#shutDownTurns.has(recorder);
       const decision = shutDown ? { ...decided, error: SHUTDOWN_ERROR } : decided;
@@ -40974,6 +40989,47 @@ ${tail}`}`;
         await this.#persist(session, { state: "idle" });
       }
     }
+  }
+  /**
+   * Ends a turn whose completion was just recorded, instead of waiting for
+   * Kiro to end it (4.11): what Kiro would write after the call is given up.
+   * Sends `session/cancel` once and takes no claim, so the turn is delivered
+   * as one Kiro ended by itself, by its push and by `wait`, and no mutex, so
+   * a `cancel`, `send {interrupt}` or `stop` of Claude's meanwhile goes on as
+   * for any turn holding a completion. When the turn has not ended within the
+   * cancel wait, the session is closed as `stop` closes it; the turn's end
+   * then closes the rest. A turn that is ending, a dead connection, a stop
+   * or the shutdown get nothing (more) from here.
+   */
+  async #endCompletedTurn(session, recorder) {
+    const { client: client2, sessionId, turnDone } = session;
+    if (client2 === void 0 || sessionId === null || turnDone === null || !this.#ownEndAllowed(session, recorder)) {
+      return;
+    }
+    recorder.completionEnd = "cancel";
+    this.#logLine(session, { event: "completion_cancel", turn: recorder.turn }, true);
+    try {
+      await client2.cancel(sessionId);
+    } catch (error62) {
+      if (isClosedError(error62)) {
+        return;
+      }
+      this.#onError(error62, `cancel after the completion of turn ${recorder.turn} of ${session.launchId}`);
+    }
+    if (await settlesWithin(turnDone, this.#controlLimits.cancelWaitMs) || !this.#ownEndAllowed(session, recorder)) {
+      return;
+    }
+    recorder.completionEnd = "close";
+    this.#logLine(session, { event: "completion_close", turn: recorder.turn }, true);
+    const report = { cleanedUp: [], failures: [] };
+    await this.#endProcess(session, report);
+    for (const failure2 of report.failures) {
+      this.#onError(new Error(failure2), `close of ${session.launchId}`);
+    }
+  }
+  /** Whether the plugin may still end `recorder`'s turn itself: it runs and nothing else is ending it. */
+  #ownEndAllowed(session, recorder) {
+    return session.turn === recorder && !recorder.settled && !session.stopping && this.#closing === void 0 && !this.#connectionDead(session);
   }
   #connectionDead(session) {
     return session.client?.closeError !== void 0 || session.handle?.exit !== void 0;
@@ -41058,11 +41114,19 @@ ${tail}`}`;
           session.turn?.toolCall(event.title, event.toolCallId, event.update);
         }
         return;
-      case "tool_call_update":
-        if (!event.replay && session.turn?.toolCallUpdate(event.toolCallId, event.status) === "ignored") {
-          this.#logLine(session, { event: "complete_task_ignored", turn: session.turn.turn }, true);
+      case "tool_call_update": {
+        const recorder = session.turn;
+        if (event.replay || recorder === null) {
+          return;
+        }
+        const recorded = recorder.toolCallUpdate(event.toolCallId, event.status);
+        if (recorded === "ignored") {
+          this.#logLine(session, { event: "complete_task_ignored", turn: recorder.turn }, true);
+        } else if (recorded === "completion") {
+          this.#track(this.#endCompletedTurn(session, recorder), `end of turn ${recorder.turn} of ${session.launchId}`);
         }
         return;
+      }
       case "permission_answered":
         if (this.#takeOwnToolRequest(session, event.toolCallId) || event.via === "withdrawn") {
           return;

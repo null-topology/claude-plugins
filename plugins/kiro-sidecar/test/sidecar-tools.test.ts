@@ -27,10 +27,10 @@ const SEND_MESSAGE_DESCRIPTION =
 const SEND_MESSAGE_REPLY =
   'Recorded; it is delivered when your turn ends. If you asked a question, end your turn now; otherwise go on.';
 const COMPLETE_TASK_DESCRIPTION =
-  'Declare the whole task finished and hand over its result. Call it once, at the very end, then end ' +
-  'your turn. The session ends after this turn. Keep the result short; put a long report in a file and ' +
-  'name the file.';
-const COMPLETE_TASK_REPLY = 'Recorded. End your turn now.';
+  'Declare the whole task finished and hand over its result. Call it once, at the very end: the session ' +
+  'ends right after the call and nothing you write after it is delivered, so put everything in the ' +
+  'result. Keep the result short; put a long report in a file and name the file.';
+const COMPLETE_TASK_REPLY = 'Recorded. The session ends now; nothing written after this is delivered.';
 
 function keptNote(chars: number): string {
   return ` Only the first ${chars} characters are kept; put the rest in a file.`;

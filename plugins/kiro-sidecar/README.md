@@ -119,6 +119,7 @@ sequenceDiagram
   C->>S: send {session, text}
   S->>K: session/prompt for the next turn
   K->>T: complete_task
+  S->>K: session/cancel once the call is recorded
   K-->>S: turn ends
   S->>K: session/close, run state completed
   W-->>C: wake: completed by Kiro, with the result
@@ -446,7 +447,9 @@ This is a sidecar event, not a hook failure.
 ```
 
 A turn in which Kiro called `complete_task` is woken with its result first and the final text
-after it. Every value is redacted against the session's secrets and cut to fixed bounds.
+after it. The server ends that turn as soon as the call is recorded, so the final text holds only
+what Kiro wrote before then, often nothing. Every value is redacted against the session's secrets
+and cut to fixed bounds.
 
 After a `/clear`, `/resume`, fork or compaction, the context hook adds one block to the new
 conversation when this Claude process still owns live sessions, so their results keep arriving

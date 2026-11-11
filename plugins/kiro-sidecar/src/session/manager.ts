@@ -17,6 +17,10 @@
  *   when a second prompt arrives.
  * - A turn ends when `session/prompt` settles or the process exits; its text
  *   is finalized to `turns/<n>.md` before `turns/<n>.json` is created.
+ * - Once a turn's completion is recorded, the plugin ends the turn itself
+ *   with `session/cancel`, without a claim; when Kiro has not ended it within
+ *   the cancel wait, the session is closed as `stop` closes it. The turn ends
+ *   `end_turn` as one Kiro ended by itself, and the session `completed`.
  * - A session whose process is gone becomes `exited`: its lock is released
  *   and it leaves the live registry.
  * - `send {interrupt}`, `cancel` and `stop` end a running turn. Each claims
@@ -1722,9 +1726,10 @@ export class SessionManager implements LiveRegistry {
   }
 
   async #endTurn(session: Session, recorder: TurnRecorder, ending: TurnEnding): Promise<void> {
+    recorder.settled = true;
     let completed = false;
     try {
-      const requested = decideOutcome(ending, recorder.requested);
+      const requested = decideOutcome(ending, recorder.requested, recorder.completionEnd);
       // A turn holding a completion that the cancel of `send {interrupt}` ended has no
       // `endedBy`: that call answers E_INVALID without the turn, so the push is its only
       // delivery (4.11).
@@ -1771,6 +1776,56 @@ export class SessionManager implements LiveRegistry {
         await this.#persist(session, { state: 'idle' });
       }
     }
+  }
+
+  /**
+   * Ends a turn whose completion was just recorded, instead of waiting for
+   * Kiro to end it (4.11): what Kiro would write after the call is given up.
+   * Sends `session/cancel` once and takes no claim, so the turn is delivered
+   * as one Kiro ended by itself, by its push and by `wait`, and no mutex, so
+   * a `cancel`, `send {interrupt}` or `stop` of Claude's meanwhile goes on as
+   * for any turn holding a completion. When the turn has not ended within the
+   * cancel wait, the session is closed as `stop` closes it; the turn's end
+   * then closes the rest. A turn that is ending, a dead connection, a stop
+   * or the shutdown get nothing (more) from here.
+   */
+  async #endCompletedTurn(session: Session, recorder: TurnRecorder): Promise<void> {
+    const { client, sessionId, turnDone } = session;
+    if (client === undefined || sessionId === null || turnDone === null || !this.#ownEndAllowed(session, recorder)) {
+      return;
+    }
+    recorder.completionEnd = 'cancel';
+    this.#logLine(session, { event: 'completion_cancel', turn: recorder.turn }, true);
+    try {
+      await client.cancel(sessionId);
+    } catch (error) {
+      // A closed connection ends the turn on its own.
+      if (isClosedError(error)) {
+        return;
+      }
+      this.#onError(error, `cancel after the completion of turn ${recorder.turn} of ${session.launchId}`);
+    }
+    if ((await settlesWithin(turnDone, this.#controlLimits.cancelWaitMs)) || !this.#ownEndAllowed(session, recorder)) {
+      return;
+    }
+    recorder.completionEnd = 'close';
+    this.#logLine(session, { event: 'completion_close', turn: recorder.turn }, true);
+    const report: StopReport = { cleanedUp: [], failures: [] };
+    await this.#endProcess(session, report);
+    for (const failure of report.failures) {
+      this.#onError(new Error(failure), `close of ${session.launchId}`);
+    }
+  }
+
+  /** Whether the plugin may still end `recorder`'s turn itself: it runs and nothing else is ending it. */
+  #ownEndAllowed(session: Session, recorder: TurnRecorder): boolean {
+    return (
+      session.turn === recorder &&
+      !recorder.settled &&
+      !session.stopping &&
+      this.#closing === undefined &&
+      !this.#connectionDead(session)
+    );
   }
 
   #connectionDead(session: Session): boolean {
@@ -1862,12 +1917,21 @@ export class SessionManager implements LiveRegistry {
           session.turn?.toolCall(event.title, event.toolCallId, event.update);
         }
         return;
-      case 'tool_call_update':
-        if (!event.replay && session.turn?.toolCallUpdate(event.toolCallId, event.status) === 'ignored') {
+      case 'tool_call_update': {
+        const recorder = session.turn;
+        if (event.replay || recorder === null) {
+          return;
+        }
+        const recorded = recorder.toolCallUpdate(event.toolCallId, event.status);
+        if (recorded === 'ignored') {
           // Only the turn's first complete_task is its completion (4.11).
-          this.#logLine(session, { event: 'complete_task_ignored', turn: session.turn.turn }, true);
+          this.#logLine(session, { event: 'complete_task_ignored', turn: recorder.turn }, true);
+        } else if (recorded === 'completion') {
+          // The call has completed, so Kiro has the tool's reply: the plugin ends the turn now.
+          this.#track(this.#endCompletedTurn(session, recorder), `end of turn ${recorder.turn} of ${session.launchId}`);
         }
         return;
+      }
       case 'permission_answered':
         // A request for the plugin's own tools is not one of the policy's answers.
         if (this.#takeOwnToolRequest(session, event.toolCallId) || event.via === 'withdrawn') {

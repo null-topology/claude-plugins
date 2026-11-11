@@ -25,6 +25,7 @@ import { HEAD_CUT_MARKER } from '../../src/text/preview.ts';
 import { REDACTED } from '../../src/text/redact.ts';
 import { RESULT_HEADER } from '../../src/text/result-block.ts';
 import type { TurnResult } from '../../src/session/types.ts';
+import { ignoreCancels } from '../helpers/fake-kiro.ts';
 import { deadIdentity } from '../helpers/processes.ts';
 import { writeRun, writeTurn } from '../session/helpers-runs.ts';
 import { PROCESS_TIMEOUT, TEST_TOKEN, waitFor } from '../session/manager-helpers.ts';
@@ -81,6 +82,10 @@ async function startFilled(
     failure?: { error: number; stderr: number; fill: string };
   },
 ): Promise<string> {
+  if (sizes.result !== undefined) {
+    // The plugin ends a turn holding a completion itself: Kiro leaves that cancel in flight, so the turn waits for the call.
+    await ignoreCancels(h.workspace, 'first');
+  }
   const prompt = `fill-then-hold ${JSON.stringify(sizes)}`;
   const launchId = replyJson(assertOk(await h.call('start', { dir: h.workspace.dir, prompt })))['launchId'] as string;
   const calls = sizes.messages.length + (sizes.result === undefined ? 0 : 1);

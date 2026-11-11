@@ -45,7 +45,10 @@
  * until interrupted; when stdin closes the process exits with code 1 only
  * after 5 s, as v3 does after a turn). Every prompt and cancel is also
  * appended to `fake-events.jsonl`, with whether a turn was running when the
- * prompt arrived.
+ * prompt arrived. In a working directory holding `fake-cancel`, the file's
+ * text changes what a `session/cancel` does: `ignore` (nothing, for every
+ * cancel) or `ignore-first` (nothing for the first cancel of a turn; a later
+ * one acts as usual).
  *
  * Scenario `harness` is driven by the prompt text, so one session can go
  * through several kinds of turn: `forge` sends two messages through the
@@ -61,6 +64,12 @@
  * `complete-then-wait <ms>` does the same but ends after <ms> ms whatever
  * comes, as Kiro ends its turn by itself after the call;
  * `complete-then-exit` exits with code 3 after the call;
+ * `complete-then-spin` writes a line of text, calls `complete_task`, then
+ * never ends the turn by itself: it sends a `session_info_update` every
+ * 50 ms until it is interrupted (`cancelled`), as Kiro was seen doing when
+ * the model answered the tool's reply with nothing;
+ * `own-tools-then-hold <ms> <json>` makes the calls of `own-tools`, then ends
+ * the turn after <ms> ms (`end_turn`) or when it is interrupted (`cancelled`);
  * `fill-then-hold <json>` sends messages, a completion and a final text of
  * the given sizes (of letters, or of a given text repeated), then holds the
  * turn until it is interrupted; any other
@@ -167,6 +176,12 @@ const LINGER_EXIT_MS = 5000;
 
 /** `harness` `own-tools <json>`: the prompt prefix, followed by a JSON array of steps. */
 const OWN_TOOLS_COMMAND = 'own-tools ';
+
+/** `harness` `own-tools-then-hold <ms> <json>`: the hold, then a JSON array of steps. */
+const OWN_TOOLS_HOLD = /^own-tools-then-hold ([0-9]+) (.*)$/s;
+
+/** `fake-cancel`: which cancels the scripted agent ignores; `honour` without the file. */
+const CANCEL_MODE = existsSync('fake-cancel') ? readFileSync('fake-cancel', 'utf8').trim() : 'honour';
 
 /** `harness` `fill-then-hold <json>`: the prompt prefix, followed by a JSON `FillSizes`. */
 const FILL_COMMAND = 'fill-then-hold ';
@@ -488,6 +503,8 @@ function restoreLate(
 interface Turn {
   readonly interrupt: () => void;
   readonly interrupted: Promise<'interrupted'>;
+  /** The `session/cancel` notifications this turn received. */
+  cancels: number;
 }
 
 function scriptedAgent(): Agent {
@@ -514,7 +531,7 @@ function scriptedAgent(): Agent {
     const interrupted = new Promise<'interrupted'>((resolve) => {
       interrupt = () => resolve('interrupted');
     });
-    const turn = { interrupt, interrupted };
+    const turn: Turn = { interrupt, interrupted, cancels: 0 };
     turns.set(sessionId, turn);
     return turn;
   };
@@ -723,6 +740,24 @@ function scriptedAgent(): Agent {
       }
       if (command.startsWith(OWN_TOOLS_COMMAND)) {
         return ownToolCalls(sessionId, JSON.parse(command.slice(OWN_TOOLS_COMMAND.length)) as OwnToolStep[]);
+      }
+      const ownHold = OWN_TOOLS_HOLD.exec(command);
+      if (ownHold !== null) {
+        for (const [index, step] of (JSON.parse(ownHold[2] ?? '[]') as OwnToolStep[]).entries()) {
+          await ownToolCall(sessionId, `tooluse_own_fixture${index}`, step);
+        }
+        const ended = await Promise.race([turn.interrupted, sleep(Number(ownHold[1])).then(() => 'held' as const)]);
+        await text(sessionId, `held: ${ended}`);
+        return { stopReason: ended === 'interrupted' ? 'cancelled' : 'end_turn' };
+      }
+      if (command === 'complete-then-spin') {
+        await text(sessionId, 'Reporting the result.\n');
+        await ownToolCall(sessionId, 'tooluse_complete_fixture1', { tool: 'complete_task', args: { result: COMPLETE_RESULT }, end: 'completed' });
+        // Kiro asks the model again and again; only the session info changes.
+        while ((await Promise.race([turn.interrupted, sleep(50).then(() => 'spin' as const)])) === 'spin') {
+          await update(sessionId, { sessionUpdate: 'session_info_update', updatedAt: new Date().toISOString() });
+        }
+        return { stopReason: 'cancelled' };
       }
       if (command.startsWith(FILL_COMMAND)) {
         const sizes = JSON.parse(command.slice(FILL_COMMAND.length)) as FillSizes;
@@ -948,6 +983,12 @@ function scriptedAgent(): Agent {
     cancel: async (params) => {
       appendFileSync('fake-events.jsonl', `${JSON.stringify({ event: 'cancel' })}\n`);
       const turn = turns.get(params.sessionId);
+      if (turn !== undefined) {
+        turn.cancels += 1;
+      }
+      if (CANCEL_MODE === 'ignore' || (CANCEL_MODE === 'ignore-first' && turn?.cancels === 1)) {
+        return;
+      }
       if (config.scenario === 'slow-cancel') {
         setTimeout(() => turn?.interrupt(), SLOW_CANCEL_MS);
         return;

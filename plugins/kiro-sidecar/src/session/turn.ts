@@ -17,7 +17,7 @@ import { stderrTail } from '../text/read.ts';
 import type { SecretSet } from '../text/redact.ts';
 import { isoSeconds } from './claims.ts';
 import { describeError } from './outcome.ts';
-import type { OutcomeDecision } from './outcome.ts';
+import type { CompletionEnd, OutcomeDecision } from './outcome.ts';
 import { SidecarCalls } from './sidecar-calls.ts';
 import type { SidecarCallRecord } from './sidecar-calls.ts';
 import { parseTurnResult } from './turn-result.ts';
@@ -45,6 +45,10 @@ export class TurnRecorder {
   readonly startedAt: Date;
   /** The end this plugin asked for while the turn ran (cancel, interrupt, stop). */
   requested: EndedBy | null = null;
+  /** How this plugin is ending the turn itself after its completion (4.11), or null. */
+  completionEnd: CompletionEnd | null = null;
+  /** Set once `session/prompt` has settled: the turn is ending. */
+  settled = false;
   readonly #context: TurnContext;
   readonly #writer: TurnTextWriter;
   readonly #accumulator: TurnAccumulator;

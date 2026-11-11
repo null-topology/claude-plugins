@@ -9,6 +9,11 @@
  *   the stream, so the session ends `exited` with an `error` outcome.
  * - The process exited or the stream closed during the turn: `exited`; after
  *   this plugin asked for a stop (stdin closed, then a kill): `stopped`.
+ * - A turn this plugin ends itself once its completion is recorded (4.11):
+ *   `cancelled` after that cancel, or the close that follows it when Kiro
+ *   did not end the turn, is `end_turn` with no `endedBy`, as a turn Kiro
+ *   ended by itself; a cancel, interrupt or stop that came meanwhile decides
+ *   as above.
  */
 
 import { AcpClientError } from '../acp/errors.ts';
@@ -18,6 +23,15 @@ import type { EndedBy, TurnOutcome } from './types.ts';
 export type TurnEnding =
   | { readonly kind: 'stop'; readonly stopReason: string }
   | { readonly kind: 'failure'; readonly error: unknown };
+
+/**
+ * How this plugin ends a turn whose completion is recorded: `cancel` once its
+ * `session/cancel` is sent, `close` once it closes the session because Kiro
+ * did not end the turn within the cancel wait.
+ */
+export type CompletionEnd = 'cancel' | 'close';
+
+const CANCELLED: TurnEnding = Object.freeze({ kind: 'stop', stopReason: 'cancelled' });
 
 export interface OutcomeDecision {
   readonly outcome: TurnOutcome;
@@ -30,9 +44,21 @@ const PASSED_THROUGH: ReadonlySet<string> = new Set(['end_turn', 'refusal', 'max
 
 /**
  * The outcome of a turn. `requested` is the end this plugin asked for (cancel,
- * interrupt or stop) while the turn ran, or null.
+ * interrupt or stop) while the turn ran, or null; `completionEnd` is how this
+ * plugin ended the turn after its completion, or null.
  */
-export function decideOutcome(ending: TurnEnding, requested: EndedBy | null): OutcomeDecision {
+export function decideOutcome(
+  ending: TurnEnding,
+  requested: EndedBy | null,
+  completionEnd: CompletionEnd | null = null,
+): OutcomeDecision {
+  // The connection the plugin's own close ended counts as that close's cancel.
+  if (completionEnd === 'close' && isClosed(ending)) {
+    ending = CANCELLED;
+  }
+  if (completionEnd !== null && requested === null && ending.kind === 'stop' && ending.stopReason === 'cancelled') {
+    return { outcome: 'end_turn', endedBy: null, error: null };
+  }
   if (ending.kind === 'stop') {
     const { stopReason } = ending;
     if (PASSED_THROUGH.has(stopReason)) {
@@ -58,6 +84,16 @@ export function decideOutcome(ending: TurnEnding, requested: EndedBy | null): Ou
     return { outcome: 'exited', endedBy: null, error: describeError(error) };
   }
   return { outcome: 'error', endedBy: null, error: describeError(error) };
+}
+
+/** The stream closed, other than for an oversized message. */
+function isClosed(ending: TurnEnding): boolean {
+  return (
+    ending.kind === 'failure' &&
+    ending.error instanceof AcpClientError &&
+    ending.error.code === 'closed' &&
+    ending.error.closeReason !== 'message_too_large'
+  );
 }
 
 /** A one-line description of an error, before redaction. */

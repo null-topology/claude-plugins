@@ -36608,8 +36608,8 @@ var SIDECAR_SERVER_NAME = "sidecar";
 var STDIN_END_EXIT_DEADLINE_MS = 500;
 var SEND_MESSAGE_DESCRIPTION = "Send a message to the Claude session that controls you: to report something or to ask a question. It is delivered when your turn ends. To ask, call it and then end your turn; the answer arrives as your next prompt. Do not call it after complete_task.";
 var SEND_MESSAGE_REPLY = "Recorded; it is delivered when your turn ends. If you asked a question, end your turn now; otherwise go on.";
-var COMPLETE_TASK_DESCRIPTION = "Declare the whole task finished and hand over its result. Call it once, at the very end, then end your turn. The session ends after this turn. Keep the result short; put a long report in a file and name the file.";
-var COMPLETE_TASK_REPLY = "Recorded. End your turn now.";
+var COMPLETE_TASK_DESCRIPTION = "Declare the whole task finished and hand over its result. Call it once, at the very end: the session ends right after the call and nothing you write after it is delivered, so put everything in the result. Keep the result short; put a long report in a file and name the file.";
+var COMPLETE_TASK_REPLY = "Recorded. The session ends now; nothing written after this is delivered.";
 function reply(base, text, keptChars) {
   const note = text.length > keptChars ? ` Only the first ${keptChars} characters are kept; put the rest in a file.` : "";
   return { content: [{ type: "text", text: `${base}${note}` }] };

@@ -19,6 +19,7 @@ import {
 import { messagesBlockChars } from '../../src/text/messages.ts';
 import { KIRO_OUTPUT_BEGIN, KIRO_OUTPUT_END } from '../../src/text/neutralise.ts';
 import { RESULT_HEADER, resultBlockChars } from '../../src/text/result-block.ts';
+import { ignoreCancels } from '../helpers/fake-kiro.ts';
 import { deadIdentity, startIdleProcess } from '../helpers/processes.ts';
 import { writeRun, writeTurn } from '../session/helpers-runs.ts';
 import { PROCESS_TIMEOUT, promptsReceived, waitFor } from '../session/manager-helpers.ts';
@@ -176,6 +177,10 @@ const LARGEST_TURN = { messages: LARGEST_MESSAGES, result: 25_000, final: 30_000
 
 /** Starts a `fill-then-hold` turn of these sizes and waits until the session has recorded all of it. */
 async function startFilled(h: Harness, sizes: { messages: number[]; result?: number; final: number }): Promise<string> {
+  if (sizes.result !== undefined) {
+    // The plugin ends a turn holding a completion itself: Kiro leaves that cancel in flight, so the turn waits for the call.
+    await ignoreCancels(h.workspace, 'first');
+  }
   const prompt = `fill-then-hold ${JSON.stringify(sizes)}`;
   const launchId = replyJson(assertOk(await h.call('start', { dir: h.workspace.dir, prompt })))['launchId'] as string;
   const calls = sizes.messages.length + (sizes.result === undefined ? 0 : 1);
@@ -391,6 +396,8 @@ describe('tools over MCP: a session that completed by itself', () => {
 
   test('cancel and stop of a turn holding a completion show its result after the JSON and before the text', PROCESS_TIMEOUT, async (t) => {
     const h = await harness(t, 'harness', SHORT_CONTROL);
+    // Kiro leaves the plugin's own cancel in flight: the turn is still running when the call comes.
+    await ignoreCancels(h.workspace, 'first');
     for (const tool of ['cancel', 'stop'] as const) {
       const launchId = replyJson(assertOk(await h.call('start', { dir: h.workspace.dir, prompt: 'complete-then-hold 60000' })))['launchId'] as string;
       await waitFor(async () => (await statusOf(h, launchId))['toolCalls'] === 1, 'the complete_task call');
@@ -406,6 +413,18 @@ describe('tools over MCP: a session that completed by itself', () => {
       }
       assert.equal(lastLine(reply), `kiro-result: ${launchId}#1`);
     }
+  });
+
+  test('wait reads a turn Kiro never ends after complete_task as completed by itself', PROCESS_TIMEOUT, async (t) => {
+    const h = await harness(t, 'harness', SHORT_CONTROL);
+    const launchId = replyJson(assertOk(await h.call('start', { dir: h.workspace.dir, prompt: 'complete-then-spin' })))['launchId'] as string;
+    const waited = assertOk(await h.call('wait', { session: launchId, timeout_s: 5 }));
+    const result = replyJson(waited);
+    assert.equal(result['outcome'], 'end_turn');
+    assert.equal(result['endedBy'] ?? null, null);
+    assert.equal(resultOf(waited), 'The task is done.');
+    assert.equal(lastLine(waited), `kiro-result: ${launchId}#1`);
+    await waitFor(async () => (await statusOf(h, launchId))['state'] === 'completed', 'the completed state');
   });
 
   test('a wait that arrives after the session is marked completed and before the result blocks for it', PROCESS_TIMEOUT, async (t) => {

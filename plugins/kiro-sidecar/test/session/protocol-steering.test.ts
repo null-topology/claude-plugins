@@ -25,8 +25,8 @@ const EXPECTED = [
   '  turn ends. To ask, call send_message with the question and then end your turn; the answer comes',
   '  as your next prompt. Never end a turn waiting for an answer without calling send_message.',
   '- complete_task {result}: call it once, when the whole task you were given is finished, with a',
-  '  short result; put a long report in a file and name the file in the result. Then end your turn:',
-  '  the session ends after it. Do not call send_message after complete_task.',
+  '  short result; put a long report in a file and name the file in the result. The session ends',
+  '  right after the call: put everything in the result, nothing written after it is delivered.',
   '',
 ].join('\n');
 

@@ -150,6 +150,15 @@ export async function createFakeWorkspace(scenario: string): Promise<FakeWorkspa
   };
 }
 
+/**
+ * Makes the fake started next in `workspace` ignore `session/cancel`: every
+ * one, or the first of each turn. With `first`, the cancel the plugin sends
+ * after a completion is left in flight, so a call of Claude's can race it.
+ */
+export async function ignoreCancels(workspace: FakeWorkspace, which: 'all' | 'first'): Promise<void> {
+  await writeFile(join(workspace.dir, 'fake-cancel'), which === 'all' ? 'ignore' : 'ignore-first');
+}
+
 async function writeLauncher(dir: string, scenario: string, oversizeBytes: number | undefined): Promise<string> {
   await writeFile(join(dir, 'fake-scenario.json'), JSON.stringify({ scenario, fixture: TURN_RECORDING, oversizeBytes }));
   const launcher = join(dir, 'kiro-cli.mjs');
