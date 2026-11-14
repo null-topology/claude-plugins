@@ -86,6 +86,7 @@ if [ "${fleet_guard_pid:-}" != "$$" ]; then
     if [ -n "$fleet_guard_worker" ]; then kill -TERM "$fleet_guard_worker" 2>/dev/null; fi
     if [ -n "$fleet_guard_dir" ]; then rm -rf "$fleet_guard_dir" 2>/dev/null; fi
     printf 'Refused: %s\n' "$1" >&2
+    fleet_guard_decided=1
     exit 2
   }
   fleet_guard_unexpected() {
@@ -99,6 +100,16 @@ if [ "${fleet_guard_pid:-}" != "$$" ]; then
   trap 'fleet_guard_unexpected "signal ALRM"' ALRM
   trap 'fleet_guard_unexpected "signal USR1"' USR1
   trap 'fleet_guard_unexpected "signal USR2"' USR2
+  # An end the supervisor did not decide (a step the shell treats as fatal, such as a closed stdin
+  # at the exec below in some shells, or a stray exit) refuses too: only exit 2 blocks a call.
+  # Subshells do not run this trap.
+  fleet_guard_decided=
+  fleet_guard_exit() {
+    fleet_guard_exit_status=$?
+    [ -n "$fleet_guard_decided" ] ||
+      fleet_guard_unexpected "the supervisor ended with status $fleet_guard_exit_status before its decision"
+  }
+  trap fleet_guard_exit EXIT
 
   fleet_guard_dir=$(mktemp -d "${TMPDIR:-/tmp}/fleet-guard.XXXXXX" 2>/dev/null) || fleet_guard_dir=
   if [ -z "$fleet_guard_dir" ] || [ ! -d "$fleet_guard_dir" ]; then
@@ -140,12 +151,14 @@ if [ "${fleet_guard_pid:-}" != "$$" ]; then
   cat "$fleet_guard_dir/err" >&2 2>/dev/null || fleet_guard_copied=
   if [ "$fleet_guard_status" -eq 2 ]; then
     rm -rf "$fleet_guard_dir" 2>/dev/null
+    fleet_guard_decided=1
     exit 2
   fi
   [ -n "$fleet_guard_copied" ] || fleet_guard_unexpected "its output could not be passed on"
   if [ "$fleet_guard_status" -eq 0 ]; then
     [ -f "$fleet_guard_dir/pass" ] || fleet_guard_unexpected "status 0 without the pass marker"
     rm -rf "$fleet_guard_dir" 2>/dev/null
+    fleet_guard_decided=1
     exit 0
   fi
   fleet_guard_unexpected "status $fleet_guard_status"
@@ -185,6 +198,12 @@ refuse() {
   # printf, not echo: some shells' echo expands backslashes, and a message may quote call input.
   printf 'Refused: %s\n' "$1" >&2
   exit 2
+}
+
+# unexpected_error <status>: a query that failed in a way no answer accounts for; the text is the
+# one an unexpected exit gets.
+unexpected_error() {
+  refuse "the fleet guard stopped on an unexpected error (status $1), so the call could not be checked; nothing is allowed until it is fixed."
 }
 
 # pass_call: the one way the worker lets a call through, or ends an event with nothing to refuse:
@@ -354,7 +373,7 @@ printf '%s' "$payload" | jq -e '[.agent_id, .agent_type, .tool_name, .hook_event
 case $fields_ok in
   0) ;;
   1) refuse "the hook payload's agent_id, agent_type, tool_name, hook_event_name and transcript_path must be strings or null, so the call cannot be checked." ;;
-  *) exit "$fields_ok" ;;
+  *) unexpected_error "$fields_ok" ;;
 esac
 
 # The one read of the rules file: a private copy, checked once, that every query reads. The copy is
@@ -430,7 +449,6 @@ mcp_error() {
 event=$(field '.hook_event_name')
 tool=$(field '.tool_name')
 agent_type=$(field '.agent_type')
-agent_id=$(field '.agent_id')
 
 # ---- a subagent starting ----------------------------------------------------
 
@@ -464,9 +482,17 @@ fi
 
 # ---- main session ---------------------------------------------------------
 
-# An empty agent_id is the main session, whatever agent_type says: a session
-# started with `claude --agent <name>` carries that type on its own calls.
-if [ -z "$agent_id" ]; then
+# An agent_id that is absent, null or empty is the main session, whatever agent_type says: a
+# session started with `claude --agent <name>` carries that type on its own calls. Any other string
+# is a subagent's. Decided on the parsed payload: a value taken through command substitution loses
+# its trailing line breaks (and, in some shells, its NUL bytes), so "\n" would read as empty.
+main_session=0
+printf '%s' "$payload" | jq -e '.agent_id == null or .agent_id == ""' >/dev/null 2>&1 || main_session=$?
+case $main_session in
+  0 | 1) ;;
+  *) unexpected_error "$main_session" ;;
+esac
+if [ "$main_session" -eq 0 ]; then
   [ "$tool" = Agent ] || pass_call
   require_rules
 
@@ -538,6 +564,15 @@ case $in_fleet in
   1) refuse "agent type '$agent_type' runs on '$caller', which is no longer in the fleet rules in force ($rules_path); nothing it calls is allowed until the rules name that model again." ;;
   *) fleet_unreadable fleet_ids ;;
 esac
+
+# MCP mode runs only for MCP tools: a fleet agent's call there that names no MCP tool is not
+# passed as some other call.
+if [ "$guard_mode" = mcp ]; then
+  case $tool in
+    mcp__*) ;;
+    *) mcp_error "invalid tool name" ;;
+  esac
+fi
 
 case "$tool" in
   Agent)

@@ -20,6 +20,11 @@ RULE_VALID = SOURCE + 'mcp_rule_valid "$@"'
 MATCH = SOURCE + 'mcp_match "$@"'
 LISTS = SOURCE + 'rc=0; mcp_lists "$@" || rc=$?; printf "%s\\n%s\\n" "$mcp_allow" "$mcp_deny"; exit $rc'
 PERMITS = SOURCE + 'rc=0; mcp_permits "$@" || rc=$?; printf "%s" "$mcp_verdict"; exit $rc'
+# The same with the two lists and the frames read from files ($2, $3, $4): input of the largest size
+# the evaluation takes does not fit in process arguments, though it fits in shell variables.
+PERMITS_FILES = SOURCE + ('allow=$(cat "$2") && deny=$(cat "$3") && frames=$(cat "$4") || exit 98; '
+                          'rc=0; mcp_permits "$1" "$allow" "$deny" "$frames" || rc=$?; '
+                          'printf "%s" "$mcp_verdict"; exit $rc')
 
 SELF = [{"self": True, "allow": [], "deny": []}]
 
@@ -95,6 +100,9 @@ def main():
         # anchoring: a piece must open and close the name, and the pieces may not overlap
         ("mcp__a", "mcp__a__b", 1), ("*a", "mcp__ab", 1), ("mcp__ab*ba", "mcp__aba", 1),
         ("mcp__ab*ba", "mcp__abba", 0), ("mcp__a*", "xmcp__a", 1),
+        # an inner piece is looked for only before the closing piece, never inside it
+        ("mcp__*ab*ab", "mcp__ab", 1), ("mcp__*ab*ab", "mcp__abab", 0), ("*b*b", "mcp__b", 1),
+        ("*b*b", "mcp__bb", 0),
     ]
     for rule, name, expected in table:
         code, out, err = call(MATCH, rule, name)
@@ -149,6 +157,13 @@ def main():
                 check("lists/%s: %s is a configuration error" % (key, label), code == 1, (code, out, err))
             code, out, err = lists({key: ["mcp__t%d" % i for i in range(256)]})
             check("lists/%s: 256 rules are accepted" % key, code == 0, (code, err))
+            try:
+                returned = json.loads(out[0 if key == "allowed_mcp_tools" else 1])
+            except ValueError:
+                returned = None
+            check("lists/%s: all 256 rules are returned, the 256th included" % key,
+                  returned == ["mcp__t%d" % i for i in range(256)],
+                  (code, len(returned) if isinstance(returned, list) else returned, err))
             code, out, err = lists({key: ["mcp__t%d" % i for i in range(257)]})
             check("lists/%s: 257 rules are refused" % key, code == 1, (code, err))
 
@@ -192,6 +207,44 @@ def main():
     check("permits/an invalid rule in a list cannot be evaluated", code == 2, (code, out, err))
     code, out, err = call(PERMITS, "{not json", "[]", "[]", json.dumps(SELF))
     check("permits/input that is not JSON cannot be evaluated", code == 2, (code, out, err))
+
+    # The largest input the evaluation takes: 32 frames, each with two lists of 256 rules of 256
+    # bytes, beside global lists of the same size, about 4 MB in all. Handed to jq as process
+    # arguments it would end every call in "could not be evaluated".
+    def full_list(tag, last=None):
+        rules = ["mcp__%s%03d" % (tag, i) + "x" * (248 - len(tag)) for i in range(256)]
+        if last is not None:
+            rules[-1] = last
+        return rules
+
+    every = "mcp__" + "*" * 251
+    mail = "mcp__mail__" + "*" * 245
+    big_frames = [{"self": True, "allow": full_list("sa", every), "deny": full_list("sd")}] + [
+        {"id": "agent%02d" % i, "allow": full_list("a%02d" % i, every), "deny": full_list("d%02d" % i)}
+        for i in range(1, 32)]
+    sizes_ok = (len(big_frames) == 32 and all(len(f[k]) == 256 and all(len(r) == 256 for r in f[k])
+                                              for f in big_frames for k in ("allow", "deny"))
+                and len(every) == 256 and len(mail) == 256)
+    check("permits/fixture: 32 frames of two lists of 256 rules of 256 bytes", sizes_ok)
+    with tempfile.TemporaryDirectory(prefix="fleet-mcp-policy-test-") as temporary:
+        def permits_files(name, allow, deny, frames):
+            paths = []
+            for label, value in (("allow", allow), ("deny", deny), ("frames", frames)):
+                path = Path(temporary) / label
+                path.write_text(json.dumps(value))
+                paths.append(path)
+            return call(PERMITS_FILES, json.dumps(name), *paths)
+
+        started = time.monotonic()
+        code, out, err = permits_files("mcp__mail__read", full_list("ga", every), full_list("gd"), big_frames)
+        elapsed = time.monotonic() - started
+        check("permits/the largest input: permitted when every frame permits it",
+              code == 0 and out == "", (code, out[:200], err[:200], round(elapsed, 2)))
+        last_denies = big_frames[:-1] + [dict(big_frames[-1], deny=full_list("d31", mail))]
+        code, out, err = permits_files("mcp__mail__read", full_list("ga", every), full_list("gd"), last_denies)
+        check("permits/the largest input: the 256th deny rule of the 32nd frame refuses",
+              code == 1 and out == 'FLEET_MCP_DENIED: "mcp__mail__read": the deny rule %s of the brief of agent '
+                                   'agent31 above matches it.' % json.dumps(mail), (code, out[:300], err[:200]))
 
     print("Policy checks: %d; failures: %d" % (count, len(errors)))
     for error in errors:

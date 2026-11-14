@@ -22,7 +22,7 @@
 #   mcp_rule_valid <rule>                       0 valid, 1 invalid
 #   mcp_match <rule> <name>                     0 match, 1 no match, 2 error (an invalid rule or name)
 #   mcp_lists <rules-file>                      0 sets mcp_allow and mcp_deny (JSON arrays), 1 invalid
-#   mcp_permits <name> <allow> <deny> <frames>  JSON arguments; 0 permitted, 1 refused (the refusal
+#   mcp_permits <name> <allow> <deny> <frames>  JSON texts; 0 permitted, 1 refused (the refusal
 #                                               in mcp_verdict), 3 an invalid tool name
 
 mcp_nl='
@@ -134,11 +134,17 @@ mcp_lists() {
 }
 
 # mcp_permits <name> <allow> <deny> <frames>: every argument is JSON text; the frames list holds
-# the caller's own frame and those of the fleet agents above it.
+# the caller's own frame and those of the fleet agents above it. The four texts reach jq on stdin,
+# joined by U+0001, which JSON text cannot hold unescaped: at their largest (32 frames of two lists
+# of 256 rules of 256 bytes) they are past the size a process argument may have.
 mcp_permits() {
   mcp_verdict=
-  mcp_out=$(jq -nr --argjson name "$1" --argjson allow "$2" --argjson deny "$3" --argjson frames "$4" \
-    "$mcp_defs"'mcp_verdict($name; $allow; $deny; $frames)' 2>/dev/null) || return 2
+  mcp_out=$(printf '%s\001%s\001%s\001%s' "$1" "$2" "$3" "$4" | jq -Rrs "$mcp_defs"'
+    split("\u0001") as $t
+    | if ($t | length) != 4 then error("four JSON texts were expected") else . end
+    | ($t[0] | fromjson) as $name | ($t[1] | fromjson) as $allow
+    | ($t[2] | fromjson) as $deny | ($t[3] | fromjson) as $frames
+    | mcp_verdict($name; $allow; $deny; $frames)' 2>/dev/null) || return 2
   case $mcp_out in
     pass) return 0 ;;
     badname) return 3 ;;

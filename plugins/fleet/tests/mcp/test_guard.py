@@ -161,6 +161,27 @@ def main():
             check("worker/%s in the worker refuses a call that would pass" % label, rc == 2 and not out,
                   (rc, out, err))
 
+        # ---- an end of the supervisor it did not decide --------------------------------------
+        unexpected = "Refused: the fleet guard stopped on an unexpected error"
+        for mode in ("mcp", None):
+            started = time.monotonic()
+            try:
+                # The hook's stdin closed: some shells end at the supervisor's first use of it.
+                result = subprocess.run(shell + [str(guard_path), str(plugin), ""] + ([mode] if mode else []),
+                                        stdin=subprocess.DEVNULL, preexec_fn=lambda: os.close(0),
+                                        capture_output=True, text=True, timeout=20, env=env)
+                outcome = (result.returncode, result.stdout, result.stderr, time.monotonic() - started)
+            except subprocess.TimeoutExpired:
+                outcome = (None, "", "timed out", time.monotonic() - started)
+            expect("supervisor/a closed stdin refuses (%s)" % (mode or "default mode"), outcome, 2, unexpected)
+        supervisor_anchor = "\n  exec 3<&0\n"
+        for label, line in (("a failed ${x:?}", '  : "${fleet_test_never_set:?}"'), ("an exit 1", "  exit 1")):
+            patched = plugin / "scripts" / ("patched-%d.sh" % count)
+            patched.write_text(source.replace(supervisor_anchor, "\n" + line + supervisor_anchor, 1))
+            check("supervisor/fixture: %s is placed in the supervisor" % label, source.count(supervisor_anchor) == 1)
+            expect("supervisor/%s in the supervisor refuses a call that would pass" % label,
+                   guard(call(tool="Bash"), script=patched, mode=None), 2, unexpected)
+
         # ---- signals to the supervisor -------------------------------------------------------
         ready_env = stub("ready-jq", ': > "$FLEET_TEST_READY"\nsleep 10')
         for signum in (signal.SIGTERM, signal.SIGUSR1):
@@ -209,6 +230,22 @@ def main():
         expect("main/a payload holding the text \"agent_id\" goes on to the checks: refused without jq",
                guard(holding, extra_env=nojq_env), 2, "needs jq")
         expect("main/an agent_id of null is the main session", guard(call(caller=FLEET_CALLER, agent_id=None)), 0)
+        # Only an absent, null or empty agent_id is the main session; any other string is a
+        # subagent's, even one that would read as empty after a shell's command substitution.
+        deny_all = dict(shipped, disallowed_mcp_tools=["*"])
+        expect("main/an empty agent_id is the main session",
+               guard(call(caller=FLEET_CALLER, agent_id=""), rules=deny_all), 0)
+        for label, value in (("a line break", "\n"), ("two line breaks", "\n\n"), ("a NUL", "\u0000"),
+                             ("a space", " ")):
+            expect("caller/an agent_id of %s is a subagent's: its MCP call meets the rules" % label,
+                   guard(call(caller=FLEET_CALLER, agent_id=value), rules=deny_all), 2,
+                   'FLEET_MCP_DENIED: "mcp__gateway__vault__search": the global rule "*" denies it.')
+        expect("caller/an agent_id of a line break is a subagent's: its Workflow call is refused",
+               guard(call(tool="Workflow", caller=FLEET_CALLER, agent_id="\n"), mode=None), 2, "workflows")
+        main_env = stub("main-jq", "case \"$*\" in *'.agent_id == null or'*) exit 5 ;; esac")
+        expect("main/a failed main-session query refuses even the main session's call",
+               guard(call(tool="Bash"), extra_env=main_env, mode=None), 2,
+               "the fleet guard stopped on an unexpected error (status 5), so the call could not be checked")
         expect("builtin/an MCP call passes with the default rules", guard(call(caller="Explore")), 0)
         expect("builtin/an MCP call is refused without jq", guard(call(caller="Explore"), extra_env=nojq_env), 2,
                "needs jq")
@@ -246,6 +283,14 @@ def main():
         payload = call(tool="Bash", caller="Explore")
         payload["transcript_path"] = None
         expect("types/null fields pass", guard(payload, mode=None), 0)
+        # A field-type query that fails in any other way is an unexpected error, never a silent exit.
+        for status in (2, 3):
+            field_env = stub("fields-jq-%d" % status,
+                             "case \"$*\" in *'type == \"string\" or type == \"null\"'*) exit %d ;; esac" % status)
+            expect("types/a field-type query ending in status %d is an unexpected error" % status,
+                   guard(call(tool="Bash", caller="Explore"), extra_env=field_env, mode=None), 2,
+                   "Refused: the fleet guard stopped on an unexpected error (status %d), so the call could not be "
+                   "checked; nothing is allowed until it is fixed." % status)
 
         # ---- a fleet agent's MCP call against the global lists -------------------------------
         expect("fleet/both lists empty (the shipped rules): passes", guard(call(caller=FLEET_CALLER)), 0)
@@ -281,6 +326,42 @@ def main():
                    "FLEET_MCP_ERROR: invalid MCP rules in %s\n" % rules_file)
         expect("fleet/a tool name outside printable ASCII is refused",
                guard(call(tool="mcp__gateway__é", caller=FLEET_CALLER)), 2, "FLEET_MCP_ERROR: invalid tool name")
+        # In MCP mode a fleet agent's call names an MCP tool; any other name is invalid, not passed.
+        for label, value in (("absent", None), ("null", "null"), ("empty", ""), ("Bash", "Bash"), ("Agent", "Agent"),
+                             ("without the mcp__ prefix", "gateway__vault__search")):
+            payload = call(caller=FLEET_CALLER)
+            if value is None:
+                del payload["tool_name"]
+            else:
+                payload["tool_name"] = None if value == "null" else value
+            expect("fleet/MCP mode: a tool_name %s is an invalid tool name" % label, guard(payload), 2,
+                   "FLEET_MCP_ERROR: invalid tool name")
+            expect("fleet/MCP mode: a tool_name %s is an invalid tool name under a deny-all list" % label,
+                   guard(payload, rules=deny_all), 2, "FLEET_MCP_ERROR: invalid tool name")
+        payload = call(caller=FLEET_CALLER)
+        del payload["tool_name"]
+        expect("fleet/outside MCP mode a call without a tool_name still passes", guard(payload, mode=None), 0)
+        payload = call(caller="Explore")
+        del payload["tool_name"]
+        expect("builtin/MCP mode: a call without a tool_name still passes", guard(payload), 0)
+        # A query of the policy that fails cannot be read as a permit: the list read, then the
+        # evaluation alone.
+        lists_env = stub("lists-jq", "case \"$*\" in *'(.allowed_mcp_tools, .disallowed_mcp_tools)'*) exit 5 ;; esac")
+        expect("fleet/a failed read of the MCP lists: the policy could not be evaluated",
+               guard(call(caller=FLEET_CALLER), extra_env=lists_env), 2,
+               "FLEET_MCP_ERROR: the policy could not be evaluated")
+        evaluation_env = stub("evaluation-jq", "case \"$*\" in *'split(\"\\u0001\")'*) exit 5 ;; esac")
+        expect("fleet/a failed evaluation: the policy could not be evaluated",
+               guard(call(caller=FLEET_CALLER), extra_env=evaluation_env), 2,
+               "FLEET_MCP_ERROR: the policy could not be evaluated")
+        # The 256th rule of a list is kept and enforced.
+        filler = ["mcp__filler__%d" % i for i in range(255)]
+        expect("fleet/a 256th global deny rule refuses",
+               guard(call(caller=FLEET_CALLER), rules=dict(shipped, disallowed_mcp_tools=filler + ["mcp__gateway__*"])),
+               2, 'FLEET_MCP_DENIED: "mcp__gateway__vault__search": the global rule "mcp__gateway__*" denies it.')
+        expect("fleet/a 256th global allow rule permits",
+               guard(call(caller=FLEET_CALLER), rules=dict(shipped, allowed_mcp_tools=filler + ["mcp__gateway__*"])),
+               0)
         # The fleet is every model the rules mention, as a caller or as a target.
         without_opus = {k: {t: v for t, v in row.items() if t != "claude-opus-5-5"}
                         for k, row in shipped["rules"].items() if k != "claude-opus-5-5"}
