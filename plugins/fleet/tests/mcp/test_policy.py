@@ -25,6 +25,18 @@ PERMITS = SOURCE + 'rc=0; mcp_permits "$@" || rc=$?; printf "%s" "$mcp_verdict";
 PERMITS_FILES = SOURCE + ('allow=$(cat "$2") && deny=$(cat "$3") && frames=$(cat "$4") || exit 98; '
                           'rc=0; mcp_permits "$1" "$allow" "$deny" "$frames" || rc=$?; '
                           'printf "%s" "$mcp_verdict"; exit $rc')
+# The block reader on one brief, as JSON text ($1); prints what it sets, one value a line.
+BLOCK = SOURCE + ('rc=0; mcp_block "$1" || rc=$?; '
+                  'allow=$(printf "%s" "$mcp_block_lists" | jq -c .allow) || exit 98; '
+                  'deny=$(printf "%s" "$mcp_block_lists" | jq -c .deny) || exit 98; '
+                  'printf "%s\\n%s\\n%s\\n%s\\n%s" "$mcp_block_marked" "$mcp_block_found" "$allow" '
+                  '"$deny" "$mcp_block_error"; exit $rc')
+BODY = "## Objective\nSynthetic test content.\n"
+BOUNDS = "MCP policy: more than 256 rules, or a rule longer than 256 bytes."
+
+
+def line_error(number, reason):
+    return "MCP policy: line %d: %s." % (number, reason)
 
 SELF = [{"self": True, "allow": [], "deny": []}]
 
@@ -258,6 +270,208 @@ def main():
         check("permits/the largest input: the 256th deny rule of the 32nd frame refuses",
               code == 1 and out == 'FLEET_MCP_DENIED: "mcp__mail__read": the deny rule %s of the brief of agent '
                                    'agent31 above matches it.' % json.dumps(mail), (code, out[:300], err[:200]))
+
+    # ---- the per-spawn block ----------------------------------------------------------------
+    def block(brief):
+        """(status, marked, found, allow, deny, error) of mcp_block on one brief."""
+        code, out, err = call(BLOCK, json.dumps(brief))
+        values = out.split("\n")
+        values += [""] * (5 - len(values))
+        return (code,) + tuple(values[:5]) + (err,)
+
+    def items(key, rules):
+        return key + ":\n" + "".join('  - %s\n' % json.dumps(r) for r in rules)
+
+    valid_blocks = [
+        ("allow and deny", "---\n" + items("allow", ["mcp__mail__read"]) + items("deny", ["*__search"]) + "---\n" + BODY,
+         ["mcp__mail__read"], ["*__search"]),
+        ("deny before allow", "---\n" + items("deny", ["*__search"]) + items("allow", ["mcp__mail__read"]) + "---\n"
+         + BODY, ["mcp__mail__read"], ["*__search"]),
+        ("allow alone", "---\n" + items("allow", ["mcp__a", "mcp__b*"]) + "---\n" + BODY, ["mcp__a", "mcp__b*"], []),
+        ("deny alone", "---\n" + items("deny", ["*"]) + "---\n" + BODY, [], ["*"]),
+        ("CRLF endings", ("---\n" + items("allow", ["mcp__a"]) + items("deny", ["mcp__b"]) + "---\n" + BODY)
+         .replace("\n", "\r\n"), ["mcp__a"], ["mcp__b"]),
+        ("mixed endings", "---\r\nallow:\n  - \"mcp__a\"\r\ndeny:\r\n  - \"mcp__b\"\n---\r\n" + BODY,
+         ["mcp__a"], ["mcp__b"]),
+        ("a JSON escape in a rule", '---\nallow:\n  - "mcp\\u005f_a"\n---\n' + BODY, ["mcp__a"], []),
+        ("256 rules of 256 bytes in each list",
+         "---\n" + items("allow", ["mcp__a%03d" % i + "x" * 247 for i in range(256)])
+         + items("deny", ["mcp__d%03d" % i + "x" * 247 for i in range(256)]) + "---\n" + BODY,
+         ["mcp__a%03d" % i + "x" * 247 for i in range(256)], ["mcp__d%03d" % i + "x" * 247 for i in range(256)]),
+        ("a block and nothing after it", "---\n" + items("allow", ["mcp__a"]) + "---\n", ["mcp__a"], []),
+    ]
+    for label, brief, allow, deny in valid_blocks:
+        code, marked, found, out_allow, out_deny, error, err = block(brief)
+        try:
+            lists_read = (json.loads(out_allow), json.loads(out_deny))
+        except ValueError:
+            lists_read = None
+        check("block/valid: %s" % label,
+              code == 0 and marked == "1" and found == "1" and lists_read == (allow, deny) and error == "",
+              (code, marked, found, out_allow[:80], out_deny[:80], error, err))
+
+    no_blocks = [
+        ("a brief without a block", BODY),
+        ("a thematic break inside a section", BODY + "---\nallow is a word here\n"),
+        ("block-like lines after the first heading", BODY + "---\n" + items("allow", ["mcp__a"]) + "---\n"),
+        ("allow: before the first heading without a --- line", "allow:\n" + BODY),
+        ("--- before the first heading followed by other text", "Intro\n---\nNotes\n" + BODY),
+        ("an empty brief", ""),
+    ]
+    for label, brief in no_blocks:
+        code, marked, found, out_allow, out_deny, error, err = block(brief)
+        check("block/none: %s" % label,
+              code == 0 and marked == "" and found == "" and out_allow == "[]" and out_deny == "[]" and error == "",
+              (code, marked, found, out_allow, out_deny, error, err))
+
+    rules_257 = ["mcp__a%03d" % i for i in range(257)]
+    invalid_blocks = [
+        # step 2: a block that does not start at line 1
+        ("a leading blank line", "\n---\n" + items("allow", ["mcp__a"]) + "---\n" + BODY,
+         line_error(2, "the policy block must start at line 1"), ""),
+        ("--- with a trailing blank", "--- \n" + items("allow", ["mcp__a"]) + "---\n" + BODY,
+         line_error(1, "the policy block must start at line 1"), "1"),
+        ("a byte-order mark", "﻿---\n" + items("allow", ["mcp__a"]) + "---\n" + BODY,
+         line_error(1, "the policy block must start at line 1"), "1"),
+        ("a block after other text", "Intro\n---\n" + items("deny", ["*"]) + "---\n" + BODY,
+         line_error(2, "the policy block must start at line 1"), ""),
+        ("an indented block", "  ---\n  allow:\n    - \"mcp__a\"\n  ---\n" + BODY,
+         line_error(1, "the policy block must start at line 1"), "1"),
+        ("a block with a lone CR at line 1", "---\r\r\n" + items("allow", ["mcp__a"]) + "---\n" + BODY,
+         line_error(1, "the policy block must start at line 1"), "1"),
+        # step 1: line 1 is ---, and the grammar applies
+        ("--- opening other front matter", "---\ntitle: x\n---\n" + BODY, line_error(2, "expected allow or deny"), ""),
+        ("a thematic break at line 1", "---\n" + BODY, line_error(2, "expected allow or deny"), ""),
+        ("no key at all", "---\n---\n" + BODY, line_error(2, "expected allow or deny"), ""),
+        ("an inline list", '---\nallow: ["mcp__a"]\n---\n' + BODY, line_error(2, "expected allow or deny"), "1"),
+        ("a key with a trailing blank", "---\nallow: \n  - \"mcp__a\"\n---\n" + BODY,
+         line_error(2, "expected allow or deny"), "1"),
+        ("an item before any key", '---\n  - "mcp__a"\n---\n' + BODY, line_error(2, "expected allow or deny"), ""),
+        ("another key after a list", "---\n" + items("allow", ["mcp__a"]) + "other:\n---\n" + BODY,
+         line_error(4, "expected allow or deny"), "1"),
+        ("a comment in the block", "---\n" + items("allow", ["mcp__a"]) + "# note\n---\n" + BODY,
+         line_error(4, "expected allow or deny"), "1"),
+        ("a blank line in the block", "---\n" + items("allow", ["mcp__a"]) + "\n---\n" + BODY,
+         line_error(4, "expected allow or deny"), "1"),
+        ("a duplicate key", "---\n" + items("allow", ["mcp__a"]) + items("allow", ["mcp__b"]) + "---\n" + BODY,
+         line_error(4, "duplicate key"), "1"),
+        ("a key with no rule before another key", "---\nallow:\n" + items("deny", ["mcp__a"]) + "---\n" + BODY,
+         line_error(2, "a key needs at least one rule"), "1"),
+        ("a key with no rule before the closing line", "---\ndeny:\n---\n" + BODY,
+         line_error(2, "a key needs at least one rule"), "1"),
+        ("an unquoted rule", "---\nallow:\n  - mcp__a\n---\n" + BODY, line_error(3, "expected a double-quoted rule"),
+         "1"),
+        ("a single-quoted rule", "---\nallow:\n  - 'mcp__a'\n---\n" + BODY,
+         line_error(3, "expected a double-quoted rule"), "1"),
+        ("three spaces before the dash", "---\nallow:\n   - \"mcp__a\"\n---\n" + BODY,
+         line_error(3, "expected a double-quoted rule"), "1"),
+        ("a tab before the dash", "---\nallow:\n\t- \"mcp__a\"\n---\n" + BODY,
+         line_error(3, "expected a double-quoted rule"), "1"),
+        ("text after the rule", "---\nallow:\n  - \"mcp__a\" # note\n---\n" + BODY,
+         line_error(3, "expected a double-quoted rule"), "1"),
+        ("two strings on one item", "---\nallow:\n  - \"mcp__a\" \"mcp__b\"\n---\n" + BODY,
+         line_error(3, "expected a double-quoted rule"), "1"),
+        ("a broken escape", "---\nallow:\n  - \"mcp__\\x\"\n---\n" + BODY,
+         line_error(3, "expected a double-quoted rule"), "1"),
+        ("a blank line where a rule is due", "---\nallow:\n\n---\n" + BODY,
+         line_error(3, "expected a double-quoted rule"), "1"),
+        ("an invalid rule", "---\n" + items("deny", ["gateway__*"]) + "---\n" + BODY,
+         line_error(3, 'invalid rule "gateway__*"'), "1"),
+        ("an empty rule", "---\n" + items("deny", [""]) + "---\n" + BODY, line_error(3, 'invalid rule ""'), "1"),
+        ("a rule holding a line break", "---\n" + items("allow", ["mcp__a\n"]) + "---\n" + BODY,
+         line_error(3, 'invalid rule "mcp__a\\n"'), "1"),
+        ("a rule of 257 bytes", "---\n" + items("allow", ["mcp__" + "a" * 252]) + "---\n" + BODY, BOUNDS, "1"),
+        ("257 rules in one list", "---\n" + items("deny", rules_257) + "---\n" + BODY, BOUNDS, "1"),
+        ("no closing line", "---\n" + items("allow", ["mcp__a"]), line_error(4, "missing closing ---"), "1"),
+        ("a closing line without a line break", "---\n" + items("allow", ["mcp__a"]) + "---",
+         line_error(4, "missing closing ---"), "1"),
+    ]
+    for label, brief, expected, marked_expected in invalid_blocks:
+        code, marked, found, out_allow, out_deny, error, err = block(brief)
+        check("block/invalid: %s" % label,
+              code == 1 and error == expected and found == "" and out_allow == "[]" and out_deny == "[]"
+              and marked == marked_expected and "Synthetic test content" not in error,
+              (code, marked, found, error, err))
+
+    for label, text in (("a number", "5"), ("text that is not JSON", "{not json"), ("two strings", '"a" "b"'),
+                        ("nothing", "")):
+        code, out, err = call(BLOCK, text)
+        check("block/%s instead of a brief cannot be read" % label, code == 2, (code, out, err))
+
+    big_brief = "---\n" + items("deny", ["mcp__x"]) + "---\n" + BODY + ("Filler line of a large brief.\n" * 30000)
+    started = time.monotonic()
+    code, marked, found, out_allow, out_deny, error, err = block(big_brief)
+    elapsed = time.monotonic() - started
+    check("block/a brief of about 900 KB is read well inside a second",
+          code == 0 and out_deny == '["mcp__x"]' and elapsed < 1.0, (code, error, err, round(elapsed, 2)))
+    full = ["mcp__f%03d" % i + "x" * 247 for i in range(256)]
+    started = time.monotonic()
+    code, marked, found, out_allow, out_deny, error, err = block("---\n" + items("allow", full) + items("deny", full)
+                                                                  + "---\n" + BODY)
+    elapsed = time.monotonic() - started
+    check("block/a block of two full-size lists is read well inside a second",
+          code == 0 and found == "1" and out_deny == json.dumps(full, separators=(",", ":")) and elapsed < 1.0,
+          (code, error, err, round(elapsed, 2)))
+
+    # ---- the per-spawn block of a transcript's first record ------------------------------------
+    record_snippet = BLOCK.replace('mcp_block "$1"', 'mcp_block --record "$1"')
+
+    def record_line(content, kind="user"):
+        return json.dumps({"type": kind, "message": {"role": kind, "content": content}})
+
+    with tempfile.TemporaryDirectory(prefix="fleet-mcp-policy-test-") as temporary:
+        def record(text):
+            """(status, marked, found, allow, deny, error) of mcp_block --record on a file of text."""
+            path = Path(temporary) / "agent-a1.jsonl"
+            path.write_bytes(text.encode())
+            code, out, err = call(record_snippet, str(path))
+            values = out.split("\n")
+            values += [""] * (5 - len(values))
+            return (code,) + tuple(values[:5]) + (err,)
+
+        with_block = "---\n" + items("allow", ["mcp__mail__read"]) + items("deny", ["*__search"]) + "---\n" + BODY
+        later = "\n" + json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "x"}]}}) + "\n"
+        valid_records = [
+            ("a record with a block and later records", record_line(with_block) + later,
+             '["mcp__mail__read"]', '["*__search"]', "1"),
+            ("a record without a trailing line break", record_line(with_block), '["mcp__mail__read"]', '["*__search"]',
+             "1"),
+            ("a record without a block", record_line(BODY) + later, "[]", "[]", ""),
+        ]
+        for label, text, allow, deny, found_expected in valid_records:
+            code, marked, found, out_allow, out_deny, error, err = record(text)
+            check("record/valid: %s" % label, code == 0 and found == found_expected and out_allow == allow
+                  and out_deny == deny and not error, (code, marked, found, out_allow, out_deny, error, err))
+
+        code, marked, found, out_allow, out_deny, error, err = record(
+            record_line("---\n" + items("allow", ["mcp_bad"]) + "---\n" + BODY) + later)
+        check("record/an invalid block in the record is invalid with its reason",
+              code == 1 and marked == "1" and error == line_error(3, 'invalid rule "mcp_bad"'),
+              (code, marked, error, err))
+
+        unavailable_records = [
+            ("an assistant record first", record_line(with_block, kind="assistant") + later),
+            ("content given as parts", json.dumps({"type": "user", "message": {"content": [{"type": "text",
+                                                                                          "text": with_block}]}}) + "\n"),
+            ("a first line that is not JSON", "{not json\n" + record_line(with_block) + "\n"),
+            ("an empty file", ""),
+            ("a JSON string first", json.dumps(with_block) + "\n"),
+        ]
+        for label, text in unavailable_records:
+            code, marked, found, out_allow, out_deny, error, err = record(text)
+            check("record/no brief: %s" % label, code == 3 and not found and not error, (code, found, error, err))
+
+        base = record_line(with_block)
+        exact = record_line(with_block + "x" * (1048576 - len(base)))
+        code, marked, found, out_allow, out_deny, error, err = record(exact + later)
+        check("record/a first line of exactly 1 MiB is read", len(exact.encode()) == 1048576 and code == 0
+              and out_deny == '["*__search"]', (len(exact.encode()), code, error, err))
+        over = record_line(with_block + "x" * (1048577 - len(base)))
+        code, marked, found, out_allow, out_deny, error, err = record(over + later)
+        check("record/a first line one byte over 1 MiB is no brief", len(over.encode()) == 1048577 and code == 3,
+              (len(over.encode()), code, error, err))
+        code, marked, found, out_allow, out_deny, error, err = record(over)
+        check("record/a single line over 1 MiB without a line break is no brief", code == 3, (code, error, err))
 
     print("Policy checks: %d; failures: %d" % (count, len(errors)))
     for error in errors:

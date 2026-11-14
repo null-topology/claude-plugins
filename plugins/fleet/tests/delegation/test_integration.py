@@ -395,9 +395,18 @@ def main():
             return subprocess.run(shell + [str(real / "scripts/subagent-guard.sh"), str(real), "", "mcp"], input=raw,
                                   text=True, capture_output=True, timeout=10, env=run_env)
 
+        # Agent a1's transcript files: a fleet agent whose brief has no block, so the global lists
+        # alone decide its calls.
+        mcp_session = Path(temporary) / "projects/p/s1"
+        (mcp_session / "subagents").mkdir(parents=True)
+        (mcp_session / "subagents/agent-a1.meta.json").write_text(
+            json.dumps({"agentType": "fleet:claude-opus-5-5", "toolUseId": "toolu-a1", "spawnDepth": 1}))
+        (mcp_session / "subagents/agent-a1.jsonl").write_text(json.dumps(
+            {"type": "user", "message": {"role": "user", "content": "## Objective\nSynthetic test content.\n"}}) + "\n")
+
         def mcp_call(caller=None, tool="mcp__gateway__vault__search"):
             data = {"hook_event_name": "PreToolUse", "tool_name": tool, "tool_input": {"query": "q"},
-                    "transcript_path": "/home/u/.claude/projects/p/s1.jsonl"}
+                    "transcript_path": str(mcp_session) + ".jsonl"}
             if caller:
                 data.update(agent_type=caller, agent_id="a1")
             return json.dumps(data)

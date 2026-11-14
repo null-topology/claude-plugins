@@ -1,7 +1,10 @@
 #!/bin/sh
 # Validate the brief of an Agent call that targets a fleet agent, without
-# changing tool input or permissions. Calls to any other agent type pass: the
-# plugin governs only the agents it ships.
+# changing tool input or permissions: its sections, and the grammar of the
+# per-spawn MCP block it may open with (mcp_block in mcp-policy.sh, which the
+# guard uses to read the same brief at every MCP call). Calls to any other agent
+# type pass, since the plugin governs only the agents it ships, except a brief
+# whose first two lines open such a block: nothing would enforce it there.
 # Usage: sh delegation-contract.sh <plugin-root> [<data-dir>] < hook-payload.json
 set -eu
 
@@ -54,14 +57,36 @@ tool=$(printf '%s' "$payload" | jq -r '.tool_name') || error 'Could not read too
     error 'The plugin root, holding an agents directory, is required as the first argument.'
 case $0 in */*) here=${0%/*} ;; *) here=. ;; esac
 [ -f "$here/fleet-rules.sh" ] || error "The fleet rule library is missing ($here/fleet-rules.sh)."
+[ -f "$here/mcp-policy.sh" ] || error "The MCP policy library is missing ($here/mcp-policy.sh)."
 . "$here/fleet-rules.sh"
+. "$here/mcp-policy.sh"
 rules=$(fleet_rules_path)
 fleet_rules_ok=
 if fleet_rules_valid "$rules"; then fleet_rules_ok=1; fi
 requested=$(printf '%s' "$payload" | jq -r '.tool_input.subagent_type? | strings') || requested=
 bare=${requested##*:}
-case $bare in '' | */*) exit 0 ;; esac
-fleet_agent "$requested" || fleet_prefixed "$requested" || exit 0
+fleet_target=
+case $bare in
+    '' | */*) ;;
+    *) if fleet_agent "$requested" || fleet_prefixed "$requested"; then fleet_target=1; fi ;;
+esac
+
+# Any other target, an Agent call without subagent_type included: only a brief whose line 1 reads
+# --- and whose line 2 starts with allow: or deny: (mcp_block_marked), valid or not, is refused,
+# since no hook would enforce that block. Nothing else of the brief is read.
+if [ -z "$fleet_target" ]; then
+    brief=$(printf '%s' "$payload" | jq -c '.tool_input.prompt? | strings') ||
+        error 'Could not read the prompt.'
+    [ -n "$brief" ] || exit 0
+    block_status=0
+    mcp_block "$brief" || block_status=$?
+    case $block_status in
+        0 | 1) ;;
+        *) error 'The MCP policy block of the brief could not be read.' ;;
+    esac
+    [ -z "$mcp_block_marked" ] || invalid 'MCP policy: per-spawn rules work only for fleet agents.'
+    exit 0
+fi
 
 # Shell variables cannot preserve NUL; reject it before decoding the prompt.
 if ! printf '%s' "$payload" | jq -e '
@@ -71,6 +96,18 @@ if ! printf '%s' "$payload" | jq -e '
 ' >/dev/null 2>&1; then
     invalid 'tool_input.prompt must be a nonempty string without unsupported control characters.'
 fi
+
+# The per-spawn MCP block: its grammar and the form of each rule, nothing else. The rules file and
+# the caller's chain are not read here: a grant that a deny cancels, or that the caller lacks,
+# passes the spawn and is refused at the call by the guard.
+brief=$(printf '%s' "$payload" | jq -c '.tool_input.prompt') || error 'Could not decode prompt.'
+block_status=0
+mcp_block "$brief" || block_status=$?
+case $block_status in
+    0) ;;
+    1) invalid "$mcp_block_error" ;;
+    *) error 'The MCP policy block of the brief could not be read.' ;;
+esac
 prompt=$(printf '%s' "$payload" | jq -r '.tool_input.prompt') || error 'Could not decode prompt.'
 
 # Parse a small Markdown subset: ATX headings, fences and HTML comments.

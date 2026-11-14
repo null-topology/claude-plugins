@@ -166,6 +166,19 @@ fi
 
 # ---- worker -----------------------------------------------------------------
 
+# Only the worker's subshell, which sets the marker to its own $$, runs past this point. bash
+# outside POSIX mode ends just the current command on some errors (an arithmetic one): the whole
+# supervisor block above, after which the supervisor would run on into this code in its own
+# process, read the hook's stdin and could let the call through. It refuses instead.
+if [ "${fleet_guard_pid:-}" != "$$" ]; then
+  if command -v fleet_guard_unexpected >/dev/null 2>&1; then
+    fleet_guard_unexpected "the supervisor went on past its own block"
+  fi
+  trap - EXIT
+  printf 'Refused: %s\n' "the fleet guard stopped on an unexpected error (the supervisor went on past its own block), so the call could not be checked; nothing is allowed until it is fixed." >&2
+  exit 2
+fi
+
 # The supervisor's traps are its own (zsh hands them to a subshell).
 trap - HUP INT QUIT PIPE ALRM TERM USR1 USR2
 
@@ -650,8 +663,12 @@ $row"
     ;;
 
   mcp__*)
-    # The global lists, as one frame with no block of its own; every argument is JSON text, and
-    # the tool's arguments are never read or printed.
+    # The global lists, then the frames of the caller and of every fleet agent above it, each
+    # from the block of its brief (mcp-policy.sh). Every argument is JSON text, and neither the
+    # tool's arguments nor a brief's text is printed. The global deny list and the tool name are
+    # checked first, alone: their refusal does not depend on the frames, so a call they refuse is
+    # refused with their own text even when its transcript cannot be bound. Rules that cannot be
+    # read for an agent refuse the call: the global lists alone are never used in their place.
     mcp_status=0
     mcp_lists "$rules" || mcp_status=$?
     case $mcp_status in
@@ -661,18 +678,26 @@ $row"
     esac
     mcp_name=$(printf '%s' "$payload" | jq -c '.tool_name' 2>/dev/null) ||
       mcp_error "the policy could not be evaluated"
-    mcp_status=0
-    mcp_permits "$mcp_name" "$mcp_allow" "$mcp_deny" '[{"self": true, "allow": [], "deny": []}]' ||
-      mcp_status=$?
-    case $mcp_status in
-      0) ;;
-      1)
-        printf '%s\n%s\n' "$mcp_verdict" "The refusal is final: do not retry the call or reach the tool another way; report what needed it." >&2
-        exit 2
-        ;;
-      3) mcp_error "invalid tool name" ;;
-      *) mcp_error "the policy could not be evaluated" ;;
-    esac
+    mcp_frames='[{"self": true, "allow": [], "deny": []}]'
+    for mcp_pass in global chain; do
+      if [ "$mcp_pass" = global ]; then
+        mcp_status=0
+        mcp_permits "$mcp_name" '[]' "$mcp_deny" "$mcp_frames" || mcp_status=$?
+      else
+        mcp_bind "$payload" || mcp_error "$mcp_fault"
+        mcp_status=0
+        mcp_permits "$mcp_name" "$mcp_allow" "$mcp_deny" "$mcp_frames" || mcp_status=$?
+      fi
+      case $mcp_status in
+        0) ;;
+        1)
+          printf '%s\n%s\n' "$mcp_verdict" "The refusal is final: do not retry the call or reach the tool another way; report what needed it." >&2
+          exit 2
+          ;;
+        3) mcp_error "invalid tool name" ;;
+        *) mcp_error "the policy could not be evaluated" ;;
+      esac
+    done
     ;;
 esac
 

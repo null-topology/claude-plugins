@@ -96,10 +96,19 @@ def main():
         nojq_env = {"PATH": str(nojq)}
         check("fixture/the PATH without jq holds no jq", shutil.which("jq", path=str(nojq)) is None)
 
+        # The session's transcript files: agent a1 is a fleet agent whose brief has no block, so
+        # the global lists alone decide its calls (tests/mcp/test_binding.py covers the blocks).
+        transcript = base / "projects/p/s1.jsonl"
+        (base / "projects/p/s1/subagents").mkdir(parents=True)
+        (base / "projects/p/s1/subagents/agent-a1.meta.json").write_text(
+            json.dumps({"agentType": FLEET_CALLER, "toolUseId": "toolu-a1", "spawnDepth": 1}))
+        (base / "projects/p/s1/subagents/agent-a1.jsonl").write_text(json.dumps(
+            {"type": "user", "message": {"role": "user", "content": "## Objective\nSynthetic test content.\n"}}) + "\n")
+
         def call(tool="mcp__gateway__vault__search", caller=None, agent_id="a1", **extra):
             """A PreToolUse payload of the measured shape; caller None is the main session, whose
             payload has neither agent_id nor agent_type."""
-            data = {"session_id": "s1", "transcript_path": "/home/u/.claude/projects/p/s1.jsonl", "cwd": "/",
+            data = {"session_id": "s1", "transcript_path": str(transcript), "cwd": "/",
                     "permission_mode": "default", "hook_event_name": "PreToolUse", "tool_name": tool,
                     "tool_input": {"query": "SECRET-ARGUMENT"}, "tool_use_id": "t1", "prompt_id": "p1"}
             if caller is not None:
@@ -181,6 +190,17 @@ def main():
             check("supervisor/fixture: %s is placed in the supervisor" % label, source.count(supervisor_anchor) == 1)
             expect("supervisor/%s in the supervisor refuses a call that would pass" % label,
                    guard(call(tool="Bash"), script=patched, mode=None), 2, unexpected)
+        # bash outside POSIX mode ends only the current command on an arithmetic error: the
+        # supervisor's whole if block, after which it would run on into the worker's code in its own
+        # process, with the hook's stdin, and let the call through. The worker refuses to start in a
+        # process that is not its own.
+        fault = "  fleet_test_fault=$((1/0))"
+        patched = plugin / "scripts" / ("patched-%d.sh" % count)
+        patched.write_text(source.replace(supervisor_anchor, "\n" + fault + supervisor_anchor, 1))
+        for label, payload, mode in (("the main session's MCP call", call(), "mcp"),
+                                     ("the main session's Bash call", call(tool="Bash"), None)):
+            expect("supervisor/a fault that leaves the supervisor's block refuses %s, which would pass" % label,
+                   guard(payload, script=patched, mode=mode), 2, unexpected)
 
         # ---- signals to the supervisor -------------------------------------------------------
         ready_env = stub("ready-jq", ': > "$FLEET_TEST_READY"\nsleep 10')

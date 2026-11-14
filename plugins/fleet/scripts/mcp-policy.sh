@@ -24,6 +24,12 @@
 #   mcp_lists <rules-file>                      0 sets mcp_allow and mcp_deny (JSON arrays), 1 invalid
 #   mcp_permits <name> <allow> <deny> <frames>  JSON texts; 0 permitted, 1 refused (the refusal
 #                                               in mcp_verdict), 3 an invalid tool name
+#   mcp_block <brief>                           the per-spawn block of one brief (JSON text):
+#                                               0 valid, 1 invalid (mcp_block_error)
+#   mcp_block --record <transcript>             the same, of the brief an agent's transcript
+#                                               opens with; also 3, no such brief
+#   mcp_bind <payload>                          0 sets mcp_frames, the frames of a fleet agent's
+#                                               call; 1 a refusal (mcp_fault), never 2
 
 mcp_nl='
 '
@@ -81,6 +87,68 @@ def mcp_verdict($name; $allow; $deny; $frames):
       else "pass"
       end
   end;
+def mcp_block_bare:
+  gsub("^[﻿ \t\r]+|[﻿ \t\r]+$"; "");
+def mcp_block_keyed:
+  test("\\A(allow|deny):");
+def mcp_block_fault($n; $why):
+  {error: ("MCP policy: line " + ($n | tostring) + ": " + $why + ".")};
+def mcp_block_line:
+  if endswith("\r") then .[:-1] else . end;
+def mcp_block_read:
+  (split("\n") | if length == 0 then [""] else . end) as $parts
+  | ($parts | length) as $count
+  | ($parts[:-1][:521] | map(mcp_block_line)) as $lines
+  | {marked: ($count >= 2 and ($parts[0] | mcp_block_bare) == "---"
+      and ($parts[1] | mcp_block_bare | mcp_block_keyed))}
+  + (if ($parts[0] | mcp_block_line) == "---" then
+      reduce range(1; [$lines | length, 520] | min) as $i
+        ({key: null, line: 0, count: 0, seen: {}, allow: [], deny: [], end: null};
+        if .end != null then .
+        else
+          ($i + 1) as $n | $lines[$i] as $l
+          | if $l == "allow:" or $l == "deny:" then
+              ($l | rtrimstr(":")) as $k
+              | if .key != null and .count == 0 then .end = mcp_block_fault(.line; "a key needs at least one rule")
+                elif .seen[$k] then .end = mcp_block_fault($n; "duplicate key")
+                else .key = $k | .line = $n | .count = 0 | .seen[$k] = true
+                end
+            elif $l == "---" then
+              if .key == null then .end = mcp_block_fault($n; "expected allow or deny")
+              elif .count == 0 then .end = mcp_block_fault(.line; "a key needs at least one rule")
+              else .end = {allow: .allow, deny: .deny}
+              end
+            elif .key == null then .end = mcp_block_fault($n; "expected allow or deny")
+            elif ($l[:1] | . == " " or . == "\t" or . == "-") or .count == 0 then
+              ($l | if startswith("  - \"") and endswith("\"") then (.[4:] | try fromjson catch null) else null end)
+                as $r
+              | if ($r | type) != "string" then .end = mcp_block_fault($n; "expected a double-quoted rule")
+                elif ($r | utf8bytelength) > 256 or .count == 256 then
+                  .end = {error: "MCP policy: more than 256 rules, or a rule longer than 256 bytes."}
+                elif ($r | mcp_rule_ok | not) then .end = mcp_block_fault($n; "invalid rule " + ($r | tojson))
+                else .key as $k | .[$k] += [$r] | .count += 1
+                end
+            else .end = mcp_block_fault($n; "expected allow or deny")
+            end
+        end)
+      | .end // mcp_block_fault(($lines | length) + 1; "missing closing ---")
+    else
+      (first(range(0; $count) as $i | select($parts[$i] | startswith("## ")) | $i) // $count) as $heading
+      | (first(range(0; $heading) as $i
+          | select(($parts[$i] | contains("---")) and ($parts[$i] | mcp_block_bare) == "---"
+            and (($parts[$i + 1] // "") | mcp_block_bare | mcp_block_keyed))
+          | $i) // null) as $at
+      | if $at == null then {none: true, allow: [], deny: []}
+        else mcp_block_fault($at + 1; "the policy block must start at line 1")
+        end
+    end);
+def mcp_block_text:
+  mcp_block_read
+  | (if .marked then "M" else "P" end)
+    + (if .error then "E" + .error
+       elif .none then "N"
+       else "B" + ({allow, deny} | tojson)
+       end);
 '
 
 # mcp_rule_valid <rule>
@@ -163,4 +231,255 @@ mcp_permits() {
       ;;
   esac
   return 2
+}
+
+# mcp_block <brief>: the per-spawn block of one brief, the brief given as JSON text (a JSON
+# string), so that neither hook has to carry it through a shell variable that drops NUL or
+# trailing line breaks. Both hooks read a brief only through this function: the contract hook at
+# the spawn, the guard at every call, so they cannot disagree on a brief.
+# mcp_block --record <transcript>: the same, of the brief held by the first line of an agent's
+# transcript, read up to that line and at most 1 MiB, in the query that parses the block (one
+# process per agent the guard walks, and no copy of the brief through the shell).
+#   status 3: the first line is longer than 1 MiB, or is not a JSON object of type "user" whose
+#             message.content is one string
+#   status 0: valid; mcp_block_found is 1 when the brief has a block, and mcp_block_lists holds
+#             its lists as one JSON object {"allow": [...], "deny": [...]} ([] for a key left out,
+#             and both [] without a block)
+#   status 1: invalid; mcp_block_error holds the one-line reason (MCP policy: ...)
+#   status 2: the brief could not be read (not one JSON string, or a failed query)
+# mcp_block_marked is 1 when line 1 reads --- and line 2 starts with allow: or deny:, a byte-order
+# mark, blanks and carriage returns around each dropped, whether the block is valid or not: the
+# contract hook refuses such a brief for an agent that is not a fleet agent.
+#
+# A brief has a block when line 1 is exactly --- (a line ends at LF; a CR before it is part of
+# the CRLF ending). The block then follows the grammar: allow: and deny:, each at most once, in
+# either order, each followed by at least one item of exactly two spaces, "- " and one
+# double-quoted JSON string; then a line that is exactly ---, itself ending in a line break.
+# Nothing else is allowed inside. Otherwise a line before the first "## " heading that reads ---,
+# followed by a line starting with allow: or deny: (both read with the characters above dropped),
+# makes the brief invalid: that block would be ignored, and its deny with it. Otherwise the brief
+# has no block. The block has at most 2 x 256 items, so its parse is over by line 516; only the
+# first 520 lines are looked at for it.
+#
+# The query answers on one line: a letter for marked or not, a letter for the verdict, then the
+# lists or the reason. The shell only strips those fixed-width letters: removing a pattern up to a
+# line break far into a value takes time quadratic in its length in some shells (seconds for the
+# 64 KiB of a full list), which the guard's time limit cannot afford.
+mcp_block() {
+  mcp_block_marked=
+  mcp_block_found=
+  mcp_block_lists='{"allow":[],"deny":[]}'
+  mcp_block_error=
+  if [ "$1" = --record ]; then
+    mcp_out=$(dd if="$2" bs=1048577 count=1 2>/dev/null | jq -Rrs "$mcp_defs"'
+      split("\n") as $parts
+      | if ($parts | length) == 1 and utf8bytelength > 1048576 then "S"
+        else $parts[0] | try fromjson catch null
+          | if type == "object" and .type == "user" and (.message | type == "object")
+              and (.message.content | type == "string")
+            then .message.content | mcp_block_text
+            else "S"
+            end
+        end' 2>/dev/null) || return 2
+    [ "$mcp_out" != S ] || return 3
+  else
+    mcp_out=$(printf '%s' "$1" | jq -rs "$mcp_defs"'
+      if length == 1 and (.[0] | type == "string") then .[0] | mcp_block_text
+      else error("one brief was expected")
+      end' 2>/dev/null) || return 2
+  fi
+  case $mcp_out in
+    *"$mcp_nl"*) return 2 ;;
+    M?*) mcp_block_marked=1 ;;
+    P?*) ;;
+    *) return 2 ;;
+  esac
+  mcp_out=${mcp_out#?}
+  case $mcp_out in
+    N) return 0 ;;
+    E?*)
+      mcp_block_error=${mcp_out#?}
+      return 1
+      ;;
+    B\{*)
+      mcp_block_lists=${mcp_out#?}
+      mcp_block_found=1
+      return 0
+      ;;
+  esac
+  return 2
+}
+
+# mcp_bind <payload>: the frames of a fleet agent's MCP call, found through the session's transcript
+# files from the payload's transcript_path and agent_id alone. The caller of the call is the first
+# frame; the walk follows parentAgentId through each agent's metadata until an agent has none, and
+# adds a frame for every agent above whose type is a fleet agent's (one that fleet-rules.sh places,
+# or one with this plugin's prefix, so an agent whose model left the rules keeps its frame). An
+# agent of another type adds none, and its brief is not read. Needs fleet-rules.sh sourced, with
+# the variables its fleet_agent reads (plugin_root, rules, fleet_rules_ok); it overwrites that
+# library's globals (fleet_model among them). Nothing is cached or written.
+#   status 0: mcp_frames holds the frames, the caller's first and then the fleet agents above it,
+#             nearest first, as JSON text
+#   status 1: mcp_fault holds the reason, one of the FLEET_MCP_ERROR texts of the policy
+#
+# Each agent's files sit side by side in one directory: agent-<id>.meta.json, its metadata, and
+# agent-<id>.jsonl, its transcript, whose first line holds the brief. Every id and the path must be
+# safe before a file name is built from them. A file read must be a regular file and not a symbolic
+# link; the metadata is read whole up to 64 KiB, the transcript only up to its first line, at most
+# 1 MiB.
+mcp_bind() {
+  mcp_frames=
+  mcp_fault=
+  mcp_parts=
+  mcp_out=$(printf '%s' "$1" | jq -r '
+    .agent_id as $id | .transcript_path as $path
+    | if ($id | type == "string" and test("\\A[A-Za-z0-9_-]+\\z"))
+        and ($path | type == "string" and startswith("/") and endswith(".jsonl")
+          and (explode | all(.[]; . >= 32 and . != 127))
+          and (split("/") | all(.[]; . != "." and . != "..")))
+      then "O" + $id + " "
+        + if ($path | test("/subagents/agent-[A-Za-z0-9_-]+\\.jsonl\\z")) then $path | sub("/[^/]*\\z"; "")
+          else ($path | .[:-6]) + "/subagents"
+          end
+      else "B"
+      end' 2>/dev/null) || {
+    mcp_fault='the policy could not be evaluated'
+    return 1
+  }
+  case $mcp_out in
+    *"$mcp_nl"*)
+      mcp_fault='the policy could not be evaluated'
+      return 1
+      ;;
+    B)
+      mcp_fault='invalid transcript binding'
+      return 1
+      ;;
+    O?*' '/*) ;;
+    *)
+      mcp_fault='the policy could not be evaluated'
+      return 1
+      ;;
+  esac
+  mcp_out=${mcp_out#O}
+  mcp_id=${mcp_out%% *}
+  mcp_dir=${mcp_out#* }
+  mcp_seen=' '
+  mcp_count=0
+  mcp_self=1
+  mcp_known_type=
+  mcp_known_kind=
+  while :; do
+    case $mcp_seen in
+      *" $mcp_id "*)
+        mcp_fault='agent ancestry unavailable'
+        return 1
+        ;;
+    esac
+    mcp_count=$((mcp_count + 1))
+    if [ "$mcp_count" -gt 32 ]; then
+      mcp_fault='agent ancestry unavailable'
+      return 1
+    fi
+    mcp_seen="$mcp_seen$mcp_id "
+
+    # The metadata: the agent's type and the agent above it.
+    mcp_file=$mcp_dir/agent-$mcp_id.meta.json
+    if [ ! -e "$mcp_file" ] && [ ! -L "$mcp_file" ]; then
+      if [ -n "$mcp_self" ]; then mcp_fault='agent brief unavailable'; else mcp_fault='agent ancestry unavailable'; fi
+      return 1
+    fi
+    mcp_size=
+    if [ ! -L "$mcp_file" ] && [ -f "$mcp_file" ]; then
+      mcp_size=$(wc -c 2>/dev/null <"$mcp_file") || mcp_size=
+    fi
+    case $mcp_size in
+      *[0-9]*) [ "$((mcp_size))" -le 65536 ] || mcp_size= ;;
+      *) mcp_size= ;;
+    esac
+    if [ -z "$mcp_size" ]; then
+      mcp_fault='agent brief unavailable'
+      return 1
+    fi
+    # One line, the verdict letter and the parent id, then the type and a closing dot, so that a
+    # type ending in line breaks keeps them.
+    mcp_out=$(jq -Rrs '
+      try fromjson catch null
+      | if type != "object" or (.parentAgentId | . == null or type == "string" | not) then "S"
+        elif (.agentType | type) != "string" then "T"
+        elif .parentAgentId != null and (.parentAgentId | test("\\A[A-Za-z0-9_-]+\\z") | not) then "U"
+        else "P" + (.parentAgentId // "") + "\n" + .agentType + "."
+        end' "$mcp_file" 2>/dev/null) || {
+      mcp_fault='the policy could not be evaluated'
+      return 1
+    }
+    case $mcp_out in
+      S) mcp_fault='agent brief unavailable'; return 1 ;;
+      T) mcp_fault='agent ancestry unavailable'; return 1 ;;
+      U) mcp_fault='invalid transcript binding'; return 1 ;;
+      P*"$mcp_nl"*.) ;;
+      *) mcp_fault='the policy could not be evaluated'; return 1 ;;
+    esac
+    mcp_parent=${mcp_out%%"$mcp_nl"*}
+    mcp_parent=${mcp_parent#P}
+    mcp_type=${mcp_out#*"$mcp_nl"}
+    mcp_type=${mcp_type%.}
+
+    # Whether the agent is a fleet agent: one answer per type in a run, as most chains hold few.
+    if [ -z "$mcp_known_kind" ] || [ "$mcp_type" != "$mcp_known_type" ]; then
+      mcp_known_kind=0
+      fleet_agent "$mcp_type" || mcp_known_kind=$?
+      if [ "$mcp_known_kind" -eq 1 ]; then
+        mcp_known_kind=0
+        fleet_prefixed "$mcp_type" || mcp_known_kind=$?
+      fi
+      case $mcp_known_kind in
+        0) mcp_known_kind=fleet ;;
+        1) mcp_known_kind=other ;;
+        *)
+          mcp_known_kind=
+          mcp_fault='the policy could not be evaluated'
+          return 1
+          ;;
+      esac
+      mcp_known_type=$mcp_type
+    fi
+
+    if [ "$mcp_known_kind" = fleet ]; then
+      # The brief: the first line of the transcript, a user record whose content is one string.
+      mcp_file=$mcp_dir/agent-$mcp_id.jsonl
+      if [ -L "$mcp_file" ] || [ ! -f "$mcp_file" ]; then
+        mcp_fault='agent brief unavailable'
+        return 1
+      fi
+      mcp_status=0
+      mcp_block --record "$mcp_file" || mcp_status=$?
+      case $mcp_status in
+        0) ;;
+        1) mcp_fault='invalid agent brief'; return 1 ;;
+        3) mcp_fault='agent brief unavailable'; return 1 ;;
+        *) mcp_fault='the policy could not be evaluated'; return 1 ;;
+      esac
+      # Each frame goes to a variable of its own, named by the agent's place in the chain, and
+      # the frames are joined once at the end: appending each to a growing text copies it again
+      # for every frame (a second at full size in some shells). The eval'd text holds only names.
+      if [ -n "$mcp_self" ]; then
+        mcp_frame='{"self":true,'
+      else
+        mcp_frame='{"id":"'"$mcp_id"'",'
+      fi
+      eval "mcp_frame_$mcp_count=\$mcp_frame\${mcp_block_lists#?}"
+      mcp_parts="$mcp_parts\${mcp_frame_$mcp_count},"
+    elif [ -n "$mcp_self" ]; then
+      # The metadata names another agent than the guard resolved from the payload.
+      mcp_fault='invalid transcript binding'
+      return 1
+    fi
+
+    [ -n "$mcp_parent" ] || break
+    mcp_id=$mcp_parent
+    mcp_self=
+  done
+  eval "mcp_frames=\"[${mcp_parts%,}]\""
+  return 0
 }

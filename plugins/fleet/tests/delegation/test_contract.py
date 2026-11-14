@@ -159,6 +159,97 @@ def main():
         Case("comment/unclosed", payload(brief() + "\n<!-- comment"), 2, "Unclosed HTML comment."),
         Case("comment/literal inside code", payload(brief({"Objective": "```text\n<!-- literal\n```"}))),
     ]
+
+    # ---- the per-spawn MCP block (design section 7) ------------------------------------------
+    def items(key, rules):
+        return key + ":\n" + "".join("  - %s\n" % json.dumps(r) for r in rules)
+
+    def line_error(number, reason):
+        # The invalid() frame, then the one detail line.
+        return "malformed.\nMCP policy: line %d: %s.\nApply" % (number, reason)
+
+    bounds = "malformed.\nMCP policy: more than 256 rules, or a rule longer than 256 bytes.\nApply"
+    fleet_only = "malformed.\nMCP policy: per-spawn rules work only for fleet agents.\nApply"
+    block = "---\n" + items("allow", ["mcp__mail__read"]) + items("deny", ["*__search"]) + "---\n"
+    long_rules = ["mcp__r%03d" % i + "x" * 247 for i in range(256)]
+    cases += [
+        Case("mcp/a valid block passes silently", payload(block + brief())),
+        Case("mcp/deny before allow", payload("---\n" + items("deny", ["*"]) + items("allow", ["mcp__a"]) + "---\n"
+                                              + brief())),
+        Case("mcp/allow alone", payload("---\n" + items("allow", ["mcp__a", "mcp__b*"]) + "---\n" + brief())),
+        Case("mcp/deny alone", payload("---\n" + items("deny", ["mcp__gateway__vault__search"]) + "---\n" + brief())),
+        Case("mcp/CRLF endings", payload((block + brief()).replace("\n", "\r\n"))),
+        Case("mcp/mixed endings", payload("---\r\nallow:\n  - \"mcp__a\"\r\ndeny:\r\n  - \"mcp__b\"\n---\r\n" + brief())),
+        Case("mcp/256 rules of 256 bytes in each list",
+             payload("---\n" + items("allow", long_rules) + items("deny", long_rules) + "---\n" + brief())),
+        Case("mcp/a grant a deny cancels is not judged at the spawn",
+             payload("---\n" + items("allow", ["mcp__mail__send"]) + items("deny", ["mcp__mail__*"]) + "---\n"
+                     + brief())),
+        Case("mcp/block-like lines after the first heading are not a block",
+             payload(brief() + "\n---\n" + items("allow", ["mcp__a"]) + "---\n")),
+        Case("mcp/257 rules", payload("---\n" + items("deny", ["mcp__r%d" % i for i in range(257)]) + "---\n"
+                                      + brief()), 2, bounds),
+        Case("mcp/a rule of 257 bytes", payload("---\n" + items("allow", ["mcp__" + "a" * 252]) + "---\n" + brief()),
+             2, bounds),
+        Case("mcp/a leading blank line", payload("\n" + block + brief()), 2,
+             line_error(2, "the policy block must start at line 1")),
+        Case("mcp/--- with a trailing blank", payload("--- \n" + block[4:] + brief()), 2,
+             line_error(1, "the policy block must start at line 1")),
+        Case("mcp/a byte-order mark", payload("﻿" + block + brief()), 2,
+             line_error(1, "the policy block must start at line 1")),
+        Case("mcp/a block after other text", payload("Intro\n" + block + brief()), 2,
+             line_error(2, "the policy block must start at line 1")),
+        Case("mcp/--- opening other front matter", payload("---\ntitle: x\n---\n" + brief()), 2,
+             line_error(2, "expected allow or deny")),
+        Case("mcp/a thematic break at line 1", payload("---\n" + brief()), 2, line_error(2, "expected allow or deny")),
+        Case("mcp/an inline list", payload('---\nallow: ["mcp__a"]\n---\n' + brief()), 2,
+             line_error(2, "expected allow or deny")),
+        Case("mcp/a comment in the block", payload("---\n" + items("allow", ["mcp__a"]) + "# note\n---\n" + brief()),
+             2, line_error(4, "expected allow or deny")),
+        Case("mcp/a blank line in the block", payload("---\n" + items("allow", ["mcp__a"]) + "\n---\n" + brief()), 2,
+             line_error(4, "expected allow or deny")),
+        Case("mcp/a duplicate key", payload("---\n" + items("deny", ["mcp__a"]) + items("deny", ["mcp__b"]) + "---\n"
+                                            + brief()), 2, line_error(4, "duplicate key")),
+        Case("mcp/a key with no rule", payload("---\nallow:\n" + items("deny", ["mcp__a"]) + "---\n" + brief()), 2,
+             line_error(2, "a key needs at least one rule")),
+        Case("mcp/a key with no rule before the closing line", payload("---\ndeny:\n---\n" + brief()), 2,
+             line_error(2, "a key needs at least one rule")),
+        Case("mcp/an unquoted rule", payload("---\nallow:\n  - mcp__a\n---\n" + brief()), 2,
+             line_error(3, "expected a double-quoted rule")),
+        Case("mcp/a single-quoted rule", payload("---\nallow:\n  - 'mcp__a'\n---\n" + brief()), 2,
+             line_error(3, "expected a double-quoted rule")),
+        Case("mcp/text after the rule", payload("---\nallow:\n  - \"mcp__a\" # note\n---\n" + brief()), 2,
+             line_error(3, "expected a double-quoted rule")),
+        Case("mcp/an invalid rule", payload("---\n" + items("deny", ["gateway__*"]) + "---\n" + brief()), 2,
+             line_error(3, 'invalid rule "gateway__*"')),
+        Case("mcp/an empty rule", payload("---\n" + items("deny", [""]) + "---\n" + brief()), 2,
+             line_error(3, 'invalid rule ""')),
+        Case("mcp/no closing line", payload("---\n" + items("allow", ["mcp__a"]) + brief()), 2,
+             line_error(4, "expected allow or deny")),
+        Case("mcp/a block and nothing else", payload("---\n" + items("allow", ["mcp__a"])), 2,
+             line_error(4, "missing closing ---")),
+        Case("mcp/the block is checked before the sections", payload("---\ndeny:\n---\nbare text"), 2,
+             line_error(2, "a key needs at least one rule")),
+        Case("mcp/a fleet target by bare name is checked", typed("---\ndeny:\n---\n" + brief(), "fixture-worker"), 2,
+             line_error(2, "a key needs at least one rule")),
+        # Another target: only line 1 reading --- and line 2 starting with allow: or deny: is looked
+        # at, valid or not, before the target filter.
+        Case("mcp/a block for a built-in agent", typed(block + "bare text", "Explore"), 2, fleet_only),
+        Case("mcp/a block without subagent_type", typed(block + "bare text", None), 2, fleet_only),
+        Case("mcp/a block for another plugin's agent", typed(block + "bare text", "other:fixture-worker"), 2,
+             fleet_only),
+        Case("mcp/a block for a path-like type", typed(block + "bare text", "../agents/fixture-worker"), 2,
+             fleet_only),
+        Case("mcp/a block for a non-string type", typed(block + "bare text", 7), 2, fleet_only),
+        Case("mcp/an invalid block for a built-in agent", typed("---\ndeny:\n---\nbare text", "Explore"), 2, fleet_only),
+        Case("mcp/a padded block for a built-in agent", typed("﻿ --- \r\n\tallow: x\nbare text", "Explore"), 2,
+             fleet_only),
+        Case("mcp/--- and other text for a built-in agent", typed("---\ntitle: x\n---\nbare text", "Explore")),
+        Case("mcp/a block after other text for a built-in agent", typed("Intro\n" + block + "bare text", "Explore")),
+        Case("mcp/a non-string prompt for a built-in agent", payload(7, tool_input={"prompt": 7,
+                                                                                   "subagent_type": "Explore"})),
+        Case("mcp/a block in another tool's input", payload(block + "bare text", tool_name="Bash")),
+    ]
     for name, raw in [("malformed", '{"tool_name":'), ("empty", ""), ("array", "[]"),
                       ("null", "null"), ("multiple objects", payload(brief()) + "\n{}")]:
         cases.append(Case("json/" + name, raw, 2, "FLEET_DELEGATION_ERROR:"))
@@ -245,6 +336,20 @@ def main():
         if result.returncode != 2 or "FLEET_DELEGATION_ERROR:" not in result.stderr:
             failures.append(("configuration/missing rule library", "expected a configuration error",
                              result.stderr))
+
+    # Without the MCP policy library no brief can be read, so the hook reports a fault for every
+    # Agent call, the calls to other agent types included (their block check needs it too).
+    with tempfile.TemporaryDirectory() as temporary:
+        lone = Path(temporary) / "delegation-contract.sh"
+        shutil.copy(hook, lone)
+        shutil.copy(fleet / "scripts/fleet-rules.sh", Path(temporary) / "fleet-rules.sh")
+        for label, raw in (("a fleet target", payload(brief())), ("a built-in target", typed("bare text", "Explore"))):
+            result = subprocess.run([shell] + args.shell[1:] + [str(lone), str(fixture_root)],
+                                    input=raw, text=True, capture_output=True, timeout=10)
+            if result.returncode != 2 or "FLEET_DELEGATION_ERROR:" not in result.stderr \
+                    or "mcp-policy.sh" not in result.stderr:
+                failures.append(("configuration/missing MCP policy library, " + label,
+                                 "expected a configuration error naming mcp-policy.sh", result.stderr))
 
     text = skill.read_text()
     try:
