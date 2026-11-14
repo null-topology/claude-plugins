@@ -473,6 +473,16 @@ def main():
               EVALUATION)
         fault("results/a failed query of the block",
               guard(call(s), extra_env=stub("stub-block", "*'.message.content | mcp_block_text'*")), EVALUATION)
+        # A reader of the record that copies it whole and then fails: the brief it handed on is not
+        # used, though it reads as one.
+        directory = base / "stub-dd"
+        directory.mkdir()
+        (directory / "dd").write_text("#!/bin/sh\n'%s' \"$@\"\nexit 7\n" % shutil.which("dd"))
+        (directory / "dd").chmod(0o755)
+        s = chain([("a1", FLEET, BODY)])
+        passes("results/a call the brief and the global lists grant passes", guard(call(s)))
+        fault("results/a reader of the record that fails after copying it",
+              guard(call(s), extra_env={"PATH": "%s%s%s" % (directory, os.pathsep, env.get("PATH", ""))}), BRIEF)
 
         # ---- what the hook description promises ---------------------------------------------------
         description = json.loads((root / "hooks/hooks.json").read_text())["description"]
@@ -486,6 +496,10 @@ def main():
         check("description/states that a block in a brief to another agent type is refused",
               "calls to other agent types are not inspected" not in description
               and "which works only for fleet agents" in description)
+        check("description/states that such a brief is read for the block, valid or not, and refused unread",
+              "refused only when its prompt opens" not in description and "otherwise not inspected" not in description
+              and "such a block, valid or not" in description
+              and "or when the hook cannot read a string prompt to look for one" in description)
 
         # ---- the time limit ----------------------------------------------------------------------
         full = brief(allow=long_rules("fa"), deny=long_rules("fd"))
@@ -495,6 +509,22 @@ def main():
         passes("timing/32 fleet agents with full-size lists are bound and evaluated", outcome)
         check("timing/32 fleet agents with full-size lists finish inside 3 seconds", outcome[3] is not None
               and outcome[3] < 3.0, round(outcome[3], 2))
+        # A long run of blanks inside line 1, or inside a line holding --- before the first heading,
+        # is read in time linear in its length, at the spawn and at every call.
+        run = " " * 64000
+        for label, text in (("line 1", "Synthetic" + run + "brief\n" + BODY),
+                            ("a --- line before the first heading", "Intro\n---" + run + "x\n" + BODY)):
+            started = time.monotonic()
+            rc, out, err = contract(text)
+            elapsed = time.monotonic() - started
+            timings.append(("the spawn, 64,000 blanks inside " + label, elapsed))
+            check("timing/a brief with 64,000 blanks inside %s passes the spawn inside a second" % label,
+                  rc == 0 and not out and not err and elapsed < 1.0, (rc, out, err[:200], round(elapsed, 2)))
+            outcome = guard(call(chain([("a1", FLEET, text)])))
+            timings.append(("a call, 64,000 blanks inside the brief's " + label, outcome[3]))
+            passes("timing/a call under a brief with 64,000 blanks inside %s passes" % label, outcome)
+            check("timing/a call under a brief with 64,000 blanks inside %s finishes inside a second" % label,
+                  outcome[3] is not None and outcome[3] < 1.0, round(outcome[3], 2))
 
     for label, elapsed in timings:
         print("timing: %s: %.2f s" % (label, elapsed))

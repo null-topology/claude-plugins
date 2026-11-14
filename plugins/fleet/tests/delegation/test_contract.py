@@ -32,6 +32,24 @@ def payload(prompt, **extra):
     return json.dumps(data, ensure_ascii=False)
 
 
+class Whole(str):
+    """A diagnostic that is the whole of stderr, not a part of it."""
+
+
+def invalid_text(detail):
+    """The whole refusal of an invalid brief: the invalid() frame around one detail line."""
+    return Whole("FLEET_DELEGATION_INVALID: delegation brief is incomplete or malformed.\n" + detail + "\n"
+                 "Apply fleet:delegating-task in the parent session and correct the brief from known context.\n"
+                 "Do not invent scope or permissions. Clarify a known blocker before dispatch.\n"
+                 "Retry the intended call only after correction; any policy-guard refusal still applies.\n")
+
+
+def error_text(detail):
+    """The whole refusal of a hook or configuration error."""
+    return Whole("FLEET_DELEGATION_ERROR: " + detail + "\n"
+                 "Report the hook/configuration problem; do not route around it.\n")
+
+
 @dataclass
 class Case:
     name: str
@@ -165,11 +183,11 @@ def main():
         return key + ":\n" + "".join("  - %s\n" % json.dumps(r) for r in rules)
 
     def line_error(number, reason):
-        # The invalid() frame, then the one detail line.
-        return "malformed.\nMCP policy: line %d: %s.\nApply" % (number, reason)
+        # The whole invalid() frame around the one detail line.
+        return invalid_text("MCP policy: line %d: %s." % (number, reason))
 
-    bounds = "malformed.\nMCP policy: more than 256 rules, or a rule longer than 256 bytes.\nApply"
-    fleet_only = "malformed.\nMCP policy: per-spawn rules work only for fleet agents.\nApply"
+    bounds = invalid_text("MCP policy: more than 256 rules, or a rule longer than 256 bytes.")
+    fleet_only = invalid_text("MCP policy: per-spawn rules work only for fleet agents.")
     block = "---\n" + items("allow", ["mcp__mail__read"]) + items("deny", ["*__search"]) + "---\n"
     long_rules = ["mcp__r%03d" % i + "x" * 247 for i in range(256)]
     cases += [
@@ -295,6 +313,19 @@ def main():
         (broken / "awk").chmod(0o755)
         cases.append(Case("dependency/awk error", payload(brief()), 2,
                           "FLEET_DELEGATION_ERROR:", {"PATH": str(broken)}))
+        # A block reader that fails refuses the spawn, for any target: whether the brief opens a
+        # block is then unknown.
+        failing = temp / "failing-block-reader"
+        failing.mkdir()
+        (failing / "jq").write_text("#!/bin/sh\ncase \"$*\" in *'one brief was expected'*) exit 5 ;; esac\n"
+                                    "exec '%s' \"$@\"\n" % shutil.which("jq"))
+        (failing / "jq").chmod(0o755)
+        reader_path = {"PATH": str(failing) + os.pathsep + os.environ.get("PATH", "")}
+        unreadable = error_text("The MCP policy block of the brief could not be read.")
+        cases.append(Case("mcp/a block reader that fails, for a built-in agent", typed("bare text", "Explore"), 2,
+                          unreadable, reader_path))
+        cases.append(Case("mcp/a block reader that fails, for a fleet agent", payload(brief()), 2, unreadable,
+                          reader_path))
         for index, case in enumerate(cases, 1):
             try:
                 env = {k: v for k, v in os.environ.items() if k != "FLEET_RULES"}
@@ -308,7 +339,10 @@ def main():
                     errors.append("stdout must stay empty")
                 if case.code == 0 and result.stderr:
                     errors.append("success must be silent")
-                if case.diagnostic and case.diagnostic not in result.stderr:
+                if isinstance(case.diagnostic, Whole):
+                    if result.stderr != case.diagnostic:
+                        errors.append("stderr differs from: " + json.dumps(case.diagnostic))
+                elif case.diagnostic and case.diagnostic not in result.stderr:
                     errors.append("missing diagnostic: " + case.diagnostic)
                 if "Synthetic test content." in result.stderr:
                     errors.append("prompt content leaked")

@@ -87,10 +87,14 @@ def mcp_verdict($name; $allow; $deny; $frames):
       else "pass"
       end
   end;
-def mcp_block_bare:
-  gsub("^[﻿ \t\r]+|[﻿ \t\r]+$"; "");
+# A line read with a byte-order mark, blanks, tabs and carriage returns around it dropped: whether
+# it reads ---, and whether it starts with allow: or deny:. Both patterns are anchored at the start
+# of the line and do not trim it: a pattern for a trailing run is tried at every position of a long
+# run of blanks inside a line, which takes time quadratic in the length of the line.
+def mcp_block_fence:
+  test("\\A[﻿ \t\r]*---[﻿ \t\r]*\\z");
 def mcp_block_keyed:
-  test("\\A(allow|deny):");
+  test("\\A[﻿ \t\r]*(allow|deny):");
 def mcp_block_fault($n; $why):
   {error: ("MCP policy: line " + ($n | tostring) + ": " + $why + ".")};
 def mcp_block_line:
@@ -99,8 +103,7 @@ def mcp_block_read:
   (split("\n") | if length == 0 then [""] else . end) as $parts
   | ($parts | length) as $count
   | ($parts[:-1][:521] | map(mcp_block_line)) as $lines
-  | {marked: ($count >= 2 and ($parts[0] | mcp_block_bare) == "---"
-      and ($parts[1] | mcp_block_bare | mcp_block_keyed))}
+  | {marked: ($count >= 2 and ($parts[0] | mcp_block_fence) and ($parts[1] | mcp_block_keyed))}
   + (if ($parts[0] | mcp_block_line) == "---" then
       reduce range(1; [$lines | length, 520] | min) as $i
         ({key: null, line: 0, count: 0, seen: {}, allow: [], deny: [], end: null};
@@ -135,8 +138,8 @@ def mcp_block_read:
     else
       (first(range(0; $count) as $i | select($parts[$i] | startswith("## ")) | $i) // $count) as $heading
       | (first(range(0; $heading) as $i
-          | select(($parts[$i] | contains("---")) and ($parts[$i] | mcp_block_bare) == "---"
-            and (($parts[$i + 1] // "") | mcp_block_bare | mcp_block_keyed))
+          | select(($parts[$i] | contains("---")) and ($parts[$i] | mcp_block_fence)
+            and (($parts[$i + 1] // "") | mcp_block_keyed))
           | $i) // null) as $at
       | if $at == null then {none: true, allow: [], deny: []}
         else mcp_block_fault($at + 1; "the policy block must start at line 1")
@@ -240,8 +243,8 @@ mcp_permits() {
 # mcp_block --record <transcript>: the same, of the brief held by the first line of an agent's
 # transcript, read up to that line and at most 1 MiB, in the query that parses the block (one
 # process per agent the guard walks, and no copy of the brief through the shell).
-#   status 3: the first line is longer than 1 MiB, or is not a JSON object of type "user" whose
-#             message.content is one string
+#   status 3: the transcript could not be read, or its first line is longer than 1 MiB, or is not a
+#             JSON object of type "user" whose message.content is one string
 #   status 0: valid; mcp_block_found is 1 when the brief has a block, and mcp_block_lists holds
 #             its lists as one JSON object {"allow": [...], "deny": [...]} ([] for a key left out,
 #             and both [] without a block)
@@ -271,16 +274,23 @@ mcp_block() {
   mcp_block_lists='{"allow":[],"deny":[]}'
   mcp_block_error=
   if [ "$1" = --record ]; then
-    mcp_out=$(dd if="$2" bs=1048577 count=1 2>/dev/null | jq -Rrs "$mcp_defs"'
-      split("\n") as $parts
-      | if ($parts | length) == 1 and utf8bytelength > 1048576 then "S"
-        else $parts[0] | try fromjson catch null
-          | if type == "object" and .type == "user" and (.message | type == "object")
-              and (.message.content | type == "string")
-            then .message.content | mcp_block_text
-            else "S"
-            end
-        end' 2>/dev/null) || return 2
+    # The status of a pipeline is its last command's: the reader appends four U+0001 only when it
+    # read the file, and the query takes the text as read only when it ends in U+0001, so a reader
+    # that fails, even after handing on the whole file, leaves no brief. A raw U+0001 cannot be part
+    # of a JSON line, so the text read cannot supply it. Four, because a read that ends inside a
+    # character makes jq take up to three bytes after its first into one replacement character.
+    mcp_out=$({ dd if="$2" bs=1048577 count=1 2>/dev/null && printf '\001\001\001\001'; } | jq -Rrs "$mcp_defs"'
+      if endswith("\u0001") | not then "S"
+      else sub("\u0001{1,4}\\z"; "") | split("\n") as $parts
+        | if ($parts | length) == 1 and utf8bytelength > 1048576 then "S"
+          else $parts[0] | try fromjson catch null
+            | if type == "object" and .type == "user" and (.message | type == "object")
+                and (.message.content | type == "string")
+              then .message.content | mcp_block_text
+              else "S"
+              end
+          end
+      end' 2>/dev/null) || return 2
     [ "$mcp_out" != S ] || return 3
   else
     mcp_out=$(printf '%s' "$1" | jq -rs "$mcp_defs"'

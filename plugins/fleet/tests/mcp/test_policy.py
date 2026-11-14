@@ -317,6 +317,13 @@ def main():
         ("allow: before the first heading without a --- line", "allow:\n" + BODY),
         ("--- before the first heading followed by other text", "Intro\n---\nNotes\n" + BODY),
         ("an empty brief", ""),
+        # only a byte-order mark, blanks, tabs and carriage returns around a line are dropped
+        ("a no-break space before ---", " ---\nallow:\n  - \"mcp__a\"\n---\n" + BODY),
+        ("a no-break space before allow:", "Intro\n---\n allow:\n" + BODY),
+        ("a form feed after ---", "Intro\n---\f\nallow:\n" + BODY),
+        ("blanks inside the dashes", "Intro\n- - -\ndeny:\n" + BODY),
+        ("text after --- and blanks", "Intro\n---  x\ndeny:\n" + BODY),
+        ("text before allow:", "Intro\n---\nx allow:\n" + BODY),
     ]
     for label, brief in no_blocks:
         code, marked, found, out_allow, out_deny, error, err = block(brief)
@@ -339,11 +346,19 @@ def main():
          line_error(1, "the policy block must start at line 1"), "1"),
         ("a block with a lone CR at line 1", "---\r\r\n" + items("allow", ["mcp__a"]) + "---\n" + BODY,
          line_error(1, "the policy block must start at line 1"), "1"),
+        ("tabs, marks and CRs around --- and before deny:", "\t﻿--- \r\n \t﻿deny:\r\n  - \"*\"\n---\n"
+         + BODY, line_error(1, "the policy block must start at line 1"), "1"),
+        ("marks, blanks and CRs around a --- after other text", "Intro\n\r﻿ --- \t﻿\r\n﻿\r allow:\n"
+         + BODY, line_error(2, "the policy block must start at line 1"), ""),
+        ("--- and blanks alone before the first heading, then deny:", "Intro\n---" + " \t" * 40 + "\ndeny:\n" + BODY,
+         line_error(2, "the policy block must start at line 1"), ""),
         # step 1: line 1 is ---, and the grammar applies
         ("--- opening other front matter", "---\ntitle: x\n---\n" + BODY, line_error(2, "expected allow or deny"), ""),
         ("a thematic break at line 1", "---\n" + BODY, line_error(2, "expected allow or deny"), ""),
         ("no key at all", "---\n---\n" + BODY, line_error(2, "expected allow or deny"), ""),
         ("an inline list", '---\nallow: ["mcp__a"]\n---\n' + BODY, line_error(2, "expected allow or deny"), "1"),
+        ("a mark, a tab and a CR around deny:", "---\n﻿\tdeny:\r\r\n  - \"*\"\n---\n" + BODY,
+         line_error(2, "expected allow or deny"), "1"),
         ("a key with a trailing blank", "---\nallow: \n  - \"mcp__a\"\n---\n" + BODY,
          line_error(2, "expected allow or deny"), "1"),
         ("an item before any key", '---\n  - "mcp__a"\n---\n' + BODY, line_error(2, "expected allow or deny"), ""),
@@ -413,6 +428,28 @@ def main():
           code == 0 and found == "1" and out_deny == json.dumps(full, separators=(",", ":")) and elapsed < 1.0,
           (code, error, err, round(elapsed, 2)))
 
+    # A long run of blanks inside a line read with blanks dropped (line 1, line 2, and a line holding
+    # --- before the first heading or the line after it) is read in time linear in its length: a
+    # brief of a few hundred KB stays well inside a second.
+    run = " " * 64000
+    mixed = "﻿ \t\r" * 16000
+    long_runs = [
+        ("line 1", "word" + run + "word\n" + BODY, 0, "", ""),
+        ("line 1, mixed blanks", "word" + mixed + "word\n" + BODY, 0, "", ""),
+        ("line 2 after ---", "---\nallow:" + run + "x\n" + BODY, 1, line_error(2, "expected allow or deny"), "1"),
+        ("a --- line before the first heading", "Intro\n---" + run + "x\n" + BODY, 0, "", ""),
+        ("a --- line before the first heading, mixed blanks", "Intro\n---" + mixed + "x\n" + BODY, 0, "", ""),
+        ("the line after a --- before the first heading", "Intro\n---\nallow:" + run + "x\n" + BODY, 1,
+         line_error(2, "the policy block must start at line 1"), ""),
+    ]
+    for label, brief, code_expected, error_expected, marked_expected in long_runs:
+        started = time.monotonic()
+        code, marked, found, out_allow, out_deny, error, err = block(brief)
+        elapsed = time.monotonic() - started
+        check("block/64,000 blanks inside %s are read well inside a second" % label,
+              code == code_expected and error == error_expected and marked == marked_expected and found == ""
+              and elapsed < 1.0, (code, marked, error, err, round(elapsed, 2)))
+
     # ---- the per-spawn block of a transcript's first record ------------------------------------
     record_snippet = BLOCK.replace('mcp_block "$1"', 'mcp_block --record "$1"')
 
@@ -460,6 +497,21 @@ def main():
         for label, text in unavailable_records:
             code, marked, found, out_allow, out_deny, error, err = record(text)
             check("record/no brief: %s" % label, code == 3 and not found and not error, (code, found, error, err))
+        code, out, err = call(record_snippet, str(Path(temporary) / "agent-missing.jsonl"))
+        check("record/no brief: a transcript that cannot be read", code == 3, (code, out, err))
+
+        # The read stops at 1 MiB and one byte, inside a later record; where it cuts a character in
+        # two, the text read still ends where the reader left it.
+        head = record_line(with_block) + "\n"
+        for character, cut in (("€", 1), ("€", 2), ("\U0001f600", 1), ("\U0001f600", 2), ("\U0001f600", 3)):
+            text = head + "x" * (1048577 - cut - len(head.encode())) + character * 4 + "\n"
+            code, marked, found, out_allow, out_deny, error, err = record(text)
+            check("record/a read that ends after %d of the %d bytes of a character in a later record"
+                  % (cut, len(character.encode())),
+                  code == 0 and found == "1" and out_deny == '["*__search"]', (code, found, error, err))
+        code, marked, found, out_allow, out_deny, error, err = record(head + "\x01")
+        check("record/a transcript ending in U+0001 is read as it is",
+              code == 0 and found == "1" and out_deny == '["*__search"]', (code, found, error, err))
 
         base = record_line(with_block)
         exact = record_line(with_block + "x" * (1048576 - len(base)))

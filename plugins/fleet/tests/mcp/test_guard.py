@@ -201,6 +201,27 @@ def main():
                                      ("the main session's Bash call", call(tool="Bash"), None)):
             expect("supervisor/a fault that leaves the supervisor's block refuses %s, which would pass" % label,
                    guard(payload, script=patched, mode=mode), 2, unexpected)
+        # A fault at the supervisor's first line, before it defines its helpers: bash outside POSIX
+        # mode goes on into the worker's code with no helper to call, so the worker's own entry check
+        # refuses. Other shells end at the fault itself; none may end in status 0.
+        lenient = subprocess.run(shell + ["-c", '[ -n "${BASH_VERSION:-}" ] && ! shopt -oq posix'],
+                                 capture_output=True, env=env).returncode == 0
+        try:
+            result = subprocess.run(shell + ["-c", 'readonly fleet_guard_self; . "$1" "$2" "" mcp', "probe",
+                                             str(guard_path), str(plugin)],
+                                    input=json.dumps(call()), capture_output=True, text=True, timeout=20, env=env)
+            outcome = (result.returncode, result.stdout, result.stderr)
+        except subprocess.TimeoutExpired:
+            outcome = (None, "", "timed out")
+        entry_refusal = ("Refused: the fleet guard stopped on an unexpected error (the supervisor went on past its own"
+                         " block), so the call could not be checked; nothing is allowed until it is fixed.\n")
+        if lenient:
+            check("supervisor/a fault before its helpers exist: the worker's entry check refuses the main"
+                  " session's MCP call", outcome[0] == 2 and not outcome[1] and outcome[2].endswith(entry_refusal),
+                  outcome)
+        else:
+            check("supervisor/a fault before its helpers exist does not let the main session's MCP call through",
+                  outcome[0] not in (0, None) and not outcome[1], outcome)
 
         # ---- signals to the supervisor -------------------------------------------------------
         ready_env = stub("ready-jq", ': > "$FLEET_TEST_READY"\nsleep 10')
