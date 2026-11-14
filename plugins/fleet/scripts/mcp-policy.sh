@@ -110,27 +110,35 @@ mcp_match() {
 # mcp_lists <rules-file>: the global lists, allowed_mcp_tools and disallowed_mcp_tools. A missing
 # key or null reads as []; a list of another type, an entry that is not a valid rule or more than
 # 256 rules make both lists invalid (status 1), never truncated.
+#
+# Each list comes from its own query, which checks both: splitting one list off the other in the
+# shell takes time quadratic in its length in some shells (seconds at full size). The file is read
+# twice, so it must not change in between; the guard passes its snapshot of the rules.
 mcp_lists() {
   mcp_allow=
   mcp_deny=
-  mcp_out=$(jq -r "$mcp_defs"'
+  mcp_lists_pick "$1" 0 || return $?
+  mcp_allow=$mcp_out
+  mcp_lists_pick "$1" 1 || {
+    mcp_status=$?
+    mcp_allow=
+    return $mcp_status
+  }
+  mcp_deny=$mcp_out
+  return 0
+}
+
+# mcp_lists_pick <rules-file> <0 for the allow list, 1 for the deny list>
+mcp_lists_pick() {
+  mcp_out=$(jq -r --argjson pick "$2" "$mcp_defs"'
     [(.allowed_mcp_tools, .disallowed_mcp_tools) | if . == null then [] else . end]
-    | if all(.[]; mcp_list_ok) then (.[] | tojson) else "invalid" end' "$1" 2>/dev/null) || return 2
+    | if all(.[]; mcp_list_ok) then .[$pick] | tojson else "invalid" end' "$1" 2>/dev/null) || return 2
   case $mcp_out in
     invalid) return 1 ;;
-    \[*"$mcp_nl"\[*) ;;
-    *) return 2 ;;
+    *"$mcp_nl"*) return 2 ;;
+    \[*) return 0 ;;
   esac
-  mcp_allow=${mcp_out%%"$mcp_nl"*}
-  mcp_deny=${mcp_out#*"$mcp_nl"}
-  case $mcp_deny in
-    *"$mcp_nl"*)
-      mcp_allow=
-      mcp_deny=
-      return 2
-      ;;
-  esac
-  return 0
+  return 2
 }
 
 # mcp_permits <name> <allow> <deny> <frames>: every argument is JSON text; the frames list holds

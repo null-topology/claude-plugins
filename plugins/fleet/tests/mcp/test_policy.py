@@ -140,6 +140,19 @@ def main():
 
         code, out, err = lists({"main": {}})
         check("lists/missing keys read as []", code == 0 and out == ["[]", "[]"], (code, out, err))
+        # Full size: 256 rules of 256 bytes in each list. Splitting the 64 KiB of one list off the
+        # other with a pattern took seconds in some shells, past the guard's time limit.
+        full_allow = ["mcp__a%03d" % i + "x" * 247 for i in range(256)]
+        full_deny = ["mcp__d%03d" % i + "x" * 247 for i in range(256)]
+        started = time.monotonic()
+        code, out, err = lists({"allowed_mcp_tools": full_allow, "disallowed_mcp_tools": full_deny})
+        elapsed = time.monotonic() - started
+        try:
+            read = [json.loads(text) for text in out]
+        except ValueError:
+            read = None
+        check("lists/two full-size lists are read well inside a second",
+              code == 0 and read == [full_allow, full_deny] and elapsed < 1.0, (code, round(elapsed, 2), err))
         code, out, err = lists({"allowed_mcp_tools": None, "disallowed_mcp_tools": None})
         check("lists/null reads as []", code == 0 and out == ["[]", "[]"], (code, out, err))
         code, out, err = lists("null")
