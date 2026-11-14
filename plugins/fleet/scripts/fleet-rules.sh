@@ -179,8 +179,9 @@ fleet_names() {
 }
 
 # fleet_agent <agent-type>: whether the type is a fleet agent; when it is, sets fleet_model.
-# Returns 0 for a fleet agent, 1 for a type that is not one, and 2 when that cannot be told because
-# the rules could not be read (fleet_names); the caller refuses then. A type with a colon is one
+# Returns 0 for a fleet agent, 1 for a type that is not one, 2 when that cannot be told because
+# the rules could not be read (fleet_names), and 3 when the prefix query failed (fleet_prefixed);
+# the caller refuses on 2 and 3. A type with a colon is one
 # only with this plugin's own prefix (fleet_prefixed): another plugin's agent of the same name is
 # not this plugin's to govern or to authorize. There is one agent per fleet model, named by the
 # model's id; the effort is a parameter of each call. Its definition under agents/ decides when it
@@ -191,7 +192,11 @@ fleet_names() {
 fleet_agent() {
   fleet_model=
   case $1 in
-    *:*) fleet_prefixed "$1" || return 1; bare=${1#*:} ;;
+    *:*)
+      fleet_prefix_status=0
+      fleet_prefixed "$1" || fleet_prefix_status=$?
+      case $fleet_prefix_status in 0) ;; 1) return 1 ;; *) return 3 ;; esac
+      bare=${1#*:} ;;
     *) bare=$1 ;;
   esac
   # No agent name holds a slash or a further colon; a type that does is not a fleet agent.
@@ -209,10 +214,13 @@ fleet_agent() {
 # ships does. Such a type is a fleet agent even when fleet_agent cannot resolve it. The prefix (the
 # text before the first colon) is compared with the plugin name trimmed of white space and in ASCII
 # lower case, both sides, so that "Fleet:", "FLEET:" or " fleet:" is not taken for another
-# plugin's prefix and let through ungoverned.
+# plugin's prefix and let through ungoverned. Returns 0 for this plugin's prefix, 1 for none or
+# another one, and 2 when the comparison failed: read as "another prefix", a fleet agent would pass
+# as another plugin's.
 fleet_prefixed() {
   case $1 in *:*) ;; *) return 1 ;; esac
   plugin_name=$(jq -r '.name // empty' "$plugin_root/.claude-plugin/plugin.json" 2>/dev/null) || plugin_name=
-  [ "$(jq -rn --arg p "${1%%:*}" --arg n "${plugin_name:-fleet}" \
-    'def norm: gsub("^\\s+|\\s+$"; "") | ascii_downcase; ($p | norm) == ($n | norm)' 2>/dev/null)" = true ]
+  fleet_same=$(jq -rn --arg p "${1%%:*}" --arg n "${plugin_name:-fleet}" \
+    'def norm: gsub("^\\s+|\\s+$"; "") | ascii_downcase; ($p | norm) == ($n | norm)' 2>/dev/null) || return 2
+  case $fleet_same in true) return 0 ;; false) return 1 ;; *) return 2 ;; esac
 }

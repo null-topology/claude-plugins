@@ -28,7 +28,7 @@ import time
 import yaml  # the agents' frontmatter is checked with a YAML parser
 
 SCRIPTS = ("subagent-guard.sh", "fleet-rules.sh", "generate-agents.sh", "sync-agents.sh",
-           "seed-rules.sh", "delegation-contract.sh")
+           "seed-rules.sh", "delegation-contract.sh", "mcp-policy.sh")
 REFERENCE = "skills/selecting-subagent-model/references/benchmark.md"
 SYNC_COMMAND = 'sh "${CLAUDE_PLUGIN_ROOT}/scripts/sync-agents.sh" "${CLAUDE_PLUGIN_ROOT}" "${CLAUDE_PLUGIN_DATA}"'
 

@@ -53,5 +53,7 @@
     }
   },
   "disallowed_skills": ["code-review", "ultrareview", "simplify", "security-review"],
-  "disallowed_commands": ["sudo", "doas", "claude"]
+  "disallowed_commands": ["sudo", "doas", "claude"],
+  "allowed_mcp_tools": [],
+  "disallowed_mcp_tools": []
 }

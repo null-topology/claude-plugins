@@ -53,6 +53,9 @@ def main():
               and not handlers[0].get("async", False))
     check("configuration/existing guard retained", any(g.get("matcher") == "Agent|Bash|Skill|Workflow"
           and any("subagent-guard.sh" in h.get("command", "") for h in g.get("hooks", [])) for g in groups))
+    check("configuration/MCP tools run the guard in MCP mode", [g.get("hooks") for g in groups
+          if g.get("matcher") == "^mcp__.*$"] == [[{"type": "command", "timeout": 5, "command":
+          'sh "${CLAUDE_PLUGIN_ROOT}/scripts/subagent-guard.sh" "${CLAUDE_PLUGIN_ROOT}" "${CLAUDE_PLUGIN_DATA}" mcp'}]])
     start_groups = hooks.get("SubagentStart", [])
     check("configuration/SubagentStart runs the guard for every agent type",
           len(start_groups) == 1 and "matcher" not in start_groups[0]
@@ -63,7 +66,7 @@ def main():
         fixture = Path(temporary) / "fleet"
         (fixture / "agents").mkdir(parents=True)
         (fixture / "scripts").mkdir()
-        for filename in ("subagent-guard.sh", "fleet-rules.sh", "delegation-contract.sh"):
+        for filename in ("subagent-guard.sh", "fleet-rules.sh", "mcp-policy.sh", "delegation-contract.sh"):
             shutil.copyfile(root / "scripts" / filename, fixture / "scripts" / filename)
         # One agent per model, named by its id. The fleet and each model's levels come from the
         # rules: fixture-forbidden has a definition and benchmark data but the rules do not mention
@@ -280,7 +283,7 @@ def main():
         # agents and shipped rules. Every one of them gave another exit code before the fix.
         real = Path(temporary) / "real"
         (real / "scripts").mkdir(parents=True)
-        for filename in ("subagent-guard.sh", "fleet-rules.sh"):
+        for filename in ("subagent-guard.sh", "fleet-rules.sh", "mcp-policy.sh"):
             shutil.copyfile(root / "scripts" / filename, real / "scripts" / filename)
         shutil.copytree(root / "agents", real / "agents")
         shutil.copyfile(root / "fleet.default.json", real / "fleet.default.json")
@@ -379,6 +382,64 @@ def main():
         ]
         for name, result, code, text in review_cases:
             check("review/" + name, result.returncode == code and not result.stdout
+                  and (text in result.stderr if code else not result.stderr),
+                  "rc=%r stderr=%r" % (result.returncode, result.stderr))
+
+        # ---- MCP tools and the agent-type queries, on the same copy ----------------------------
+        def review_mcp(raw, rules_text=None, extra_env=None):
+            """review, with the guard in MCP mode as the ^mcp__.*$ group runs it."""
+            run_env = dict(env, **(extra_env or {}))
+            if rules_text is not None:
+                review_rules.write_text(rules_text)
+                run_env["FLEET_RULES"] = str(review_rules)
+            return subprocess.run(shell + [str(real / "scripts/subagent-guard.sh"), str(real), "", "mcp"], input=raw,
+                                  text=True, capture_output=True, timeout=10, env=run_env)
+
+        def mcp_call(caller=None, tool="mcp__gateway__vault__search"):
+            data = {"hook_event_name": "PreToolUse", "tool_name": tool, "tool_input": {"query": "q"},
+                    "transcript_path": "/home/u/.claude/projects/p/s1.jsonl"}
+            if caller:
+                data.update(agent_type=caller, agent_id="a1")
+            return json.dumps(data)
+
+        shipped = json.loads((root / "fleet.default.json").read_text())
+        prefix_failing = Path(temporary) / "prefix-failing-jq"
+        prefix_failing.mkdir()
+        (prefix_failing / "jq").write_text("#!/bin/sh\ncase \"$*\" in *ascii_downcase*) exit 5 ;; esac\nexec '%s' \"$@\"\n"
+                                           % shutil.which("jq"))
+        (prefix_failing / "jq").chmod(0o755)
+        prefix_env = {"PATH": "%s%s%s" % (prefix_failing, os.pathsep, env.get("PATH", ""))}
+        mcp_cases = [
+            ("the main session's MCP call passes", review_mcp(mcp_call()), 0, ""),
+            ("the main session's MCP call passes while the rules file is invalid", review_mcp(mcp_call(), "{"), 0, ""),
+            ("a built-in subagent's MCP call passes", review_mcp(mcp_call("Explore")), 0, ""),
+            ("a fleet agent's MCP call passes with the shipped rules", review_mcp(mcp_call("fleet:gpt-6-luna")), 0, ""),
+            ("a global deny rule refuses a fleet agent's MCP call",
+             review_mcp(mcp_call("fleet:gpt-6-luna"), json.dumps(dict(shipped, disallowed_mcp_tools=["mcp__gateway__*"]))),
+             2, 'FLEET_MCP_DENIED: "mcp__gateway__vault__search": the global rule "mcp__gateway__*" denies it.'),
+            ("a global allow list without a match refuses a fleet agent's MCP call",
+             review_mcp(mcp_call("fleet:gpt-6-luna"), json.dumps(dict(shipped, allowed_mcp_tools=["mcp__mail__*"]))),
+             2, "no allow rule matches it (global and this agent's brief)."),
+            ("a global allow rule that matches lets a fleet agent's MCP call through",
+             review_mcp(mcp_call("fleet:gpt-6-luna"), json.dumps(dict(shipped, allowed_mcp_tools=["mcp__gateway__*"]))),
+             0, ""),
+            ("an invalid global list refuses a fleet agent's MCP call",
+             review_mcp(mcp_call("fleet:gpt-6-luna"), json.dumps(dict(shipped, allowed_mcp_tools=["gateway"]))),
+             2, "FLEET_MCP_ERROR: invalid MCP rules in %s" % review_rules),
+            ("an invalid global list leaves a fleet agent's Bash call alone",
+             review(fable_bash.replace("sudo ls", "ls"), json.dumps(dict(shipped, allowed_mcp_tools=["gateway"]))),
+             0, ""),
+            ("a failed prefix query refuses a fleet agent's MCP call",
+             review_mcp(mcp_call("fleet:gpt-6-luna"), None, prefix_env), 2, "could not be resolved"),
+            ("a failed prefix query refuses the main session's Agent call to a fleet:-prefixed type",
+             review(agent_call("fleet:gpt-6-luna", effort="high"), None, prefix_env), 2, "could not be resolved"),
+            ("an agent_id that is a number is refused, not read as the main session",
+             review(json.dumps({"hook_event_name": "PreToolUse", "tool_name": "Agent", "agent_id": 7,
+                                "agent_type": "fleet:gpt-6-luna", "tool_input": {"subagent_type": "Explore"}})),
+             2, "strings or null"),
+        ]
+        for name, result, code, text in mcp_cases:
+            check("mcp/" + name, result.returncode == code and not result.stdout
                   and (text in result.stderr if code else not result.stderr),
                   "rc=%r stderr=%r" % (result.returncode, result.stderr))
 
