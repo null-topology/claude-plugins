@@ -524,8 +524,8 @@ deny:
 - A line that is exactly `---` closes the block and ends in a line break. The task follows it.
 - Nothing else is allowed inside: no comments, blank lines, inline lists or other keys. A key
   holds at most 256 rules, and a block that starts at line 1 is read within the first 520 lines
-  of the brief. A block that does not start at line 1 is looked for separately, down to the first
-  `## ` heading with no line limit, and refused.
+  of the brief. A block that does not start at line 1, a second block after the first included,
+  is looked for separately, down to the first `## ` heading with no line limit, and refused.
 
 For the agent that receives the brief, the `allow` rules of the block add to the global allow list
 and its `deny` rules to the global deny list. The block belongs to the message that starts the
@@ -577,7 +577,9 @@ says otherwise.
 - `FLEET_MCP_ERROR: <text>` marks a call that could not be checked, followed by `The tool is not
   available until this is fixed: do not retry the call or reach the tool another way; report the
   error.` The texts are `invalid MCP rules in <path>` (a global list is invalid), `invalid tool
-  name`, `invalid transcript binding` (an unsafe agent id or transcript path, or metadata that
+  name`, `agent type missing` (the host's payload names a subagent without its type, so the guard
+  cannot tell whether it is a fleet agent), `invalid transcript binding` (an unsafe agent id or
+  transcript path, or metadata that
   names a type that is not a fleet agent's), `agent brief unavailable` (a missing, symlinked,
   oversized or wrongly shaped metadata file or transcript record), `agent ancestry unavailable` (a
   missing parent, a repeated id, more than 32 agents, or no string `agentType`), `invalid agent
@@ -665,12 +667,18 @@ uv run tests/mcp/test_binding.py --fleet-root . --shell /bin/sh
   refuses every checked call and the sync leaves `agents/` as it is, as for any invalid file (see
   [The rules file](#the-rules-file)). An empty fleet is written `{}` or `null`.
 - The MCP tool lists guard cooperating agents and trusted local files; they are not a security
-  boundary. An agent that can write files can rewrite its own transcript or metadata, a damaged
-  file that still parses cannot be told from a valid one, and a tool name says nothing about what
-  the tool does, so a tool that dispatches other tools, or a built-in tool that reaches the same
-  service, is outside the policy.
+  boundary. They decide MCP calls and nothing else. An agent that also has a shell or a tool that
+  writes files can get around them: it can rewrite its own transcript or metadata, change or
+  remove the rules file (once `<data dir>/fleet.json` is gone, the shipped default with its empty
+  lists is in force), edit the plugin's scripts, start a session of its own, which is a main
+  session and not governed, or ask an agent that is not governed to make the call. Where the MCP
+  access of an agent matters, keep such tools from it by the host's own means. A damaged file that
+  still parses cannot be told from a valid one, and a tool name says nothing about what the tool
+  does, so a tool that dispatches other tools, or a built-in tool that reaches the same service,
+  is outside the policy.
 - The main session, subagents that are not fleet agents and built-in tools are not governed by the
-  MCP lists.
+  MCP lists. An agent of a built-in type (`general-purpose`, `Explore` and the like) or of another
+  plugin calls any MCP tool, a globally denied one included.
 - Fleet has no inventory of MCP tools. A rule that matches nothing, a misspelled one included, is
   not reported, and neither is a grant that can never work.
 - The binding of a call to the briefs above it reads the host's transcript layout: the metadata
@@ -689,6 +697,15 @@ uv run tests/mcp/test_binding.py --fleet-root . --shell /bin/sh
   does not block: the call goes through.
 - A brief to a fleet agent that opens with `---` for another purpose is refused, because the line
   starts the block. A block works for fleet agents only.
+- A block is recognised only by the exact lines described under
+  [The block for one spawn](#the-block-for-one-spawn). Text that merely looks like one (`----`, an
+  invisible character before `---`, other dash characters, lines not separated by a line feed, a
+  block below the first `## ` heading) is plain text of the brief: the brief is accepted and those
+  rules do not apply.
+- Measured on Claude Code 2.1.325, in the CLI and under an SDK host: agents started in the
+  foreground and in the background, nested agents, and a chain that passes through an agent that
+  is not a fleet agent. Not verified: forks, teammates, the host's own compaction inside a
+  subagent, and a main session resumed while a subagent runs.
 - Upgrading from 0.10.0: an existing `fleet.json` has neither MCP key, so both lists read as empty
   and no rule refuses an MCP call by name until a list or a block is set. Two things apply
   regardless: the guard now sees every MCP call of a subagent, so such a call is refused where
