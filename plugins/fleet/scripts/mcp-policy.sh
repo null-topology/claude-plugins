@@ -483,12 +483,16 @@ mcp_bind() {
       return 1
     fi
     # One line, the verdict letter and the parent id, then the type and a closing dot, so that a
-    # type ending in line breaks keeps them.
+    # type ending in line breaks keeps them. The host's spawnDepth, when present and not null, must
+    # be a number, and an agent it places below another (a depth over 1) must name that agent:
+    # otherwise the walk would end there as at the top and skip the lists of the agents above.
     mcp_out=$(jq -Rrs '
       try fromjson catch null
       | if type != "object" or (.parentAgentId | . == null or type == "string" | not) then "S"
         elif (.agentType | type) != "string" then "T"
         elif .parentAgentId != null and (.parentAgentId | test("\\A[A-Za-z0-9_-]+\\z") | not) then "U"
+        elif (.spawnDepth | . == null or type == "number" | not)
+          or (.parentAgentId == null and .spawnDepth > 1) then "T"
         else "P" + (.parentAgentId // "") + "\n" + .agentType + "."
         end' "$mcp_file" 2>/dev/null) || {
       mcp_fault='the policy could not be evaluated'

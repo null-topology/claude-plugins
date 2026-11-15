@@ -115,12 +115,15 @@ def main():
             (directory / "subagents").mkdir(parents=True)
             return directory
 
-        def write_agent(sess, agent_id, kind=FLEET, parent=None, text=BODY, meta=None, record=None):
+        def write_agent(sess, agent_id, kind=FLEET, parent=None, text=BODY, meta=None, record=None, depth=None):
             """One agent's metadata and transcript, of the shapes the host writes; False leaves a
-            file out, a string is written as it is."""
+            file out, a string is written as it is. depth is the host's spawnDepth, one more than
+            the agent above: 1 by default without a parent, 2 with one; a longer chain passes it."""
             folder = sess / "subagents"
             if meta is None:
-                meta = {"agentType": kind, "toolUseId": "toolu-" + agent_id, "spawnDepth": 1}
+                if depth is None:
+                    depth = 1 if parent is None else 2
+                meta = {"agentType": kind, "toolUseId": "toolu-" + agent_id, "spawnDepth": depth}
                 if parent is not None:
                     meta["parentAgentId"] = parent
             if meta is not False:
@@ -139,7 +142,7 @@ def main():
             sess = sess or session()
             for index, (agent_id, kind, text) in enumerate(agents):
                 parent = agents[index + 1][0] if index + 1 < len(agents) else None
-                write_agent(sess, agent_id, kind, parent, text)
+                write_agent(sess, agent_id, kind, parent, text, depth=len(agents) - index)
             return sess
 
         def call(sess, tool=VAULT, agent_id="a1", caller=FLEET, **extra):
@@ -290,7 +293,7 @@ def main():
         passes("chain/fleet, other, fleet: the other agent's brief is not read",
                guard(call(s, "mcp__gateway__kb__read")))
         s = session()
-        write_agent(s, "a1", FLEET, "e1")
+        write_agent(s, "a1", FLEET, "e1", depth=3)
         write_agent(s, "e1", "Explore", "g1", record=False)
         write_agent(s, "g1", FLEET, None, brief(deny=[VAULT]))
         passes("chain/an agent above that is not a fleet agent needs no first record",
@@ -483,6 +486,64 @@ def main():
         passes("ancestry/32 agents are followed", guard(call(s)))
         s = chain(agents + [("p33", SOL, BODY)])
         fault("ancestry/a 33rd agent", guard(call(s)), ANCESTRY)
+        # The host's spawnDepth: an agent it places below another must name that agent, or the walk
+        # would end there as at the top and skip the lists of the agents above.
+        denying = brief(deny=[VAULT])
+        s = session()
+        write_agent(s, "a1", FLEET, depth=2)
+        write_agent(s, "p1", SOL, text=denying)
+        fault("ancestry/the caller at depth 2 without a parent, the agent above denying the tool", guard(call(s)),
+              ANCESTRY)
+        s = session()
+        write_agent(s, "a1", meta={"agentType": FLEET, "toolUseId": "toolu-a1", "parentAgentId": None,
+                                   "spawnDepth": 2})
+        write_agent(s, "p1", SOL, text=denying)
+        fault("ancestry/the caller at depth 2 with a null parent", guard(call(s)), ANCESTRY)
+        s = session()
+        write_agent(s, "a1", FLEET, "p1", depth=3)
+        write_agent(s, "p1", SOL, depth=2)
+        write_agent(s, "g1", FLEET, text=denying)
+        fault("ancestry/a fleet agent in the middle of a chain at depth 2 without a parent", guard(call(s)), ANCESTRY)
+        s = session()
+        write_agent(s, "a1", FLEET, "e1", depth=3)
+        write_agent(s, "e1", "Explore", depth=2, record=False)
+        write_agent(s, "g1", FLEET, text=denying)
+        fault("ancestry/an agent that is not a fleet agent in the middle at depth 2 without a parent", guard(call(s)),
+              ANCESTRY)
+        for label, depth in (("a string", "2"), ("the string 1", "1"), ("a boolean", True), ("an array", [1])):
+            s = session()
+            write_agent(s, "a1", FLEET, depth=depth)
+            fault("ancestry/the caller's spawnDepth %s, without a parent" % label, guard(call(s)), ANCESTRY)
+        s = session()
+        write_agent(s, "a1", FLEET, "p1", depth=3)
+        write_agent(s, "p1", SOL, "g1", depth="2")
+        write_agent(s, "g1", FLEET)
+        fault("ancestry/a spawnDepth above that is a string, with its parent named", guard(call(s)), ANCESTRY)
+        s = session()
+        write_agent(s, "a1", FLEET, depth=1)
+        write_agent(s, "p1", SOL, text=denying)
+        passes("ancestry/the caller at depth 1 without a parent is the top of its chain", guard(call(s)))
+        s = session()
+        write_agent(s, "a1", FLEET, "p1", depth=2)
+        write_agent(s, "p1", SOL, text=denying)
+        denied("ancestry/the caller at depth 2 with its parent is bound to the agent above", guard(call(s)), VAULT,
+               above_deny(VAULT, "p1"))
+        s = session()
+        write_agent(s, "a1", FLEET, "p1", depth=1)
+        write_agent(s, "p1", SOL, text=denying)
+        denied("ancestry/a parent named at depth 1 is still followed", guard(call(s)), VAULT, above_deny(VAULT, "p1"))
+        for label, extra in (("absent", {}), ("null", {"spawnDepth": None})):
+            s = session()
+            write_agent(s, "a1", meta=dict({"agentType": FLEET, "toolUseId": "toolu-a1"}, **extra))
+            write_agent(s, "p1", SOL, text=denying)
+            passes("ancestry/spawnDepth %s, without a parent: the caller is the top of its chain" % label,
+                   guard(call(s)))
+            s = session()
+            write_agent(s, "a1", meta=dict({"agentType": FLEET, "toolUseId": "toolu-a1", "parentAgentId": "p1"},
+                                           **extra))
+            write_agent(s, "p1", meta=dict({"agentType": SOL, "toolUseId": "toolu-p1"}, **extra), text=denying)
+            denied("ancestry/spawnDepth %s, with a parent: the agent above binds" % label, guard(call(s)), VAULT,
+                   above_deny(VAULT, "p1"))
 
         # ---- the other results -------------------------------------------------------------------
         s = chain([("a1", FLEET, brief(deny=[VAULT]))])

@@ -586,7 +586,8 @@ says otherwise.
   transcript path, a path that holds a control character included, or metadata that names a type
   that is not a fleet agent's), `agent brief unavailable` (a missing, symlinked,
   oversized or wrongly shaped metadata file or transcript record), `agent ancestry unavailable` (a
-  missing parent, a repeated id, more than 32 agents, or no string `agentType`), `invalid agent
+  missing parent, a repeated id, more than 32 agents, no string `agentType`, or metadata whose
+  `spawnDepth` is not a number or is over 1 while it names no agent above), `invalid agent
   brief` (the block of a fleet agent in the chain is invalid) and `the policy could not be
   evaluated`. The global deny list is checked before the agent's files are read, so a call that a
   global deny rule matches gets `FLEET_MCP_DENIED` whatever the state of those files.
