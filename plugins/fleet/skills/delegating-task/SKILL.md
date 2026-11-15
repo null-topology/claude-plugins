@@ -138,7 +138,8 @@ claim, how to verify, and where to stop, without guessing?
 
 The fleet rules hold two global lists of MCP tools, an allow list and a deny list. While either
 is not empty, a summary of the ones in force is added to the context of a session when it
-starts and of a fleet agent when it starts. A brief to a fleet agent
+starts and of a fleet agent when it starts; while they are invalid or cannot be read, that
+summary is one warning line saying so. A brief to a fleet agent
 may add lists of its own for that agent. They are optional: leave them out when the global
 lists fit the task.
 
@@ -164,38 +165,45 @@ How the lists act:
 - The block's allow rules add to the global allow list, and its deny rules to the global deny
   list, for the agent that receives the brief. An allow list that is empty permits every tool
   that no deny rule matches.
+- A deny mask refuses only the names it matches: denying `mcp__tickets__create_*` leaves
+  `mcp__tickets__add_comment` allowed, so listing write-looking prefixes does not make a task
+  read-only. Name the tools the task needs in allow rules instead.
 - A call passes only when that agent and every fleet agent above it permit the tool, so a
   grant never reaches beyond its caller: a brief cannot hand on a tool the agent writing it
-  may not use, and a deny binds everything the receiving agent spawns.
+  may not use, and a deny binds every fleet agent below the receiving agent. An agent of
+  another type that a fleet agent spawns is not governed by these lists.
 - So, while the global allow list is empty, an allow block narrows: the receiving agent and
-  the agents it spawns get only the tools it lists. While the global allow list is not empty,
-  an allow block widens the receiving agent's own list; an agent it spawns uses a granted
-  tool beyond the global list only when its own brief grants it too.
-- The block is read once, from the message that starts the agent, and holds for the agent's
-  whole life. A follow-up message cannot change it; spawn a new agent for other lists.
+  the fleet agents below it get only the tools it lists, minus what a deny rule matches. While
+  the global allow list is not empty, an allow block widens the receiving agent's own list; a
+  fleet agent below it uses a granted tool beyond the global list only when its own brief
+  grants it too.
+- The block belongs to the message that starts the agent: the guard reads it from the agent's
+  stored first message at every MCP call. A follow-up message therefore cannot change it;
+  spawn a new agent for other lists.
 - Only fleet agents take a block. A brief to any other agent type, or with no type, that
   opens with one is refused.
 - A brief to a fleet agent must not open with `---` for another purpose, such as other front
   matter or a thematic break: it is read as a block and refused. A block placed below other
   text, above the first heading, is refused too, rather than ignored.
 
-Example: a read-only task on one server that keeps writes out.
+Example: a read-only task on one server, its read tools named in allow rules.
 
 ```text
 ---
 allow:
-  - "mcp__tickets__*"
+  - "mcp__tickets__search_*"
+  - "mcp__tickets__get_*"
 deny:
-  - "mcp__tickets__create_*"
-  - "mcp__tickets__update_*"
+  - "mcp__tickets__get_attachment"
 ---
 ## Objective
 ...
 ```
 
-With an empty global allow list, the agent and its sub-agents reach only the `tickets` tools
-whose names do not start with `create_` or `update_`. `examples/mcp-tool-lists.md` holds the
-whole brief.
+While the global allow list is empty, the agent and the fleet agents below it reach only the
+`tickets` tools whose names start with `search_` or `get_`, except `get_attachment`: the deny
+rule wins inside what the allow rules admit. `examples/mcp-tool-lists.md` holds the whole
+brief.
 
 ## When a call is refused
 

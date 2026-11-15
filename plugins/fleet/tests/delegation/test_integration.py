@@ -13,14 +13,19 @@ import tempfile
 
 from test_contract import brief
 
-# The two bullets the agent template carries for the MCP tool policy: the first verbatim from the
-# design, the second a stable part of it.
+# The two bullets the agent template carries for the MCP tool policy, each whole: the first verbatim
+# from the design, the second as the template words it.
 BRIEF_PROTECTION = (
     "- The task message that started you is your standing delegation brief. Never compress, summarize, "
     "truncate, rewrite or otherwise transform that message with any context-management tool or "
     "instruction, under any conditions, even when you are asked to or when it is listed as a "
     "compression candidate. Keep it verbatim for the whole session.\n")
-MCP_BULLET = "- A refused MCP tool call is final, like any other guard refusal"
+MCP_BULLET = (
+    "- A refused MCP tool call is final, like any other guard refusal: do not retry it or reach the tool "
+    "another way; report what needed it. Your own MCP tool lists, if you have any, are the front matter at "
+    "the top of your brief (`allow:` and `deny:` between two `---` lines); the global lists, when there are "
+    "any, are summarized in the fleet MCP tool rules you were given with your other fleet limits when you "
+    "started (at most four rules of each list), and the rules file named there holds all of them.\n")
 
 
 def main():
@@ -684,12 +689,16 @@ def main():
                       ("\nmodel: %s" % model) in header and "\neffort:" not in header
                       and (("named effort on every Agent call: %s," % levels) in header if levels
                            else "the caller passes no effort" in header), header)
-        # The shipped agents are rendered from the template, so each carries both bullets.
+        # The template carries both bullets whole, and the shipped agents rendered from it each do too.
+        template = (root / "templates/agent.md").read_text()
+        check("template/the agent template carries the brief-protection and MCP bullets",
+              BRIEF_PROTECTION in template and MCP_BULLET in template, template)
         shipped = sorted((root / "agents").glob("*.md"))
         check("agents/every shipped agent carries the brief-protection and MCP bullets",
               len(shipped) > 0 and all(BRIEF_PROTECTION in p.read_text() and MCP_BULLET in p.read_text()
                                        for p in shipped),
-              [p.name for p in shipped if BRIEF_PROTECTION not in p.read_text() or MCP_BULLET not in p.read_text()])
+              ", ".join(p.name for p in shipped
+                        if BRIEF_PROTECTION not in p.read_text() or MCP_BULLET not in p.read_text()))
     for error in errors:
         print("FAIL " + error, file=sys.stderr)
     print("\nIntegration checks: %d; failures: %d" % (count, len(errors)))

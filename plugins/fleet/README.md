@@ -81,7 +81,8 @@ policy written in one place.
 - `scripts/sync-agents.sh` — the `SessionStart` and `FileChanged` hook that seeds the rules file
   on startup, keeps `agents/` to what the rules reach, watches the rules file and tells each
   session when its agent list is out of date. At every session start it also adds the summary of
-  the MCP tool lists to the session's context, while a list is set.
+  the MCP tool lists to the session's context, while a list is set or the lists are invalid (then
+  as one warning line).
 - `scripts/seed-rules.sh` — the one-time copy of the default rules, run by the sync on startup.
 - `skills/selecting-subagent-model` — how to pick a model and effort for a task: the user's
   standing overrides first, then `references/task-routing.md` (the model family per class of
@@ -494,8 +495,9 @@ case-sensitive and covers the whole tool name. A rule is 1 to 256 bytes of lette
 `.`, `*` and `-`, and starts with `mcp__` or `*`. There is no `?`, no regular expression and no
 server shorthand: a whole server is the mask `mcp__<server>__*`. A mask without the closing `__`
 reaches further than a server: `mcp__hub*` also matches every server whose name starts with `hub`,
-such as `hub2`, and `mcp__hub__*` also matches a server whose own name begins with `hub__`. A tool
-name with a character outside printable ASCII is refused with `FLEET_MCP_ERROR: invalid tool name`.
+such as `hub2`, and `mcp__hub__*` also matches a server named `hub_` and a server whose own name
+begins with `hub__`. A tool name with a character outside printable ASCII is refused with
+`FLEET_MCP_ERROR: invalid tool name`.
 
 ### The block for one spawn
 
@@ -520,15 +522,19 @@ deny:
   string holding a valid rule.
 - A line that is exactly `---` closes the block and ends in a line break. The task follows it.
 - Nothing else is allowed inside: no comments, blank lines, inline lists or other keys. A key
-  holds at most 256 rules, and only the first 520 lines of the brief are examined for the block.
+  holds at most 256 rules, and a block that starts at line 1 is read within the first 520 lines
+  of the brief. A block that does not start at line 1 is looked for separately, down to the first
+  `## ` heading with no line limit, and refused.
 
 For the agent that receives the brief, the `allow` rules of the block add to the global allow list
-and its `deny` rules to the global deny list. The block is read from the agent's first record in
-its stored transcript, so it is fixed for the agent's life: a later message to the agent cannot
-change it, and neither can the agent. The block works for fleet agents only: a brief to any other
-agent type, or to none, whose line 1 is `---` and whose line 2 starts with `allow:` or `deny:` is
-refused. A brief to a fleet agent that opens with `---` for another purpose is refused too, as is a
-block that sits below other text but above the first `## ` heading.
+and its `deny` rules to the global deny list. The block belongs to the message that starts the
+agent: the guard reads it from the agent's stored first message, the first record of its
+transcript, at every MCP call, so a follow-up message cannot change it; spawn a new agent for other
+lists. That transcript is a local file the plugin trusts (see [Limits](#limits)). The block works
+for fleet agents only: a brief to any other agent type, or to none, whose line 1 is `---` and
+whose line 2 starts with `allow:` or `deny:` is refused. A brief to a fleet agent that opens with
+`---` for another purpose is refused too, as is a block that sits below other text but above the
+first `## ` heading.
 
 ### How a call is decided
 
@@ -607,7 +613,7 @@ tool rules in <path> could not be made.`
 The definition of every generated agent carries a standing instruction: the task message that
 started the agent is its delegation brief, and it must never compress, summarize, truncate or
 rewrite that message, even when asked to or when a tool lists it as a candidate. An agent whose
-first message is transformed loses the knowledge of its own lists. This is an instruction a model
+first message is transformed may no longer know its own lists. This is an instruction a model
 follows, not a mechanism. Enforcement does not depend on it, because the guard reads the stored
 transcript, not what the agent holds in its context.
 
@@ -667,9 +673,9 @@ uv run tests/mcp/test_binding.py --fleet-root . --shell /bin/sh
 - Fleet has no inventory of MCP tools. A rule that matches nothing, a misspelled one included, is
   not reported, and neither is a grant that can never work.
 - The binding of a call to the briefs above it reads the host's transcript layout: the metadata
-  file `agent-<id>.meta.json` and the transcript `agent-<id>.jsonl` beside the session's
-  transcript. If that layout changes, every MCP call of a fleet subagent is refused with a reason
-  and none passes.
+  file `agent-<id>.meta.json` and the transcript `agent-<id>.jsonl` in the directory
+  `<session transcript path without .jsonl>/subagents/`. If that layout changes, every MCP call
+  of a fleet subagent is refused with a reason and none passes.
 - Without `jq` or a readable rules file, the MCP calls of subagents are refused. The main
   session's MCP calls pass without either, unless the payload's text holds `"agent_id"` (in a
   tool argument, say), which takes the full checks.
