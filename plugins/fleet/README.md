@@ -618,6 +618,12 @@ is made and is not refreshed when the file changes during the session, while enf
 the file at every call. If the sync cannot make the session's summary, it reports `fleet: the
 summary of the MCP tool rules in <path> could not be made.`
 
+The summary holds the global lists only. An agent sees its own lists in its brief. It sees the
+lists of the fleet agents above it only when its caller repeated them in its block; otherwise it
+learns of them from a refusal, which names the agent and the rule. So an agent whose own brief
+carries a block should repeat the rules that bind the agent it spawns in that agent's block, as
+the `fleet:delegating-task` skill says.
+
 ### The delegation brief stays whole
 
 The definition of every generated agent carries a standing instruction: the task message that
@@ -694,8 +700,9 @@ uv run tests/mcp/test_binding.py --fleet-root . --shell /bin/sh
   `<session transcript path without .jsonl>/subagents/`. If that layout changes, every MCP call
   of a fleet subagent is refused with a reason and none passes.
 - Without `jq` or a readable rules file, the MCP calls of subagents are refused. The main
-  session's MCP calls pass without either, unless the payload's text holds `"agent_id"` (in a
-  tool argument, say), which takes the full checks.
+  session's MCP calls pass without either, unless a tool argument has a key named `agent_id`:
+  the guard then needs `jq` and a rules file that exists to tell whose call it is, and refuses
+  the call without them.
 - The guard's 3-second deadline is wall-clock time, so on a stalled machine a valid MCP call can
   be refused. The time grows with the length of the chain and with the sizes of briefs and lists,
   and their stated maxima taken together exceed the limit.

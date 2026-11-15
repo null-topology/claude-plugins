@@ -180,6 +180,10 @@ How the lists act:
   the global allow list is not empty, an allow block widens the receiving agent's own list; a
   fleet agent below it uses a granted tool beyond the global list only when its own brief
   grants it too.
+- A fleet agent is told the global lists at its start, but not the lists of the agents above
+  it. When your own brief carries a block, repeat its rules, or narrower ones, in the block of
+  each fleet agent you spawn, so that the agent sees what binds it before it calls a tool
+  instead of learning it from a refusal.
 - The block belongs to the message that starts the agent: the guard reads it from the agent's
   stored first message at every MCP call. A follow-up message therefore cannot change it;
   spawn a new agent for other lists.
