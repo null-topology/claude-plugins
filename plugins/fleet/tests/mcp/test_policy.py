@@ -283,6 +283,21 @@ def main():
             check("summary/invalid: %s gives the one line" % label, code == 0 and out == invalid_line,
                   (code, out, err))
 
+        # The control characters of the path are shown as "?": a line break cannot add lines and an
+        # escape does not reach the text. The file is still read by the path as given.
+        control_path = "/rules\ndir/with\rcontrol\tcharacters\x1b[31m\x7f/fleet.json"
+        control_shown = "/rules?dir/with?control?characters?[31m?/fleet.json"
+        code, out, err = summary({"allowed_mcp_tools": ["mcp__kb__*"], "disallowed_mcp_tools": ["*__send_*"]},
+                                 control_path)
+        lines = out.split("\n")
+        check("summary/a path with LF, CR, TAB, ESC and DEL: seven lines, each control character shown as ?",
+              code == 0 and len(lines) == 7 and all(lines)
+              and lines[0].startswith("Fleet MCP tool rules (rules file in force: %s;" % control_shown)
+              and not any(character in out for character in "\r\t\x1b\x7f"), (code, out, err))
+        code, out, err = summary("{ not json", control_path)
+        check("summary/invalid lists and a path with LF, CR, TAB, ESC and DEL: the one line",
+              code == 0 and out == invalid_line.replace(shown_path, control_shown), (code, out, err))
+
         # A failure of the formatting query itself is not an answer.
         stub = Path(temporary) / "stub"
         stub.mkdir()

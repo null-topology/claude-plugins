@@ -1492,6 +1492,45 @@ def main():
         code, out, err = sync(root, data, session_start("clear", "mcp-override"), env)
         check("mcp/FLEET_RULES set: every session start carries the summary again",
               code == 0 and "Fleet MCP tool rules (rules file in force: %s;" % override in context_of(out), (code, out))
+        for source_name in ("compact", "resume"):
+            code, out, err = sync(root, data, session_start(source_name, "mcp-override"), env)
+            check("mcp/FLEET_RULES set: a %s start carries the summary as well" % source_name,
+                  code == 0 and "Fleet MCP tool rules (rules file in force: %s;" % override in context_of(out),
+                  (code, out))
+
+        # A FLEET_RULES path with control characters: valid hook JSON, each of them shown as "?" in the
+        # summary, which keeps its seven lines (the warning its one). The summary ends the context, or
+        # is followed only by the notice.
+        def summary_lines(output):
+            context = context_of(output)
+            start = context.find("Fleet MCP tool rules")
+            if start < 0:
+                return []
+            text = context[start:]
+            if message(output):
+                text = text[:-(len(message(output)) + 1)]
+            return text.split("\n")
+
+        control_dir = base / "mcp\nrules\rdir\twith\x1b[31m\x7f"
+        control_dir.mkdir()
+        control_override = control_dir / "fleet.json"
+        control_shown = str(control_override).translate({point: "?" for point in list(range(32)) + [127]})
+        control_env = {"FLEET_RULES": str(control_override)}
+        control_override.write_text(json.dumps(dict(SYNTHETIC_CASES[5][1], **mcp_lists)))
+        code, out, err = sync(root, data, session_start("startup", "mcp-control"), control_env)
+        lines = summary_lines(out)
+        check("mcp/a FLEET_RULES path with LF, CR, TAB, ESC and DEL: valid hook JSON, the summary in seven lines",
+              code == 0 and isinstance(out, dict) and len(lines) == 7
+              and lines[0].startswith("Fleet MCP tool rules (rules file in force: %s;" % control_shown),
+              (code, out, err))
+        control_override.write_text(json.dumps(dict(SYNTHETIC_CASES[5][1], allowed_mcp_tools="mcp__mail__*")))
+        code, out, err = sync(root, data, session_start("startup", "mcp-control"), control_env)
+        check("mcp/invalid MCP lists under a FLEET_RULES path with LF, CR, TAB, ESC and DEL: valid hook JSON, "
+              "the one line",
+              code == 0 and isinstance(out, dict) and summary_lines(out) == [
+                  "Fleet MCP tool rules: the MCP rules in %s are invalid or could not be read, so every MCP call of a "
+                  "fleet subagent is refused until the file is fixed." % control_shown], (code, out, err))
+
         code, out, err = sync(root, data, session_start("startup", "mcp-plain"))
         check("mcp/without FLEET_RULES, both MCP lists empty: no MCP text in the context",
               code == 0 and seeded.is_file() and "MCP" not in context_of(out), (code, out, err))

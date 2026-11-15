@@ -458,6 +458,32 @@ def main():
         rc, out, err, context = start(listed, extra_env=format_env)
         check("start/a failed summary query is an unexpected error, not a silent start",
               rc == 2 and not out and "stopped on an unexpected error" in err, (rc, out, err))
+        # Only the query of the second list fails: the lists cannot be read, which the summary states in
+        # its one line; the start is not stopped as an unexpected error.
+        pick_env = stub("pick-jq", "case \"$*\" in *'--argjson pick 1 '*) exit 5 ;; esac")
+        rc, out, err, context = start(listed, extra_env=pick_env)
+        check("start/a failed query of the second list: the one line, not an unexpected error",
+              rc == 0 and not err and context == "Fleet MCP tool rules: the MCP rules in %s are invalid or could not "
+              "be read, so every MCP call of a fleet subagent is refused until the file is fixed." % rules_file,
+              (rc, out, err))
+        # A rules path with control characters: valid hook JSON, each of them shown as "?", so the
+        # summary keeps its seven lines and the warning its one.
+        control_dir = base / "rules\ndir\rwith\tcontrol\x1b[31m\x7f"
+        control_dir.mkdir()
+        control_rules = control_dir / "fleet.json"
+        control_shown = str(control_rules).translate({code: "?" for code in list(range(32)) + [127]})
+        control_env = {"FLEET_RULES": str(control_rules)}
+        control_rules.write_text(json.dumps(listed))
+        rc, out, err, context = start(None, extra_env=control_env)
+        check("start/a rules path with LF, CR, TAB, ESC and DEL: valid hook JSON, the summary in seven lines",
+              rc == 0 and not err and len(context.split("\n")) == 7
+              and context.startswith("Fleet MCP tool rules (rules file in force: %s;" % control_shown), (rc, out, err))
+        control_rules.write_text(json.dumps(dict(unlimited, allowed_mcp_tools="mcp__x")))
+        rc, out, err, context = start(None, extra_env=control_env)
+        check("start/invalid lists under a rules path with LF, CR, TAB, ESC and DEL: valid hook JSON, the one line",
+              rc == 0 and not err and context == "Fleet MCP tool rules: the MCP rules in %s are invalid or could not "
+              "be read, so every MCP call of a fleet subagent is refused until the file is fixed." % control_shown,
+              (rc, out, err))
 
         # Without the policy library nothing a fleet agent calls passes.
         bare = make_plugin("bare", scripts=("subagent-guard.sh", "fleet-rules.sh"))

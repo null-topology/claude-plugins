@@ -479,9 +479,11 @@ if [ "$event" = SubagentStart ]; then
   fleet_read '.disallowed_commands | denylist | map(select(length > 0)) | join(", ")'
   # Not "commands": zsh keeps a special associative array of that name.
   denied_commands=$fleet_lines
-  mcp_status=0
-  mcp_format "$rules" "$rules_path" || mcp_status=$?
-  [ "$mcp_status" = 0 ] || unexpected_error "$mcp_status"
+  # The status of the call itself, in a name no library function writes: mcp_lists sets
+  # mcp_status when a list cannot be read, which mcp_format answers with its one warning line.
+  summary_status=0
+  mcp_format "$rules" "$rules_path" || summary_status=$?
+  [ "$summary_status" = 0 ] || unexpected_error "$summary_status"
   [ -n "$skills$denied_commands$mcp_summary" ] || pass_call
   context=
   if [ -n "$skills$denied_commands" ]; then

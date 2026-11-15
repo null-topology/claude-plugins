@@ -225,17 +225,23 @@ mcp_lists_pick() {
 # (a rule has at most 256 bytes) and the rest are counted and left to the rules file. The fixed
 # text is about 1,200 characters and two full lists add about 2,200 more, so the summary stays
 # under 5,000 characters for a path of up to 1,600 bytes; the path is named once.
+#
+# The path is shown with every control character (U+0000-U+001F, U+007F) replaced by "?", so a
+# line break or an escape in it cannot add lines to the summary or reach a terminal: the summary
+# is always seven lines, or one. The file is still read by the path as given. tr works on bytes in
+# the C locale, so every other character, quotes and backslashes included, is shown unchanged.
 mcp_format() {
   mcp_summary=
   mcp_format_status=0
   mcp_lists "$1" || mcp_format_status=$?
+  [ "$mcp_format_status" != 0 ] || [ "$mcp_allow$mcp_deny" != '[][]' ] || return 0
+  mcp_format_path=$(printf '%s' "$2" | LC_ALL=C tr '\000-\037\177' '[?*]') || return 2
   if [ "$mcp_format_status" != 0 ]; then
-    mcp_summary="Fleet MCP tool rules: the MCP rules in $2 are invalid or could not be read, so every MCP call of a fleet subagent is refused until the file is fixed."
+    mcp_summary="Fleet MCP tool rules: the MCP rules in $mcp_format_path are invalid or could not be read, so every MCP call of a fleet subagent is refused until the file is fixed."
     return 0
   fi
-  [ "$mcp_allow$mcp_deny" != '[][]' ] || return 0
   # The lists reach jq on stdin: at full size they are past what a process argument may hold.
-  mcp_summary=$(printf '%s\n%s\n' "$mcp_allow" "$mcp_deny" | jq -rs --arg path "$2" '
+  mcp_summary=$(printf '%s\n%s\n' "$mcp_allow" "$mcp_deny" | jq -rs --arg path "$mcp_format_path" '
     def shown:
       if length <= 4 then join(", ")
       else (.[:4] | join(", ")) + " and \(length - 4) more, \(length) in all: read them in the rules file named above"
