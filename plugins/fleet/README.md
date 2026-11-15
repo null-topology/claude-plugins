@@ -52,7 +52,9 @@ policy written in one place.
   yours to edit and plugin updates never touch it. Every model id it mentions is described in
   `models.json`.
 - `scripts/subagent-guard.sh` — the guard, a `PreToolUse` hook on `Agent|Bash|Skill|Workflow`
-  declared once in the plugin's `hooks.json`. It tells the caller from the hook payload: an
+  declared in the plugin's `hooks.json`, which declares it a second time, with the argument `mcp`,
+  on `^mcp__.*$` for MCP tool calls (see [MCP tool lists](#mcp-tool-lists)). It tells the caller
+  from the hook payload: an
   empty `agent_id` means the main session, whatever `agent_type` says (the main session carries
   one when it runs as `claude --agent <name>`). Otherwise a fleet `agent_type` resolves to its
   definition or, when that file is gone, to a model the rules in force mention, and its model is
@@ -67,13 +69,19 @@ policy written in one place.
   refused, and the guard exits 0 or 2 on every path. An Agent call to a
   fleet agent, from the main session or from a fleet agent, must pass `effort` as a level the
   rules give that model (see [The call's effort](#the-calls-effort)). The same script is the
-  `SubagentStart` hook that hands a starting fleet agent its denylists. Needs `jq`.
+  `SubagentStart` hook that hands a starting fleet agent its denylists and, while an MCP list is
+  set, the summary of the MCP tool lists. Needs `jq`.
 - `scripts/fleet-rules.sh` — the rule readers, the rules-file validity test, the fleet models and
   their levels, and the agent-type resolution, sourced by the guard, the generator, the sync and
   the brief check, so all of them read the rules and tell a fleet agent the same way.
+- `scripts/mcp-policy.sh` — the MCP tool policy, sourced by the guard, the brief check and the
+  sync: rule validation and matching, the global lists, the reader of the per-spawn block, the
+  binding of a call to the briefs of the agents above it, the evaluation and the text of the
+  summary both start contexts carry. Needs `jq`.
 - `scripts/sync-agents.sh` — the `SessionStart` and `FileChanged` hook that seeds the rules file
   on startup, keeps `agents/` to what the rules reach, watches the rules file and tells each
-  session when its agent list is out of date.
+  session when its agent list is out of date. At every session start it also adds the summary of
+  the MCP tool lists to the session's context, while a list is set.
 - `scripts/seed-rules.sh` — the one-time copy of the default rules, run by the sync on startup.
 - `skills/selecting-subagent-model` — how to pick a model and effort for a task: the user's
   standing overrides first, then `references/task-routing.md` (the model family per class of
@@ -84,8 +92,12 @@ policy written in one place.
 - `skills/delegating-task` — how to write the prompt for the agent that was picked, with worked
   examples under `examples/`.
 - `scripts/delegation-contract.sh` — a second `PreToolUse` hook, on `Agent` only, that checks the
-  shape of that prompt when the call targets a fleet agent. Needs `jq` and `awk`.
+  shape of that prompt when the call targets a fleet agent, and the grammar of the MCP block the
+  prompt may open with. Needs `jq` and `awk`.
 - `tests/delegation/` — fixture tests for the hook alone and next to the guard and the generator.
+- `tests/mcp/` — fixture tests for the MCP policy: `test_policy.py` for the matcher, the lists and
+  the evaluation, `test_guard.py` for the guard's supervisor and the global lists at a call,
+  `test_binding.py` for the per-spawn block and the binding to the agents above.
 - `tests/sync/` — fixture tests for the sync, with the guard as the oracle for reachability.
 
 ## Why one file per model
@@ -179,7 +191,9 @@ Every section is optional. `main.fleet`, `main.builtin_agent_models` and `rules`
 missing or empty, they allow everything (for `main.fleet` and `rules`, every fleet model at its
 levels); non-empty, they allow only what they list.
 `disallowed_skills` and `disallowed_commands` are denylists: what they list is refused, and an
-empty list refuses nothing.
+empty list refuses nothing. `allowed_mcp_tools` and `disallowed_mcp_tools` are an allowlist and a
+denylist of the same kind for MCP tools: missing or empty, the first restricts nothing and the
+second refuses nothing.
 
 ```json
 {
@@ -225,9 +239,19 @@ start a sol agent, and only a sol agent could start haiku, so the sync registers
   literally, as a whole word or phrase in the command line: `rm -rf` refuses `rm -rf x` and not
   `rm -r x`, and a character such as `.` or `(` is itself, not a pattern. `claude` is listed
   because a nested session would start with none of these rules.
+- `allowed_mcp_tools` and `disallowed_mcp_tools` — the global MCP tool lists of fleet subagents, a
+  list of rules each, both `[]` in the shipped default. A missing key or `null` reads as `[]`. While
+  no allow rule is in force, every MCP tool that no deny rule matches is allowed; an empty deny
+  list refuses nothing. A list holds at most 256 rules, each a string of 1 to 256 bytes (the form
+  of a rule is in [MCP tool lists](#mcp-tool-lists)). A list of another type, an entry that is not
+  a valid rule (a `null` entry too, unlike in the two denylists above) or more than 256 rules makes
+  both lists invalid, never truncated: every MCP call of a fleet subagent is then refused with
+  `FLEET_MCP_ERROR: invalid MCP rules in <path>` until the file is fixed, and the start contexts
+  say so. The rest of the rules file is not affected.
 
-An entry of either denylist is a string; a `null` entry denies nothing, and any other entry (a
-number, a list) is a configuration error that refuses every call that reads that list.
+An entry of `disallowed_skills` or `disallowed_commands` is a string; a `null` entry denies
+nothing, and any other entry (a number, a list) is a configuration error that refuses every call
+that reads that list.
 
 Regardless of the sections, a fleet subagent may never pass `model` to the Agent tool (the model
 belongs to the agent definition) and may not use `Workflow`. A refusal names what the caller may
@@ -416,7 +440,11 @@ the limits and the finish line. `fleet:delegating-task` tells the caller how to 
 hook refuses an `Agent` call to a fleet agent whose prompt lacks the shape. A fleet agent is a
 `subagent_type` the guard treats as one: a definition under `agents/` or a model the rules in force
 mention (the hook gets the data directory to find them), prefixed or bare, or any type with the
-plugin's prefix, so an agent a sync removed is still inspected. Calls to any other agent type, and calls without a type, are not inspected.
+plugin's prefix, so an agent a sync removed is still inspected. Calls to any other agent type, and
+calls without a type, are not inspected, except that a prompt whose line 1 is `---` and whose line
+2 starts with `allow:` or `deny:` is refused there (see [MCP tool lists](#mcp-tool-lists)). A
+prompt to a fleet agent may open with such a block before its headings; the hook checks its
+grammar and the form of each rule, and nothing else of it.
 
 Required `##` sections, each once and nonempty: `Objective`, `Context and Evidence`,
 `Scope Boundary`, `Acceptance Criteria`, `Return and Stop`. Optional, but unique and nonempty when
@@ -443,6 +471,151 @@ uv run tests/delegation/test_integration.py --fleet-root . --shell /bin/sh
 
 The tests use the Python standard library only and any Python 3.9+ runs them; the hook itself
 never calls Python.
+
+## MCP tool lists
+
+Two lists in the rules file and an optional block at the head of a brief decide which MCP tools a
+fleet subagent may call. The guard reads them at every MCP tool call. They are a guard for
+cooperating agents and trusted local files, not a security boundary (see [Limits](#limits)).
+
+### What is governed
+
+- Calls to MCP tools, whose names start with `mcp__`, by fleet subagents. Built-in tools are not
+  governed by these lists; `disallowed_commands` and `disallowed_skills` cover commands and skills.
+- The main session and every subagent that is not a fleet agent pass.
+- The lists are in the rules file as `allowed_mcp_tools` and `disallowed_mcp_tools`, both `[]` in
+  the shipped default (see [Sections](#sections) for what a missing, empty or invalid list does).
+
+### Rules
+
+A rule is either a complete tool name, such as `mcp__hub__docs__search`, or a mask in which `*`
+stands for any run of characters, none included; several `*` in a row count as one. Matching is
+case-sensitive and covers the whole tool name. A rule is 1 to 256 bytes of letters, digits, `_`,
+`.`, `*` and `-`, and starts with `mcp__` or `*`. There is no `?`, no regular expression and no
+server shorthand: a whole server is the mask `mcp__<server>__*`. A mask without the closing `__`
+reaches further than a server: `mcp__hub*` also matches every server whose name starts with `hub`,
+such as `hub2`, and `mcp__hub__*` also matches a server whose own name begins with `hub__`. A tool
+name with a character outside printable ASCII is refused with `FLEET_MCP_ERROR: invalid tool name`.
+
+### The block for one spawn
+
+A brief to a fleet agent may open with a block of rules that apply to that agent alone. The block
+is YAML-like front matter with a fixed grammar:
+
+```
+---
+allow:
+  - "mcp__tickets__*"
+deny:
+  - "mcp__tickets__create_*"
+  - "mcp__tickets__update_*"
+---
+## Objective
+...
+```
+
+- Line 1 is exactly `---`; CRLF line endings are accepted.
+- Then `allow:` and `deny:`, either or both, each at most once, in either order.
+- Each key is followed by at least one line of exactly two spaces, `- ` and one double-quoted JSON
+  string holding a valid rule.
+- A line that is exactly `---` closes the block and ends in a line break. The task follows it.
+- Nothing else is allowed inside: no comments, blank lines, inline lists or other keys. A key
+  holds at most 256 rules, and only the first 520 lines of the brief are examined for the block.
+
+For the agent that receives the brief, the `allow` rules of the block add to the global allow list
+and its `deny` rules to the global deny list. The block is read from the agent's first record in
+its stored transcript, so it is fixed for the agent's life: a later message to the agent cannot
+change it, and neither can the agent. The block works for fleet agents only: a brief to any other
+agent type, or to none, whose line 1 is `---` and whose line 2 starts with `allow:` or `deny:` is
+refused. A brief to a fleet agent that opens with `---` for another purpose is refused too, as is a
+block that sits below other text but above the first `## ` heading.
+
+### How a call is decided
+
+A call passes only when the calling agent and every fleet agent above it, up to the main session,
+permit the tool; agents that are not fleet agents add nothing. An agent permits a tool when no rule
+of the global deny list or of its own block's `deny` matches it, and the global allow list together
+with its own block's `allow` is empty or holds a rule that matches it. A deny always wins, a deny
+above binds every fleet agent below, and a grant reaches only the agent that received it, never
+beyond its caller. A grant that a deny cancels, or that the caller lacks, is not an error at the
+spawn: the call is refused when it is made.
+
+The cases below take the global allow list `mcp__hub*` and an empty global deny list, unless a row
+says otherwise.
+
+| # | Block of the agent, or other setting / tool called | Result |
+|---|---|---|
+| 1 | none / `mcp__hub__docs__search` | passes: the global allow list matches |
+| 2 | none / `mcp__mail__send` | refused: no allow rule matches |
+| 3 | deny `mcp__hub__docs__search` / that tool | refused: the deny removes a tool the global list allows |
+| 4 | deny `*__search` / `mcp__hub__wiki__search` | refused: the mask in the deny matches |
+| 5 | allow `mcp__mail__read` / `mcp__mail__read` | passes: the allow adds to the global list |
+| 6 | global deny `mcp__mail__*`; allow `mcp__mail__send` / `mcp__mail__send` | the spawn goes through, the call is refused: the deny wins |
+| 7 | global deny `mcp__mail__send`; allow `mcp__mail__*` | `mcp__mail__read` passes, `mcp__mail__send` is refused at the call |
+| 8 | both global lists empty; none / any MCP tool | passes: nothing is listed |
+| 9 | both global lists empty; allow `mcp__mail__read` | only `mcp__mail__read` passes: it is the one allow rule in force |
+| 10 | the parent's block denies `mcp__hub__docs__search`; the child has no block / that tool | refused: a deny above binds below |
+| 11 | the parent was granted `mcp__mail__read`; the child has no block / `mcp__mail__read` | refused: the child's own allow set (the global list) lacks it; with the same grant in its own block it passes |
+| 12 | a subagent that is not a fleet agent / any tool | not governed |
+| 13 | both global lists empty; the parent's block allows `mcp__mail__read`; the child has no block | `mcp__mail__read` passes: the child's allow set is empty and the parent permits it; any other tool is refused by the parent's frame |
+
+### Refusals
+
+- `FLEET_MCP_DENIED: "<tool>": <reason>` names the rule that decided, each rule and tool quoted as
+  JSON. The reason is one of: `the global rule "<rule>" denies it.`; `the deny rule "<rule>" of
+  this agent's brief matches it.`; `the deny rule "<rule>" of the brief of agent <id> above matches
+  it.`; `no allow rule matches it (global and this agent's brief).`; `no allow rule of agent <id>
+  above matches it.` A second line follows: `The refusal is final: do not retry the call or reach
+  the tool another way; report what needed it.`
+- `FLEET_MCP_ERROR: <text>` marks a call that could not be checked, followed by `The tool is not
+  available until this is fixed: do not retry the call or reach the tool another way; report the
+  error.` The texts are `invalid MCP rules in <path>` (a global list is invalid), `invalid tool
+  name`, `invalid transcript binding` (an unsafe agent id or transcript path, or metadata that
+  names a type that is not a fleet agent's), `agent brief unavailable` (a missing, symlinked,
+  oversized or wrongly shaped metadata file or transcript record), `agent ancestry unavailable` (a
+  missing parent, a repeated id, more than 32 agents, or no string `agentType`), `invalid agent
+  brief` (the block of a fleet agent in the chain is invalid) and `the policy could not be
+  evaluated`.
+- A brief refused at the spawn gets `FLEET_DELEGATION_INVALID` with a detail line that starts
+  `MCP policy:`: `MCP policy: line <n>: <reason>.`, where the reason is `expected allow or deny`,
+  `duplicate key`, `expected a double-quoted rule`, `invalid rule <json-string>`, `a key needs at
+  least one rule`, `missing closing ---` or `the policy block must start at line 1`; `MCP policy:
+  more than 256 rules, or a rule longer than 256 bytes.`; or `MCP policy: per-spawn rules work only
+  for fleet agents.`
+- A guard that does not finish within its 3 seconds ends the call with `Refused: the fleet guard
+  did not finish within 3 seconds, so the call could not be checked.`
+
+Nothing is hidden from an agent's context: a denied tool stays visible, and its call is refused
+when made. The plugin generates no `disallowedTools` from these lists.
+
+### What the plugin puts into contexts
+
+A summary of the global lists goes into the context of a session when it starts and into the
+context of a fleet agent when it starts, and only while a list is not empty or the lists are
+invalid. In the second case it is one line saying that the MCP rules in the file are invalid or
+could not be read, so that every MCP call of a fleet subagent is refused until the file is fixed.
+Otherwise it names the rules file in force, shows the two lists, and restates who is governed, how
+a call is decided, the two rule forms, the block syntax and the chain rule. At most 4 rules of each
+list are shown and the rest are counted, with a pointer to the rules file; the summary stays under
+5,000 characters for a path of up to 1,600 bytes. It is made when the context is made and is not
+refreshed when the file changes during the session, while enforcement reads the file at every
+call. If the sync cannot make the session's summary, it reports `fleet: the summary of the MCP
+tool rules in <path> could not be made.`
+
+### The delegation brief stays whole
+
+The definition of every generated agent carries a standing instruction: the task message that
+started the agent is its delegation brief, and it must never compress, summarize, truncate or
+rewrite that message, even when asked to or when a tool lists it as a candidate. An agent whose
+first message is transformed loses the knowledge of its own lists. This is an instruction a model
+follows, not a mechanism. Enforcement does not depend on it, because the guard reads the stored
+transcript, not what the agent holds in its context.
+
+```sh
+uv run tests/mcp/test_policy.py --fleet-root . --shell /bin/sh
+uv run tests/mcp/test_guard.py --fleet-root . --shell /bin/sh
+uv run tests/mcp/test_binding.py --fleet-root . --shell /bin/sh
+```
 
 ## Limits
 
@@ -484,3 +657,33 @@ never calls Python.
 - A rules file of 0 bytes or holding only white space is invalid, not an empty fleet: the guard
   refuses every checked call and the sync leaves `agents/` as it is, as for any invalid file (see
   [The rules file](#the-rules-file)). An empty fleet is written `{}` or `null`.
+- The MCP tool lists guard cooperating agents and trusted local files; they are not a security
+  boundary. An agent that can write files can rewrite its own transcript or metadata, a damaged
+  file that still parses cannot be told from a valid one, and a tool name says nothing about what
+  the tool does, so a tool that dispatches other tools, or a built-in tool that reaches the same
+  service, is outside the policy.
+- The main session, subagents that are not fleet agents and built-in tools are not governed by the
+  MCP lists.
+- Fleet has no inventory of MCP tools. A rule that matches nothing, a misspelled one included, is
+  not reported, and neither is a grant that can never work.
+- The binding of a call to the briefs above it reads the host's transcript layout: the metadata
+  file `agent-<id>.meta.json` and the transcript `agent-<id>.jsonl` beside the session's
+  transcript. If that layout changes, every MCP call of a fleet subagent is refused with a reason
+  and none passes.
+- Without `jq` or a readable rules file, the MCP calls of subagents are refused. The main
+  session's MCP calls pass without either, unless the payload's text holds `"agent_id"` (in a
+  tool argument, say), which takes the full checks.
+- The guard's 3-second deadline is wall-clock time, so on a stalled machine a valid MCP call can
+  be refused. The time grows with the length of the chain and with the sizes of briefs and lists,
+  and their stated maxima taken together exceed the limit.
+- A brief whose first transcript record exceeds 1 MiB passes the spawn, and every MCP call of that
+  agent, and of the fleet agents it spawns, is then refused with `agent brief unavailable`.
+- A hook the host kills, or a signal the guard cannot trap, ends the check without a decision and
+  does not block: the call goes through.
+- A brief to a fleet agent that opens with `---` for another purpose is refused, because the line
+  starts the block. A block works for fleet agents only.
+- Upgrading from 0.10.0: an existing `fleet.json` has neither MCP key, so both lists read as empty
+  and no rule refuses an MCP call by name until a list or a block is set. Two things apply
+  regardless: the guard now sees every MCP call of a subagent, so such a call is refused where
+  `jq` or a readable rules file is missing, and a brief to a fleet agent that opens with `---` is
+  refused. Plugin updates leave `fleet.json` alone, so add the keys to use them.
