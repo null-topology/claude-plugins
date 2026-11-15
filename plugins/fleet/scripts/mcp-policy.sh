@@ -101,14 +101,24 @@ def mcp_block_fault($n; $why):
   {error: ("MCP policy: line " + ($n | tostring) + ": " + $why + ".")};
 def mcp_block_line:
   if endswith("\r") then .[:-1] else . end;
+# The index of the first line from $from on, before the first "## " heading, that reads --- and is
+# followed by a line starting with allow: or deny: (a block that would be ignored), or null. Each
+# line is looked at a fixed number of times, so the search is linear in the number of lines.
+def mcp_block_stray($parts; $from):
+  ($parts | length) as $count
+  | (first(range($from; $count) as $i | select($parts[$i] | startswith("## ")) | $i) // $count) as $heading
+  | first(range($from; $heading) as $i
+      | select(($parts[$i] | contains("---")) and ($parts[$i] | mcp_block_fence)
+        and (($parts[$i + 1] // "") | mcp_block_keyed))
+      | $i) // null;
 def mcp_block_read:
   (split("\n") | if length == 0 then [""] else . end) as $parts
   | ($parts | length) as $count
   | ($parts[:-1][:521] | map(mcp_block_line)) as $lines
   | {marked: ($count >= 2 and ($parts[0] | mcp_block_fence) and ($parts[1] | mcp_block_keyed))}
   + (if ($parts[0] | mcp_block_line) == "---" then
-      reduce range(1; [$lines | length, 520] | min) as $i
-        ({key: null, line: 0, count: 0, seen: {}, allow: [], deny: [], end: null};
+      (reduce range(1; [$lines | length, 520] | min) as $i
+        ({key: null, line: 0, count: 0, seen: {}, allow: [], deny: [], end: null, close: null};
         if .end != null then .
         else
           ($i + 1) as $n | $lines[$i] as $l
@@ -121,7 +131,7 @@ def mcp_block_read:
             elif $l == "---" then
               if .key == null then .end = mcp_block_fault($n; "expected allow or deny")
               elif .count == 0 then .end = mcp_block_fault(.line; "a key needs at least one rule")
-              else .end = {allow: .allow, deny: .deny}
+              else .end = {allow: .allow, deny: .deny} | .close = $i
               end
             elif .key == null then .end = mcp_block_fault($n; "expected allow or deny")
             elif ($l[:1] | . == " " or . == "\t" or . == "-") or .count == 0 then
@@ -135,14 +145,19 @@ def mcp_block_read:
                 end
             else .end = mcp_block_fault($n; "expected allow or deny")
             end
-        end)
-      | .end // mcp_block_fault(($lines | length) + 1; "missing closing ---")
+        end)) as $read
+      | if $read.end == null then mcp_block_fault(($lines | length) + 1; "missing closing ---")
+        elif $read.end.error then $read.end
+        else
+          # A valid block: a second one between its closing line and the first heading would be
+          # ignored, its deny with it.
+          mcp_block_stray($parts; $read.close + 1) as $at
+          | if $at == null then $read.end
+            else mcp_block_fault($at + 1; "the policy block must start at line 1")
+            end
+        end
     else
-      (first(range(0; $count) as $i | select($parts[$i] | startswith("## ")) | $i) // $count) as $heading
-      | (first(range(0; $heading) as $i
-          | select(($parts[$i] | contains("---")) and ($parts[$i] | mcp_block_fence)
-            and (($parts[$i + 1] // "") | mcp_block_keyed))
-          | $i) // null) as $at
+      mcp_block_stray($parts; 0) as $at
       | if $at == null then {none: true, allow: [], deny: []}
         else mcp_block_fault($at + 1; "the policy block must start at line 1")
         end
@@ -309,11 +324,14 @@ mcp_permits() {
 # the CRLF ending). The block then follows the grammar: allow: and deny:, each at most once, in
 # either order, each followed by at least one item of exactly two spaces, "- " and one
 # double-quoted JSON string; then a line that is exactly ---, itself ending in a line break.
-# Nothing else is allowed inside. Otherwise a line before the first "## " heading that reads ---,
-# followed by a line starting with allow: or deny: (both read with the characters above dropped),
-# makes the brief invalid: that block would be ignored, and its deny with it. Otherwise the brief
-# has no block. The block has at most 2 x 256 items, so its parse is over by line 516; only the
-# first 520 lines are looked at for it.
+# Nothing else is allowed inside. A line before the first "## " heading that reads ---, followed
+# by a line starting with allow: or deny: (both read with the characters above dropped), makes the
+# brief invalid wherever else it stands: before the first heading in a brief without a block, or
+# between a valid block's closing line and the first heading. Such a block would be ignored, and
+# its deny with it. Below the first heading such lines are plain text. A brief that has neither has
+# no block. The block has at most 2 x 256 items, so its parse is over by line 516; only the first
+# 520 lines are looked at for it, and the search for a second block runs once over the lines from
+# its closing line to the first heading.
 #
 # The query answers on one line: a letter for marked or not, a letter for the verdict, then the
 # lists or the reason. The shell only strips those fixed-width letters: removing a pattern up to a

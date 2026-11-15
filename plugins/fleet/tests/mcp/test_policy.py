@@ -418,6 +418,12 @@ def main():
          + items("deny", ["mcp__d%03d" % i + "x" * 247 for i in range(256)]) + "---\n" + BODY,
          ["mcp__a%03d" % i + "x" * 247 for i in range(256)], ["mcp__d%03d" % i + "x" * 247 for i in range(256)]),
         ("a block and nothing after it", "---\n" + items("allow", ["mcp__a"]) + "---\n", ["mcp__a"], []),
+        # After a valid block, only a second block above the first heading is refused.
+        ("a block, then --- and deny: below the first heading",
+         "---\n" + items("allow", ["mcp__a"]) + "---\n" + BODY + "---\n" + items("deny", ["mcp__b"]) + "---\n",
+         ["mcp__a"], []),
+        ("a block, then a thematic break and text before the first heading",
+         "---\n" + items("allow", ["mcp__a"]) + "---\nIntro\n---\nNotes\n" + BODY, ["mcp__a"], []),
     ]
     for label, brief, allow, deny in valid_blocks:
         code, marked, found, out_allow, out_deny, error, err = block(brief)
@@ -474,6 +480,31 @@ def main():
          + BODY, line_error(2, "the policy block must start at line 1"), ""),
         ("--- and blanks alone before the first heading, then deny:", "Intro\n---" + " \t" * 40 + "\ndeny:\n" + BODY,
          line_error(2, "the policy block must start at line 1"), ""),
+        # step 2 after a valid block: a second block between its closing line and the first heading
+        ("a second block directly after a valid one",
+         "---\n" + items("allow", ["mcp__a"]) + "---\n---\n" + items("deny", ["mcp__b"]) + "---\n" + BODY,
+         line_error(5, "the policy block must start at line 1"), "1"),
+        ("a second block after a line of text",
+         "---\n" + items("allow", ["mcp__a"]) + "---\nIntro\n---\n" + items("deny", ["mcp__b"]) + "---\n" + BODY,
+         line_error(6, "the policy block must start at line 1"), "1"),
+        ("a second block after a blank line",
+         "---\n" + items("allow", ["mcp__a"]) + "---\n\n---\n" + items("deny", ["mcp__b"]) + "---\n" + BODY,
+         line_error(6, "the policy block must start at line 1"), "1"),
+        ("a second block with CRLF endings",
+         ("---\n" + items("allow", ["mcp__a"]) + "---\n---\n" + items("deny", ["mcp__b"]) + "---\n" + BODY)
+         .replace("\n", "\r\n"), line_error(5, "the policy block must start at line 1"), "1"),
+        ("a second block read with marks, blanks and CRs dropped",
+         "---\n" + items("allow", ["mcp__a"]) + "---\n\t﻿--- \r\n deny:\r\n" + BODY,
+         line_error(5, "the policy block must start at line 1"), "1"),
+        ("a second block in a brief without a heading",
+         "---\n" + items("allow", ["mcp__a"]) + "---\nIntro\n---\ndeny:\n",
+         line_error(6, "the policy block must start at line 1"), "1"),
+        ("an invalid first block keeps its own fault before a second block",
+         "---\n" + items("allow", ["mcp_bad"]) + "---\n---\n" + items("deny", ["mcp__b"]) + "---\n" + BODY,
+         line_error(3, 'invalid rule "mcp_bad"'), "1"),
+        ("a first block without its closing line keeps its own fault before a second block",
+         "---\n" + items("allow", ["mcp__a"]) + "Intro\n---\n" + items("deny", ["mcp__b"]) + "---\n" + BODY,
+         line_error(4, "expected allow or deny"), "1"),
         # step 1: line 1 is ---, and the grammar applies
         ("--- opening other front matter", "---\ntitle: x\n---\n" + BODY, line_error(2, "expected allow or deny"), ""),
         ("a thematic break at line 1", "---\n" + BODY, line_error(2, "expected allow or deny"), ""),
@@ -572,6 +603,17 @@ def main():
               code == code_expected and error == error_expected and marked == marked_expected and found == ""
               and elapsed < 1.0, (code, marked, error, err, round(elapsed, 2)))
 
+    # The search for a second block runs once over the lines between a valid block and the first
+    # heading, in time linear in their number, --- lines among them included.
+    for label, filler in (("lines of text", "Text.\n" * 64000), ("lines, every other one ---", "---\nText.\n" * 32000)):
+        started = time.monotonic()
+        code, marked, found, out_allow, out_deny, error, err = block("---\n" + items("deny", ["mcp__x"]) + "---\n"
+                                                                      + filler + BODY)
+        elapsed = time.monotonic() - started
+        check("block/a valid block and 64,000 %s before the first heading are read well inside a second" % label,
+              code == 0 and found == "1" and out_deny == '["mcp__x"]' and error == "" and elapsed < 1.0,
+              (code, found, error, err, round(elapsed, 2)))
+
     # ---- the per-spawn block of a transcript's first record ------------------------------------
     record_snippet = BLOCK.replace('mcp_block "$1"', 'mcp_block --record "$1"')
 
@@ -607,6 +649,12 @@ def main():
         check("record/an invalid block in the record is invalid with its reason",
               code == 1 and marked == "1" and error == line_error(3, 'invalid rule "mcp_bad"'),
               (code, marked, error, err))
+        code, marked, found, out_allow, out_deny, error, err = record(
+            record_line("---\n" + items("allow", ["mcp__a"]) + "---\n---\n" + items("deny", ["mcp__b"]) + "---\n"
+                        + BODY) + later)
+        check("record/a second block in the record is invalid with its line",
+              code == 1 and marked == "1" and found == ""
+              and error == line_error(5, "the policy block must start at line 1"), (code, marked, found, error, err))
 
         unavailable_records = [
             ("an assistant record first", record_line(with_block, kind="assistant") + later),

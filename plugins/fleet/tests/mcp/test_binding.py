@@ -417,6 +417,20 @@ def main():
         fault("invalid/a block above does not parse", guard(call(s)), INVALID)
         s = chain([("a1", FLEET, BODY), ("e1", "Explore", "---\ndeny:\n---\n" + BODY)])
         passes("invalid/a block of an agent above that is not a fleet agent is not read", guard(call(s)))
+        # A second block above the first heading, here one whose deny would refuse the call, makes
+        # the brief invalid rather than being ignored.
+        second = "---\n" + items("allow", ["mcp__gateway*"]) + "---\n---\n" + items("deny", [VAULT]) + "---\n" + BODY
+        empty_lists = rules(allow=())
+        s = chain([("a1", FLEET, second)])
+        fault("invalid/the caller's brief holds a second block", guard(call(s), empty_lists), INVALID)
+        s = chain([("a1", FLEET, BODY), ("p1", SOL, second)])
+        fault("invalid/the brief of the fleet agent above holds a second block", guard(call(s), empty_lists), INVALID)
+        s = chain([("a1", FLEET, BODY), ("p1", SOL, BODY), ("p2", FLEET, second)])
+        fault("invalid/the brief of a fleet agent two levels above holds a second block", guard(call(s), empty_lists),
+              INVALID)
+        s = chain([("a1", FLEET, BODY), ("e1", "Explore", second)])
+        passes("invalid/a second block in the brief of an agent above that is not a fleet agent is not read",
+               guard(call(s), empty_lists))
         block = "---\n" + items("deny", [VAULT]) + "---\n"
         corpus = (
             ("a valid block", block + BODY, "applies"),
@@ -429,6 +443,12 @@ def main():
             ("a byte-order mark", "﻿" + block + BODY, "invalid"),
             ("a block after other text", "Intro\n" + block + BODY, "invalid"),
             ("--- opening other front matter", "---\ntitle: x\n---\n" + BODY, "invalid"),
+            ("a second block directly after a valid one",
+             block + "---\n" + items("deny", ["mcp__mail__send"]) + "---\n" + BODY, "invalid"),
+            ("a second block after a line of text",
+             block + "Intro\n---\n" + items("deny", ["mcp__mail__send"]) + "---\n" + BODY, "invalid"),
+            ("a second block below the first heading", block + BODY + "---\n" + items("deny", ["mcp__mail__send"])
+             + "---\n", "applies"),
         )
         for label, text, verdict in corpus:
             rc, out, err = contract(text)
@@ -532,6 +552,23 @@ def main():
             timings.append(("a call, 64,000 blanks inside the brief's " + label, outcome[3]))
             passes("timing/a call under a brief with 64,000 blanks inside %s passes" % label, outcome)
             check("timing/a call under a brief with 64,000 blanks inside %s finishes inside a second" % label,
+                  outcome[3] is not None and outcome[3] < 1.0, round(outcome[3], 2))
+        # A valid block followed by many lines before the first heading: both hooks look for a second
+        # block among them in time linear in their number, and the block still applies.
+        for label, filler in (("lines of text", "Text.\n" * 64000),
+                              ("lines, every other one ---", "---\nText.\n" * 32000)):
+            text = block + filler + BODY
+            started = time.monotonic()
+            rc, out, err = contract(text)
+            elapsed = time.monotonic() - started
+            timings.append(("the spawn, a valid block and 64,000 " + label, elapsed))
+            check("timing/a valid block and 64,000 %s pass the spawn inside a second" % label,
+                  rc == 0 and not out and not err and elapsed < 1.0, (rc, out, err[:200], round(elapsed, 2)))
+            outcome = guard(call(chain([("a1", FLEET, text)])))
+            timings.append(("a call, a valid block and 64,000 " + label, outcome[3]))
+            denied("timing/a call under a valid block and 64,000 %s meets the block's deny" % label, outcome, VAULT,
+                   own_deny(VAULT))
+            check("timing/a call under a valid block and 64,000 %s finishes inside a second" % label,
                   outcome[3] is not None and outcome[3] < 1.0, round(outcome[3], 2))
 
     for label, elapsed in timings:

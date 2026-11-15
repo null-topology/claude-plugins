@@ -283,6 +283,46 @@ def main():
                    'FLEET_MCP_DENIED: "mcp__gateway__vault__search": the global rule "*" denies it.')
         expect("caller/an agent_id of a line break is a subagent's: its Workflow call is refused",
                guard(call(tool="Workflow", caller=FLEET_CALLER, agent_id="\n"), mode=None), 2, "workflows")
+        # In MCP mode a subagent's payload must name its type: one without it cannot be told from a
+        # fleet agent, so it is refused as a fault, whatever its metadata says (here a fleet type),
+        # the global lists or the rules file. Every subagent payload the host sends carries the type.
+        missing_text = ("FLEET_MCP_ERROR: agent type missing\nThe tool is not available until this is fixed: do not "
+                        "retry the call or reach the tool another way; report the error.\n")
+
+        def untyped(value, **extra):
+            payload = call(caller=FLEET_CALLER, **extra)
+            if value == "absent":
+                del payload["agent_type"]
+            else:
+                payload["agent_type"] = value
+            return payload
+
+        for label, value in (("absent", "absent"), ("null", None), ("empty", "")):
+            for rules_label, rule_set in (("the shipped rules", None), ("a global deny of every tool", deny_all),
+                                          ("a global allow of every tool", dict(shipped, allowed_mcp_tools=["*"])),
+                                          ("an invalid rules file", "{not json")):
+                rc, out, err, elapsed = guard(untyped(value), rules=rule_set)
+                check("caller/an agent_type %s with an agent_id is refused in MCP mode, with %s"
+                      % (label, rules_label), rc == 2 and not out and err == missing_text,
+                      (rc, out, err, round(elapsed, 2)))
+            rc, out, err, elapsed = guard(untyped(value, tool="Bash"))
+            check("caller/an agent_type %s with an agent_id is refused in MCP mode whatever the tool name" % label,
+                  rc == 2 and not out and err == missing_text, (rc, out, err, round(elapsed, 2)))
+            for tool in ("Bash", "Workflow", "Agent", "mcp__gateway__vault__search"):
+                expect("caller/an agent_type %s with an agent_id: a %s call outside MCP mode passes as before"
+                       % (label, tool), guard(untyped(value, tool=tool), rules=deny_all, mode=None), 0)
+            for id_label, id_value in (("null", None), ("empty", "")):
+                expect("main/an agent_id %s without an agent_type (%s) is the main session in MCP mode"
+                       % (id_label, label), guard(untyped(value, agent_id=id_value), rules=deny_all), 0)
+        # The type is read through the shell, so a type of line breaks alone reads as empty too.
+        rc, out, err, elapsed = guard(untyped("\n"))
+        check("caller/an agent_type of a line break with an agent_id is refused in MCP mode",
+              rc == 2 and not out and err == missing_text, (rc, out, err, round(elapsed, 2)))
+        rc, out, err, elapsed = guard(untyped("absent"), extra_env=nojq_env)
+        check("caller/an agent_type absent with an agent_id is refused without jq, for want of jq",
+              rc == 2 and not out and "needs jq" in err, (rc, out, err, round(elapsed, 2)))
+        expect("main/a payload without agent_id or agent_type passes in MCP mode under a global deny",
+               guard(call(), rules=deny_all), 0)
         main_env = stub("main-jq", "case \"$*\" in *'.agent_id == null or'*) exit 5 ;; esac")
         expect("main/a failed main-session query refuses even the main session's call",
                guard(call(tool="Bash"), extra_env=main_env, mode=None), 2,

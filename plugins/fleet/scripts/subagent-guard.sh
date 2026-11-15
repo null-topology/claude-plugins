@@ -15,7 +15,8 @@
 #
 # In MCP mode (the third argument mcp) a payload whose text holds no "agent_id" is the main
 # session's, and its call passes before the libraries, the rules file and jq are looked at, so a
-# broken installation never takes the main session's MCP tools.
+# broken installation never takes the main session's MCP tools. That test reads only the text: a
+# payload without the text passes even when it is empty or not JSON.
 #
 # Who is calling comes from the payload. An empty agent_id means the main
 # session, governed by the main section, whatever agent_type says (the main
@@ -61,10 +62,14 @@
 # The rule readers and the agent-type resolution live in fleet-rules.sh, shared
 # with the generator. The schema is described in README.md. Exit 2 refuses the
 # call and hands the message to the calling model; exit 0 lets the call through.
-# A payload that is not one JSON object, or whose tool_input is not an object,
+# Past the MCP fast path above (in MCP mode a payload whose text holds no
+# "agent_id" passes unparsed, an empty one or one that is not JSON included), a
+# payload that is not one JSON object, or whose tool_input is not an object,
 # is refused, and so is one whose agent_id, agent_type, tool_name, hook_event_name
-# or transcript_path is neither a string nor null, and so is any other failure:
-# the guard exits 0 or 2 and nothing else, since Claude Code blocks a call only on 2.
+# or transcript_path is neither a string nor null, and so, in MCP mode, is a
+# subagent's (a non-empty agent_id) whose agent_type is absent, null or empty,
+# and so is any other failure: the guard exits 0 or 2 and nothing else, since
+# Claude Code blocks a call only on 2.
 
 # ---- supervisor -------------------------------------------------------------
 
@@ -562,6 +567,13 @@ $fleet_lines"
 fi
 
 # ---- inside a subagent ----------------------------------------------------
+
+# In MCP mode a subagent's payload must name its type: one without it (absent, null, or reading as
+# empty) cannot be told from a fleet agent, and resolved as "not a fleet agent" its MCP calls would
+# pass ungoverned. Every subagent payload the host sends carries the type, so this is a fault.
+if [ "$guard_mode" = mcp ] && [ -z "$agent_type" ]; then
+  mcp_error "agent type missing"
+fi
 
 # The caller: a fleet agent when its type resolves. One that carries the fleet
 # prefix but resolves to nothing is a fleet agent the guard cannot place, and
