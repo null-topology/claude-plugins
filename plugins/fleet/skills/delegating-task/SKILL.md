@@ -122,9 +122,10 @@ What each section has to carry:
   a link.
 
 Worked examples, all synthetic: `examples/dns-read-only.md` is a read-only inventory whose
-result is a claim, `examples/bounded-edit.md` a code change inside a fixed write area, and
-`examples/additional-context.md` a comparison that hands over reference files. Open one when
-unsure what a section should hold; do not copy its wording.
+result is a claim, `examples/bounded-edit.md` a code change inside a fixed write area,
+`examples/additional-context.md` a comparison that hands over reference files, and
+`examples/mcp-tool-lists.md` a read-only task whose brief carries MCP tool lists of its own.
+Open one when unsure what a section should hold; do not copy its wording.
 
 The two vendors lean in opposite directions when a brief leaves something open. Before writing
 the brief, read section 4 of `../selecting-subagent-model/references/vendor-guide.md`: close
@@ -133,13 +134,77 @@ the boundaries for an Anthropic agent and the gaps for an OpenAI one.
 Last check: could a fresh agent name the result, the allowed area and actions, what it may
 claim, how to verify, and where to stop, without guessing?
 
+## MCP tool lists for one spawn
+
+The fleet rules hold two global lists of MCP tools, an allow list and a deny list. While either
+is not empty, a summary of the ones in force is added to the context of a session when it
+starts and of a fleet agent when it starts. A brief to a fleet agent
+may add lists of its own for that agent. They are optional: leave them out when the global
+lists fit the task.
+
+The lists are a block at the very start of the brief, before the headings:
+
+- line 1 is exactly `---`, with nothing before it;
+- then `allow:`, `deny:` or both, each at most once, in either order;
+- under each key, one or more lines of exactly two spaces, `- ` and one double-quoted rule:
+  `  - "<rule>"`;
+- a closing line of exactly `---`, then the brief itself.
+
+No comments, blank lines, inline lists or other keys; a key with nothing to list is left out.
+
+A rule is a complete tool name, such as `mcp__mail__read`, or a mask in which `*` stands for
+any run of characters, such as `mcp__mail__*` for every tool of one server. There is no
+server shorthand: name a whole server with its mask. Rules are case-sensitive and match the
+whole name.
+
+How the lists act:
+
+- A deny rule always wins: a tool that any deny rule in force matches is refused, whatever
+  allows it.
+- The block's allow rules add to the global allow list, and its deny rules to the global deny
+  list, for the agent that receives the brief. An allow list that is empty permits every tool
+  that no deny rule matches.
+- A call passes only when that agent and every fleet agent above it permit the tool, so a
+  grant never reaches beyond its caller: a brief cannot hand on a tool the agent writing it
+  may not use, and a deny binds everything the receiving agent spawns.
+- So, while the global allow list is empty, an allow block narrows: the receiving agent and
+  the agents it spawns get only the tools it lists. While the global allow list is not empty,
+  an allow block widens the receiving agent's own list; an agent it spawns uses a granted
+  tool beyond the global list only when its own brief grants it too.
+- The block is read once, from the message that starts the agent, and holds for the agent's
+  whole life. A follow-up message cannot change it; spawn a new agent for other lists.
+- Only fleet agents take a block. A brief to any other agent type, or with no type, that
+  opens with one is refused.
+- A brief to a fleet agent must not open with `---` for another purpose, such as other front
+  matter or a thematic break: it is read as a block and refused. A block placed below other
+  text, above the first heading, is refused too, rather than ignored.
+
+Example: a read-only task on one server that keeps writes out.
+
+```text
+---
+allow:
+  - "mcp__tickets__*"
+deny:
+  - "mcp__tickets__create_*"
+  - "mcp__tickets__update_*"
+---
+## Objective
+...
+```
+
+With an empty global allow list, the agent and its sub-agents reach only the `tickets` tools
+whose names do not start with `create_` or `update_`. `examples/mcp-tool-lists.md` holds the
+whole brief.
+
 ## When a call is refused
 
 The check applies to Agent calls that target a fleet agent and looks at shape only: a brief
 that names the wrong account passes it. Passing is not proof the brief is right.
 
-- `FLEET_DELEGATION_INVALID` lists the missing, empty or duplicated sections. Fix the brief
-  from what you already know and repeat the same call. It does not lift any other refusal.
+- `FLEET_DELEGATION_INVALID` lists the missing, empty or duplicated sections, or names the
+  line of an MCP block that breaks the form above. Fix the brief from what you already know
+  and repeat the same call. It does not lift any other refusal.
 - `FLEET_DELEGATION_ERROR` is a hook or configuration fault. Report it; do not reformulate
   the task to get around it.
 

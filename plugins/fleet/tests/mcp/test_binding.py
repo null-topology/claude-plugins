@@ -499,7 +499,15 @@ def main():
         check("description/states that such a brief is read for the block, valid or not, and refused unread",
               "refused only when its prompt opens" not in description and "otherwise not inspected" not in description
               and "such a block, valid or not" in description
-              and "or when the hook cannot read a string prompt to look for one" in description)
+              and "or when reading a string prompt or the block at its top fails" in description)
+        # delegation-contract.sh reads `.tool_input.prompt? | strings`: a missing or non-string
+        # prompt passes untouched, so the description must not say such a prompt is refused.
+        check("description/states that a missing or non-string prompt passes",
+              "or when the hook cannot read a string prompt to look for one" not in description
+              and "a missing or non-string prompt passes untouched" in description)
+        check("description/states that the start contexts carry the MCP rules",
+              "a summary of the MCP tool rules in force" in description
+              and "adds the same summary to the session's context" in description)
 
         # ---- the time limit ----------------------------------------------------------------------
         full = brief(allow=long_rules("fa"), deny=long_rules("fd"))

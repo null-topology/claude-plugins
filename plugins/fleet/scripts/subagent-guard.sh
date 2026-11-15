@@ -467,8 +467,9 @@ agent_type=$(field '.agent_type')
 
 # Here agent_type is the agent being started, not a caller. Only fleet agents
 # get the limits, including one whose definition file is gone; the text goes to
-# the new agent. Exit 2 at this event shows the message to the user and does not
-# stop the agent.
+# the new agent: the disallowed skills and commands, then the summary of the
+# global MCP lists (mcp_format, the same text a session gets at its start).
+# Exit 2 at this event shows the message to the user and does not stop the agent.
 if [ "$event" = SubagentStart ]; then
   resolve "$agent_type"
   [ "$kind" != other ] || pass_call
@@ -478,8 +479,14 @@ if [ "$event" = SubagentStart ]; then
   fleet_read '.disallowed_commands | denylist | map(select(length > 0)) | join(", ")'
   # Not "commands": zsh keeps a special associative array of that name.
   denied_commands=$fleet_lines
-  [ -n "$skills$denied_commands" ] || pass_call
-  context='Fleet limits for this agent (from the fleet rules in force now):'
+  mcp_status=0
+  mcp_format "$rules" "$rules_path" || mcp_status=$?
+  [ "$mcp_status" = 0 ] || unexpected_error "$mcp_status"
+  [ -n "$skills$denied_commands$mcp_summary" ] || pass_call
+  context=
+  if [ -n "$skills$denied_commands" ]; then
+    context='Fleet limits for this agent (from the fleet rules in force now):'
+  fi
   if [ -n "$skills" ]; then
     context="$context
 - Skills you cannot load: $skills. Do not call them. Their absence is not a reason to stop: carry on with the tools and the other skills you have, within the brief."
@@ -487,6 +494,10 @@ if [ "$event" = SubagentStart ]; then
   if [ -n "$denied_commands" ]; then
     context="$context
 - Commands you cannot run: $denied_commands. A step that needs one of them is a blocker: report what needs it."
+  fi
+  if [ -n "$mcp_summary" ]; then
+    context="${context:+$context
+}$mcp_summary"
   fi
   jq -n --arg context "$context" \
     '{hookSpecificOutput: {hookEventName: "SubagentStart", additionalContext: $context}}'

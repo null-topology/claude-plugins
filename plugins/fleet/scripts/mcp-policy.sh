@@ -22,6 +22,8 @@
 #   mcp_rule_valid <rule>                       0 valid, 1 invalid
 #   mcp_match <rule> <name>                     0 match, 1 no match, 2 error (an invalid rule or name)
 #   mcp_lists <rules-file>                      0 sets mcp_allow and mcp_deny (JSON arrays), 1 invalid
+#   mcp_format <rules-file> <path>              0 sets mcp_summary, the text both start contexts
+#                                               carry (empty when both lists are empty)
 #   mcp_permits <name> <allow> <deny> <frames>  JSON texts; 0 permitted, 1 refused (the refusal
 #                                               in mcp_verdict), 3 an invalid tool name
 #   mcp_block <brief>                           the per-spawn block of one brief (JSON text):
@@ -212,6 +214,49 @@ mcp_lists_pick() {
   return 2
 }
 
+# mcp_format <rules-file> <path>: the summary of the global lists in mcp_summary, the rules file
+# named as <path>. The only place this text is worded: sync-agents.sh adds it to the context of
+# every session start, the guard to the context of a fleet agent that starts. Empty when both
+# lists are empty. Lists that are invalid or cannot be read give one line saying so, since the
+# guard then refuses every MCP call of a fleet subagent. Status 0, or 2 when its own query fails
+# (mcp_summary empty).
+#
+# The text is hook output and a full list holds 64 KiB, so at most 4 rules of each list are shown
+# (a rule has at most 256 bytes) and the rest are counted and left to the rules file. The fixed
+# text is about 1,200 characters and two full lists add about 2,200 more, so the summary stays
+# under 5,000 characters for a path of up to 1,600 bytes; the path is named once.
+mcp_format() {
+  mcp_summary=
+  mcp_format_status=0
+  mcp_lists "$1" || mcp_format_status=$?
+  if [ "$mcp_format_status" != 0 ]; then
+    mcp_summary="Fleet MCP tool rules: the MCP rules in $2 are invalid or could not be read, so every MCP call of a fleet subagent is refused until the file is fixed."
+    return 0
+  fi
+  [ "$mcp_allow$mcp_deny" != '[][]' ] || return 0
+  # The lists reach jq on stdin: at full size they are past what a process argument may hold.
+  mcp_summary=$(printf '%s\n%s\n' "$mcp_allow" "$mcp_deny" | jq -rs --arg path "$2" '
+    def shown:
+      if length <= 4 then join(", ")
+      else (.[:4] | join(", ")) + " and \(length - 4) more, \(length) in all: read them in the rules file named above"
+      end;
+    if length != 2 or (map(type == "array") | all | not) then error("two lists were expected") else . end
+    | "Fleet MCP tool rules (rules file in force: \($path); read when this context was made, while the guard reads the file afresh at every call):",
+      "- Global allow list (allowed_mcp_tools): "
+        + (.[0] | if length == 0 then "none, so every MCP tool that no deny rule matches is allowed" else shown end) + ".",
+      "- Global deny list (disallowed_mcp_tools): " + (.[1] | if length == 0 then "none" else shown end) + ".",
+      "- These lists govern the MCP tool calls of fleet subagents, not those of the main session or of other subagents. A call passes when no deny rule matches the tool and the allow list is empty or one of its rules matches; a deny rule always wins.",
+      "- A rule is a complete tool name, such as mcp__server__tool, or a mask in which * stands for any run of characters, such as mcp__server__* for a whole server; there is no server shorthand.",
+      "- Per spawn, a brief to a fleet agent may open with a block of its own rules: line 1 ---, then allow: and deny: (either or both, each at most once), each followed by one or more lines `  - \"<rule>\"`, then a closing --- and the task.",
+      "- For the agent that receives that brief, the allow rules of the block add to the global allow list and its deny rules to the global deny list; a call passes only when that agent and every fleet agent above it permit the tool, so a grant never reaches beyond its caller."
+  ' 2>/dev/null) || {
+    mcp_summary=
+    return 2
+  }
+  [ -n "$mcp_summary" ] || return 2
+  return 0
+}
+
 # mcp_permits <name> <allow> <deny> <frames>: every argument is JSON text; the frames list holds
 # the caller's own frame and those of the fleet agents above it. The four texts reach jq on stdin,
 # joined by U+0001, which JSON text cannot hold unescaped: at their largest (32 frames of two lists
@@ -276,9 +321,11 @@ mcp_block() {
   if [ "$1" = --record ]; then
     # The status of a pipeline is its last command's: the reader appends four U+0001 only when it
     # read the file, and the query takes the text as read only when it ends in U+0001, so a reader
-    # that fails, even after handing on the whole file, leaves no brief. A raw U+0001 cannot be part
-    # of a JSON line, so the text read cannot supply it. Four, because a read that ends inside a
-    # character makes jq take up to three bytes after its first into one replacement character.
+    # that fails leaves no brief, with one exception: a reader that fails after handing on the
+    # whole of a file whose own last bytes are U+0001 is not told from a good read, and the record
+    # read in that case is complete. A raw U+0001 cannot be part of a JSON line, so a transcript of
+    # JSON lines does not end in one. Four, because a read that ends inside a character makes jq
+    # take up to three bytes after its first into one replacement character.
     mcp_out=$({ dd if="$2" bs=1048577 count=1 2>/dev/null && printf '\001\001\001\001'; } | jq -Rrs "$mcp_defs"'
       if endswith("\u0001") | not then "S"
       else sub("\u0001{1,4}\\z"; "") | split("\n") as $parts

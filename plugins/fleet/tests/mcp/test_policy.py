@@ -19,6 +19,7 @@ SOURCE = '[ -f "$1" ] || exit 99; . "$1"; shift; '
 RULE_VALID = SOURCE + 'mcp_rule_valid "$@"'
 MATCH = SOURCE + 'mcp_match "$@"'
 LISTS = SOURCE + 'rc=0; mcp_lists "$@" || rc=$?; printf "%s\\n%s\\n" "$mcp_allow" "$mcp_deny"; exit $rc'
+FORMAT = SOURCE + 'rc=0; mcp_format "$@" || rc=$?; printf "%s" "$mcp_summary"; exit $rc'
 PERMITS = SOURCE + 'rc=0; mcp_permits "$@" || rc=$?; printf "%s" "$mcp_verdict"; exit $rc'
 # The same with the two lists and the frames read from files ($2, $3, $4): input of the largest size
 # the evaluation takes does not fit in process arguments, though it fits in shell variables.
@@ -192,6 +193,109 @@ def main():
             code, out, err = lists({key: ["mcp__t%d" % i for i in range(257)]})
             check("lists/%s: 257 rules are refused" % key, code == 1, (code, err))
 
+    # ---- the summary both start contexts carry ------------------------------------------------
+    with tempfile.TemporaryDirectory(prefix="fleet-mcp-policy-test-") as temporary:
+        rules_file = Path(temporary) / "fleet.json"
+        shown_path = "/rules dir/with \"quotes\" and \\ backslash/fleet.json"
+
+        def summary(document, path=shown_path, extra_env=None):
+            if document is None:
+                if rules_file.exists():
+                    rules_file.unlink()
+            else:
+                rules_file.write_text(document if isinstance(document, str) else json.dumps(document))
+            result = subprocess.run(shell + ["-c", FORMAT, "sh", str(library), str(rules_file), path],
+                                    capture_output=True, text=True, timeout=30, env=dict(env, **(extra_env or {})))
+            return result.returncode, result.stdout, result.stderr
+
+        def list_line(text, key):
+            found = [line for line in text.split("\n") if ("(%s): " % key) in line]
+            return found[0] if len(found) == 1 else None
+
+        invalid_line = ("Fleet MCP tool rules: the MCP rules in %s are invalid or could not be read, so every MCP "
+                        "call of a fleet subagent is refused until the file is fixed." % shown_path)
+        for label, document in (("no keys", {"main": {}}), ("both lists []", {"allowed_mcp_tools": [],
+                                                                               "disallowed_mcp_tools": []}),
+                                ("both lists null", {"allowed_mcp_tools": None, "disallowed_mcp_tools": None}),
+                                ("a null rules file", "null")):
+            code, out, err = summary(document)
+            check("summary/%s: nothing" % label, code == 0 and out == "", (code, out, err))
+
+        code, out, err = summary({"allowed_mcp_tools": ["mcp__kb__*", "mcp__mail__read"],
+                                  "disallowed_mcp_tools": ["*__send_*"]})
+        lines = out.split("\n")
+        check("summary/both lists: the rules file in force is named first",
+              code == 0 and lines[0].startswith("Fleet MCP tool rules (rules file in force: %s" % shown_path),
+              (code, out, err))
+        check("summary/both lists: each list is shown with its key",
+              list_line(out, "allowed_mcp_tools") == "- Global allow list (allowed_mcp_tools): mcp__kb__*, mcp__mail__read."
+              and list_line(out, "disallowed_mcp_tools") == "- Global deny list (disallowed_mcp_tools): *__send_*.",
+              out)
+        check("summary/both lists: the two rule forms and that a deny rule always wins",
+              "a complete tool name" in out and "* stands for any run of characters" in out
+              and "no server shorthand" in out and "a deny rule always wins" in out, out)
+        block_lines = [line for line in lines if "line 1 ---" in line or "never reaches beyond its caller" in line]
+        check("summary/both lists: the block in two lines, its keys and rule lines included",
+              len(block_lines) == 2 and "allow:" in block_lines[0] and "deny:" in block_lines[0]
+              and '`  - "<rule>"`' in block_lines[0] and "closing ---" in block_lines[0]
+              and "every fleet agent above it" in block_lines[1], block_lines)
+        check("summary/both lists: one line each, seven in all", len(lines) == 7 and all(lines), lines)
+
+        code, out, err = summary({"allowed_mcp_tools": ["mcp__kb__*"]})
+        check("summary/the allow list alone: the deny list reads as none",
+              code == 0 and list_line(out, "allowed_mcp_tools") == "- Global allow list (allowed_mcp_tools): mcp__kb__*."
+              and list_line(out, "disallowed_mcp_tools") == "- Global deny list (disallowed_mcp_tools): none.",
+              (code, out, err))
+        code, out, err = summary({"disallowed_mcp_tools": ["mcp__mail__send"]})
+        check("summary/the deny list alone: an empty allow list is said to allow everything not denied",
+              code == 0 and list_line(out, "allowed_mcp_tools")
+              == "- Global allow list (allowed_mcp_tools): none, so every MCP tool that no deny rule matches is allowed."
+              and list_line(out, "disallowed_mcp_tools") == "- Global deny list (disallowed_mcp_tools): mcp__mail__send.",
+              (code, out, err))
+
+        # The bound: at most 4 rules of a list are shown; the rest are counted and left to the file.
+        four = ["mcp__r%d" % i for i in range(4)]
+        code, out, err = summary({"allowed_mcp_tools": four, "disallowed_mcp_tools": four + ["mcp__r4"]})
+        check("summary/bound: four rules are all shown",
+              list_line(out, "allowed_mcp_tools") == "- Global allow list (allowed_mcp_tools): " + ", ".join(four) + ".",
+              (code, out, err))
+        check("summary/bound: a fifth rule is counted, not shown, and the reader is sent to the file",
+              list_line(out, "disallowed_mcp_tools") == "- Global deny list (disallowed_mcp_tools): " + ", ".join(four)
+              + " and 1 more, 5 in all: read them in the rules file named above.", (code, out, err))
+        full_allow = ["mcp__a%03d" % i + "x" * 247 for i in range(256)]
+        full_deny = ["mcp__d%03d" % i + "x" * 247 for i in range(256)]
+        long_path = "/" + "p" * 1023
+        code, out, err = summary({"allowed_mcp_tools": full_allow, "disallowed_mcp_tools": full_deny}, long_path)
+        check("summary/bound: two full-size lists and a 1,024-byte path stay under 5,000 characters",
+              code == 0 and 0 < len(out) < 5000 and long_path in out, (code, len(out), err))
+        check("summary/bound: of a full list the first four rules are shown and 252 are counted",
+              all(rule in out for rule in full_allow[:4] + full_deny[:4])
+              and not any(rule in out for rule in full_allow[4:] + full_deny[4:])
+              and out.count(" and 252 more, 256 in all: read them in the rules file named above.") == 2,
+              (code, len(out), err))
+
+        # Lists that cannot be used: one line, the guard's refusal stated.
+        for label, document in (("a rule that needs JSON escaping", {"allowed_mcp_tools": ["mcp__a\"b\\c\n"]}),
+                                ("a deny list that is a string", {"disallowed_mcp_tools": "mcp__x"}),
+                                ("257 rules", {"disallowed_mcp_tools": ["mcp__t%d" % i for i in range(257)]}),
+                                ("text that is not JSON", "{ not json"), ("a missing file", None)):
+            code, out, err = summary(document)
+            check("summary/invalid: %s gives the one line" % label, code == 0 and out == invalid_line,
+                  (code, out, err))
+
+        # A failure of the formatting query itself is not an answer.
+        stub = Path(temporary) / "stub"
+        stub.mkdir()
+        (stub / "jq").write_text("#!/bin/sh\ncase \"$*\" in *'Global allow list'*) exit 5 ;; esac\n"
+                                 "exec '%s' \"$@\"\n" % shutil.which("jq"))
+        (stub / "jq").chmod(0o755)
+        code, out, err = summary({"allowed_mcp_tools": ["mcp__kb__*"]},
+                                 extra_env={"PATH": "%s%s%s" % (stub, os.pathsep, env.get("PATH", ""))})
+        check("summary/a failed query: status 2 and no summary", code == 2 and out == "", (code, out, err))
+
+    worded = [path.name for path in sorted((root / "scripts").glob("*.sh")) if "Global allow list" in path.read_text()]
+    check("summary/mcp-policy.sh is the only script that words it", worded == ["mcp-policy.sh"], worded)
+
     # ---- evaluation --------------------------------------------------------------------------
     def permits(name, allow, deny, frames=SELF):
         return call(PERMITS, json.dumps(name), json.dumps(allow), json.dumps(deny), json.dumps(frames))
@@ -322,6 +426,9 @@ def main():
         ("a no-break space before allow:", "Intro\n---\n allow:\n" + BODY),
         ("a form feed after ---", "Intro\n---\f\nallow:\n" + BODY),
         ("blanks inside the dashes", "Intro\n- - -\ndeny:\n" + BODY),
+        # On line 1 the fence test alone decides whether the brief is marked, so this case fails
+        # when that test lets blanks stand between the dashes.
+        ("blanks inside the dashes on line 1", "- - -\ndeny:\n  - \"mcp__x\"\n---\n" + BODY),
         ("text after --- and blanks", "Intro\n---  x\ndeny:\n" + BODY),
         ("text before allow:", "Intro\n---\nx allow:\n" + BODY),
     ]

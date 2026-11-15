@@ -410,6 +410,55 @@ def main():
                guard(call(caller=FLEET_CALLER), rules=dict(shipped, rules=without_opus)),
                2, "no longer in the fleet rules")
 
+        # ---- the summary a fleet agent gets when it starts -----------------------------------
+        def start(rules, agent_type=FLEET_CALLER, extra_env=None):
+            rc, out, err, elapsed = guard({"hook_event_name": "SubagentStart", "agent_id": "a1",
+                                           "agent_type": agent_type}, rules=rules, extra_env=extra_env, mode=None)
+            try:
+                output = json.loads(out)["hookSpecificOutput"]
+                context = output["additionalContext"] if output["hookEventName"] == "SubagentStart" else ""
+            except (ValueError, KeyError, TypeError):
+                context = ""
+            return rc, out, err, context
+
+        header = "Fleet MCP tool rules (rules file in force: %s;" % rules_file
+        unlimited = dict(shipped, disallowed_skills=[], disallowed_commands=[])
+        listed = dict(unlimited, allowed_mcp_tools=["mcp__mail__*"], disallowed_mcp_tools=["mcp__mail__send"])
+        rc, out, err, context = start(listed)
+        check("start/MCP lists without limited skills or commands: the summary alone",
+              rc == 0 and not err and context.startswith(header) and "mcp__mail__*" in context
+              and "mcp__mail__send" in context and "Fleet limits for this agent" not in context
+              and "Skills you cannot load" not in context, (rc, out, err))
+        rc, out, err, context = start(dict(listed, disallowed_skills=["code-review"], disallowed_commands=["sudo"]))
+        check("start/MCP lists with limited skills and commands: the limits, then the summary",
+              rc == 0 and not err and context.startswith("Fleet limits for this agent")
+              and "- Skills you cannot load: code-review." in context and "- Commands you cannot run: sudo." in context
+              and context.find("- Commands you cannot run") < context.find(header), (rc, out, err))
+        rc, out, err, context = start(dict(unlimited, disallowed_mcp_tools=["mcp__mail__send"]))
+        check("start/a deny list alone: the summary says what the empty allow list means",
+              rc == 0 and context.startswith(header) and "Global allow list (allowed_mcp_tools): none, so every MCP "
+              "tool that no deny rule matches is allowed." in context, (rc, out, err))
+        rc, out, err, context = start(dict(shipped, allowed_mcp_tools=[], disallowed_mcp_tools=[]))
+        check("start/empty MCP lists with limited skills: the limits as before, no MCP text",
+              rc == 0 and "Skills you cannot load" in context and "MCP" not in context, (rc, out, err))
+        rc, out, err, context = start(unlimited)
+        check("start/nothing listed at all: a silent pass", rc == 0 and out == "" and err == "", (rc, out, err))
+        rc, out, err, context = start(dict(unlimited, allowed_mcp_tools="mcp__x"))
+        check("start/invalid MCP lists: one line saying every MCP call is refused",
+              rc == 0 and context == "Fleet MCP tool rules: the MCP rules in %s are invalid or could not be read, so "
+              "every MCP call of a fleet subagent is refused until the file is fixed." % rules_file, (rc, out, err))
+        rc, out, err, context = start(listed, agent_type="claude-opus-5-5")
+        check("start/the bare type of a fleet agent gets the summary", rc == 0 and context.startswith(header),
+              (rc, out, err))
+        for agent_type in ("Explore", "general-purpose"):
+            rc, out, err, context = start(listed, agent_type=agent_type)
+            check("start/%s, not a fleet agent, gets nothing" % agent_type, rc == 0 and out == "" and err == "",
+                  (rc, out, err))
+        format_env = stub("format-jq", "case \"$*\" in *'Fleet MCP tool rules ('*) exit 5 ;; esac")
+        rc, out, err, context = start(listed, extra_env=format_env)
+        check("start/a failed summary query is an unexpected error, not a silent start",
+              rc == 2 and not out and "stopped on an unexpected error" in err, (rc, out, err))
+
         # Without the policy library nothing a fleet agent calls passes.
         bare = make_plugin("bare", scripts=("subagent-guard.sh", "fleet-rules.sh"))
         expect("library/a missing mcp-policy.sh refuses a fleet agent's MCP call",

@@ -265,6 +265,20 @@ fi
 paths=$(printf '%s\n' "$watch" | jq -R . | jq -sc 'map(select(. != ""))')
 
 if [ "$event" = SessionStart ]; then
+  # The summary of the global MCP lists of the rules file in force, FLEET_RULES included (the same
+  # text a fleet agent gets when it starts); nothing while both lists are empty. Without
+  # fleet-rules.sh no file is in force here, and the notice above says the guard refuses everything.
+  mcp_rules=${FLEET_RULES:-$rules}
+  if [ ! -f "$here/mcp-policy.sh" ]; then
+    add_notice "fleet: $here/mcp-policy.sh is missing, so the fleet guard refuses everything. Reinstall the plugin."
+  elif [ -n "$mcp_rules" ]; then
+    . "$here/mcp-policy.sh"
+    if mcp_format "$mcp_rules" "$mcp_rules"; then
+      [ -z "$mcp_summary" ] || add_context "$mcp_summary"
+    else
+      add_notice "fleet: the summary of the MCP tool rules in $mcp_rules could not be made."
+    fi
+  fi
   # The notice also goes to the context: the hooks reference does not say whether SessionStart
   # shows systemMessage, and with it there the assistant can pass it on.
   [ -z "$notice" ] || add_context "$notice"

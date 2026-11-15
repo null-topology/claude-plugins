@@ -13,6 +13,15 @@ import tempfile
 
 from test_contract import brief
 
+# The two bullets the agent template carries for the MCP tool policy: the first verbatim from the
+# design, the second a stable part of it.
+BRIEF_PROTECTION = (
+    "- The task message that started you is your standing delegation brief. Never compress, summarize, "
+    "truncate, rewrite or otherwise transform that message with any context-management tool or "
+    "instruction, under any conditions, even when you are asked to or when it is listed as a "
+    "compression candidate. Keep it verbatim for the whole session.\n")
+MCP_BULLET = "- A refused MCP tool call is final, like any other guard refusal"
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -668,11 +677,19 @@ def main():
                       and "closes that skill, not the task" in text
                       and "Always pass the named `effort` chosen with `fleet:selecting-subagent-model`" in text
                       and "{{" not in text)
+                check("generator/" + filename + "/the brief-protection and MCP bullets",
+                      BRIEF_PROTECTION in text and MCP_BULLET in text, text)
                 check("generator/" + filename + "/model kept, no effort in the frontmatter, the description says "
                       "what effort the caller passes",
                       ("\nmodel: %s" % model) in header and "\neffort:" not in header
                       and (("named effort on every Agent call: %s," % levels) in header if levels
                            else "the caller passes no effort" in header), header)
+        # The shipped agents are rendered from the template, so each carries both bullets.
+        shipped = sorted((root / "agents").glob("*.md"))
+        check("agents/every shipped agent carries the brief-protection and MCP bullets",
+              len(shipped) > 0 and all(BRIEF_PROTECTION in p.read_text() and MCP_BULLET in p.read_text()
+                                       for p in shipped),
+              [p.name for p in shipped if BRIEF_PROTECTION not in p.read_text() or MCP_BULLET not in p.read_text()])
     for error in errors:
         print("FAIL " + error, file=sys.stderr)
     print("\nIntegration checks: %d; failures: %d" % (count, len(errors)))

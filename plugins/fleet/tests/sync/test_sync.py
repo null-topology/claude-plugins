@@ -1428,6 +1428,9 @@ def main():
             "esac\n"
             "exit $status\n")
         (swap_dir / "jq").chmod(0o755)
+        # Run the new wrapper once before the checks: the first start of a file just written was seen
+        # to take more than 3 seconds on a busy host, which the guard's watchdog refuses.
+        run([swap_dir / "jq", "-n", "1"])
         swap_path = f"{swap_dir}{os.pathsep}{base_env.get('PATH', '')}"
         caller = "fleet:claude-opus-5-5"
         start = {"hook_event_name": "SubagentStart", "agent_type": caller, "agent_id": "agent-1"}
@@ -1464,6 +1467,56 @@ def main():
             code, out, err = guard(root, payload, typed)
             check(f"guard/{what}: the failed query refuses the call",
                   code == 2 and "could not be read" in err, (code, out, err))
+
+        # ---- the summary of the global MCP lists in the context of a session start ------------
+        # Last, on roots of its own.
+        root = make_root(base, "mcp-context", SYNTHETIC_MODELS, narrow, shipped_wider=True)
+        data = base / "mcp-context-data"
+        seeded = data / "fleet.json"
+        override = base / "mcp-override.json"
+        override.write_text(json.dumps(SYNTHETIC_CASES[5][1]))
+        env = {"FLEET_RULES": str(override)}
+        state = snapshot(root)
+        mcp_lists = {"allowed_mcp_tools": ["mcp__mail__*"], "disallowed_mcp_tools": ["mcp__mail__send"]}
+        code, out, err = sync(root, data, session_start("startup", "mcp-empty"), env)
+        check("mcp/FLEET_RULES set, both MCP lists empty: no MCP text in the context",
+              code == 0 and "FLEET_RULES is set" in context_of(out) and "MCP" not in context_of(out), (code, out, err))
+        override.write_text(json.dumps(dict(SYNTHETIC_CASES[5][1], **mcp_lists)))
+        code, out, err = sync(root, data, session_start("startup", "mcp-override"), env)
+        context = context_of(out)
+        check("mcp/FLEET_RULES set: the context names that file and carries its MCP lists",
+              code == 0 and "FLEET_RULES is set" in context
+              and "Fleet MCP tool rules (rules file in force: %s;" % override in context
+              and "mcp__mail__*" in context and "mcp__mail__send" in context
+              and "systemMessage" not in out and snapshot(root) == state, (code, out, err))
+        code, out, err = sync(root, data, session_start("clear", "mcp-override"), env)
+        check("mcp/FLEET_RULES set: every session start carries the summary again",
+              code == 0 and "Fleet MCP tool rules (rules file in force: %s;" % override in context_of(out), (code, out))
+        code, out, err = sync(root, data, session_start("startup", "mcp-plain"))
+        check("mcp/without FLEET_RULES, both MCP lists empty: no MCP text in the context",
+              code == 0 and seeded.is_file() and "MCP" not in context_of(out), (code, out, err))
+        seeded.write_text(json.dumps(dict(json.loads(seeded.read_text()), **mcp_lists)))
+        code, out, err = sync(root, data, session_start("startup", "mcp-plain"))
+        context = context_of(out)
+        check("mcp/without FLEET_RULES: the context names the data file in force and carries its MCP lists",
+              code == 0 and "Fleet MCP tool rules (rules file in force: %s;" % seeded in context
+              and "mcp__mail__send" in context and "systemMessage" not in out, (code, out, err))
+        seeded.write_text(json.dumps(dict(json.loads(seeded.read_text()), allowed_mcp_tools="mcp__mail__*")))
+        code, out, err = sync(root, data, session_start("startup", "mcp-plain"))
+        check("mcp/invalid MCP lists: the context says every MCP call of a fleet subagent is refused",
+              code == 0 and "Fleet MCP tool rules: the MCP rules in %s are invalid or could not be read, so every MCP "
+              "call of a fleet subagent is refused until the file is fixed." % seeded in context_of(out), (code, out))
+        code, out, err = sync(root, data, file_changed(seeded))
+        check("mcp/a change of the rules file adds no summary: it is not a session start",
+              code == 0 and "MCP" not in json.dumps(out), (code, out))
+        nopolicy = make_root(base, "nopolicy", SYNTHETIC_MODELS, narrow, shipped_wider=True)
+        (nopolicy / "scripts/mcp-policy.sh").unlink()
+        code, out, err = sync(nopolicy, base / "nopolicy-data", session_start("startup", "nopolicy"))
+        missing = "fleet: %s is missing, so the fleet guard refuses everything. Reinstall the plugin." % (
+            nopolicy / "scripts/mcp-policy.sh")
+        check("mcp/a missing mcp-policy.sh is reported like a missing fleet-rules.sh, and the sync still runs",
+              code == 0 and missing in message(out) and missing in context_of(out)
+              and "agents/ now holds the agents the rules in force can reach" in context_of(out), (code, out, err))
 
     for error in errors:
         print("FAIL " + error, file=sys.stderr)
