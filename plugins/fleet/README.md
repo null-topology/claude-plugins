@@ -462,8 +462,9 @@ caller fixes the brief from what it already knows and repeats the call. Two kind
 be acted on that way, and no others: `FLEET_DELEGATION_INVALID`, and the guard's refusals of a
 malformed effort (missing, relative, not a level of the model, or given to a model that takes
 none; see [The call's effort](#the-calls-effort)). `FLEET_DELEGATION_ERROR` marks a malformed payload or a
-missing dependency and is to be reported. The hook reads the prompt and nothing else: it opens no
-file the brief names, runs nothing, rewrites nothing and keeps no state.
+missing dependency and is to be reported. Of the call, the hook reads the target and the prompt and
+nothing else, and it reads the rules file only to tell whether the target is a fleet agent: it
+opens no file the brief names, runs nothing, rewrites nothing and keeps no state.
 
 ```sh
 uv run tests/delegation/test_contract.py --shell /bin/sh
@@ -501,9 +502,12 @@ begins with `hub__`. A tool name with a character outside printable ASCII is ref
 
 ### The block for one spawn
 
-A brief to a fleet agent may open with a block of rules for that spawn: its allow rules count for
-that agent alone, and its deny rules also bind the fleet agents below it. The block is YAML-like
-front matter with a fixed grammar:
+A brief to a fleet agent may open with a block of rules for that spawn. Its allow rules join that
+agent's own allow list and are not handed down to the agents it spawns; a fleet agent below it is
+still held to what every fleet agent above it may call, so an agent whose allow list is not empty
+narrows the fleet agents below it too (see [How a call is decided](#how-a-call-is-decided)). Its
+deny rules also bind the fleet agents below it. The block is YAML-like front matter with a fixed
+grammar:
 
 ```
 ---
@@ -579,12 +583,13 @@ says otherwise.
   error.` The texts are `invalid MCP rules in <path>` (a global list is invalid), `invalid tool
   name`, `agent type missing` (the host's payload names a subagent without its type, so the guard
   cannot tell whether it is a fleet agent), `invalid transcript binding` (an unsafe agent id or
-  transcript path, or metadata that
-  names a type that is not a fleet agent's), `agent brief unavailable` (a missing, symlinked,
+  transcript path, a path that holds a control character included, or metadata that names a type
+  that is not a fleet agent's), `agent brief unavailable` (a missing, symlinked,
   oversized or wrongly shaped metadata file or transcript record), `agent ancestry unavailable` (a
   missing parent, a repeated id, more than 32 agents, or no string `agentType`), `invalid agent
   brief` (the block of a fleet agent in the chain is invalid) and `the policy could not be
-  evaluated`.
+  evaluated`. The global deny list is checked before the agent's files are read, so a call that a
+  global deny rule matches gets `FLEET_MCP_DENIED` whatever the state of those files.
 - A brief refused at the spawn gets `FLEET_DELEGATION_INVALID` with a detail line that starts
   `MCP policy:`: `MCP policy: line <n>: <reason>.`, where the reason is `expected allow or deny`,
   `duplicate key`, `expected a double-quoted rule`, `invalid rule <json-string>`, `a key needs at
@@ -603,13 +608,15 @@ A summary of the global lists goes into the context of a session when it starts 
 context of a fleet agent when it starts, and only while a list is not empty or the lists are
 invalid. In the second case it is one line saying that the MCP rules in the file are invalid or
 could not be read, so that every MCP call of a fleet subagent is refused until the file is fixed.
-Otherwise it names the rules file in force, shows the two lists, and restates who is governed, how
-a call is decided, the two rule forms, the block syntax and the chain rule. At most 4 rules of each
-list are shown and the rest are counted, with a pointer to the rules file; the summary stays under
-5,000 characters for a path of up to 1,600 bytes. It is made when the context is made and is not
-refreshed when the file changes during the session, while enforcement reads the file at every
-call. If the sync cannot make the session's summary, it reports `fleet: the summary of the MCP
-tool rules in <path> could not be made.`
+When the rules file itself is missing or invalid, only the session gets that line: a fleet agent
+gets no summary at its start, and the guard reports the rules file there as it does at every call
+it checks. Otherwise it names the rules file in force, shows the two lists, and restates who is
+governed, how a call is decided, the two rule forms, the block syntax and the chain rule. At most
+4 rules of each list are shown and the rest are counted, with a pointer to the rules file; the
+summary stays under 5,000 characters for a path of up to 1,600 bytes. It is made when the context
+is made and is not refreshed when the file changes during the session, while enforcement reads
+the file at every call. If the sync cannot make the session's summary, it reports `fleet: the
+summary of the MCP tool rules in <path> could not be made.`
 
 ### The delegation brief stays whole
 
@@ -617,7 +624,8 @@ The definition of every generated agent carries a standing instruction: the task
 started the agent is its delegation brief, and it must never compress, summarize, truncate or
 rewrite that message, even when asked to or when a tool lists it as a candidate. An agent whose
 first message is transformed may no longer know its own lists. This is an instruction a model
-follows, not a mechanism. Enforcement does not depend on it, because the guard reads the stored
+follows, not a mechanism, and it was measured on one model at one effort level. Enforcement does
+not depend on it, because the guard reads the stored
 transcript, not what the agent holds in its context.
 
 ```sh
@@ -692,9 +700,19 @@ uv run tests/mcp/test_binding.py --fleet-root . --shell /bin/sh
   be refused. The time grows with the length of the chain and with the sizes of briefs and lists,
   and their stated maxima taken together exceed the limit.
 - A brief whose first transcript record exceeds 1 MiB passes the spawn, and every MCP call of that
-  agent, and of the fleet agents it spawns, is then refused with `agent brief unavailable`.
-- A hook the host kills, or a signal the guard cannot trap, ends the check without a decision and
-  does not block: the call goes through.
+  agent, and of the fleet agents it spawns, is then refused: with `agent brief unavailable`, unless
+  a global deny rule refuses the call first. A brief of more than about a million lines can outrun
+  the host's 5-second limit on the spawn check and is then spawned unchecked; the same refusals
+  follow.
+- A hook the host kills or skips, or a signal the guard cannot trap, ends the check without a
+  decision and does not block: the call goes through.
+- The spawn check reads the prompt as the caller wrote it; the guard reads the first message the
+  host stored for the agent. If another plugin's hook rewrites the prompt after the check, or the
+  host alters it, the two differ and the stored message is the one that counts.
+- When the guard cannot make its private temporary directory, it refuses every call its hooks
+  see, the main session's included (`Agent`, `Bash`, `Skill`, `Workflow` and MCP tools). A
+  transcript on a file system that returns a short read (some network and FUSE mounts) is refused
+  as unavailable.
 - A brief to a fleet agent that opens with `---` for another purpose is refused, because the line
   starts the block. A block works for fleet agents only.
 - A block is recognised only by the exact lines described under

@@ -24,8 +24,8 @@ MCP_BULLET = (
     "- A refused MCP tool call is final, like any other guard refusal: do not retry it or reach the tool "
     "another way; report what needed it. Your own MCP tool lists, if you have any, are the front matter at "
     "the top of your brief (`allow:` and `deny:` between two `---` lines); the global lists, when there are "
-    "any, are summarized in the fleet MCP tool rules you were given with your other fleet limits when you "
-    "started (at most four rules of each list), and the rules file named there holds all of them.\n")
+    "any, are summarized in the fleet MCP tool rules you were given when you started (at most four rules "
+    "of each list), and the rules file named there holds all of them.\n")
 
 
 def main():

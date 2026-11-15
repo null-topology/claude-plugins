@@ -138,8 +138,9 @@ claim, how to verify, and where to stop, without guessing?
 
 The fleet rules hold two global lists of MCP tools, an allow list and a deny list. While either
 is not empty, a summary of the ones in force is added to the context of a session when it
-starts and of a fleet agent when it starts; while they are invalid or cannot be read, that
-summary is one warning line saying so. A brief to a fleet agent
+starts and of a fleet agent when it starts; while the lists are invalid, that summary is one
+warning line saying so, and when the rules file itself cannot be read, only the session gets
+that line. A brief to a fleet agent
 may add lists of its own for that agent. They are optional: leave them out when the global
 lists fit the task.
 
