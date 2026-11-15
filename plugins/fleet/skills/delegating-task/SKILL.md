@@ -167,7 +167,9 @@ How the lists act:
   that no deny rule matches.
 - A deny mask refuses only the names it matches: denying `mcp__tickets__create_*` leaves
   `mcp__tickets__add_comment` allowed, so listing write-looking prefixes does not make a task
-  read-only. Name the tools the task needs in allow rules instead.
+  read-only. Name the tools the task needs in allow rules instead; that narrows only while the
+  global allow list is empty (see below), and otherwise each tool the task must not reach
+  needs a deny rule that matches its name.
 - A call passes only when that agent and every fleet agent above it permit the tool, so a
   grant never reaches beyond its caller: a brief cannot hand on a tool the agent writing it
   may not use, and a deny binds every fleet agent below the receiving agent. An agent of

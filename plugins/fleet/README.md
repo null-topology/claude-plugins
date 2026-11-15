@@ -501,8 +501,9 @@ begins with `hub__`. A tool name with a character outside printable ASCII is ref
 
 ### The block for one spawn
 
-A brief to a fleet agent may open with a block of rules that apply to that agent alone. The block
-is YAML-like front matter with a fixed grammar:
+A brief to a fleet agent may open with a block of rules for that spawn: its allow rules count for
+that agent alone, and its deny rules also bind the fleet agents below it. The block is YAML-like
+front matter with a fixed grammar:
 
 ```
 ---
