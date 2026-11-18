@@ -1,6 +1,6 @@
 ---
 name: claude-fable-5-1
-description: "Executor subagent on Claude Fable 5.1. The caller passes a named effort on every Agent call: low, medium, high, xhigh or max, chosen with fleet:selecting-subagent-model; never lower or higher. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-10-08, by effort (Index, $ per task, output tokens/s): low 47, $2.37, 53; medium 49, $2.98, 53; high 51, $3.91, 58; xhigh 53, $5.98, 60; max 53, $7.63, 68. Follows the prompt literally; does not invent scope."
+description: "Executor subagent on Claude Fable 5.1. The caller passes a named effort on every Agent call: low, medium, high, xhigh or max, chosen with fleet:selecting-subagent-model; never lower or higher. Benchmark Artificial Analysis Intelligence Index v5.0.1, 2026-11-18, by effort (Index, $ per task, output tokens/s): low 39, $4.47, 83; medium 43, $5.56, 85; high 47, $7.54, 84; xhigh 50, $10.85, 83; max 49, $12.99, 91. Follows the prompt literally; does not invent scope."
 model: claude-fable-5-1
 ---
 

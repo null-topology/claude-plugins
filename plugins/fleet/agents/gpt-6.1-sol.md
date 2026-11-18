@@ -1,6 +1,6 @@
 ---
 name: gpt-6.1-sol
-description: "Executor subagent on GPT-6.1 Sol. The caller passes a named effort on every Agent call: low, medium, high, xhigh or max, chosen with fleet:selecting-subagent-model; never lower or higher. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-10-08, by effort (Index, $ per task, output tokens/s): low 42, $0.13, 49; medium 48, $0.21, 50; high 50, $0.32, 50; xhigh 51, $0.39, 53; max 52, $0.72, 55. Follows the prompt literally; does not invent scope."
+description: "Executor subagent on GPT-6.1 Sol. The caller passes a named effort on every Agent call: low, medium, high, xhigh or max, chosen with fleet:selecting-subagent-model; never lower or higher. Benchmark Artificial Analysis Intelligence Index v5.0.1, 2026-11-18, by effort (Index, $ per task, output tokens/s): low 35, $0.16, 51; medium 46, $0.36, 52; high 50, $0.59, 51; xhigh 52, $0.76, 54; max 55, $1.27, 48. Follows the prompt literally; does not invent scope."
 model: gpt-6.1-sol
 ---
 

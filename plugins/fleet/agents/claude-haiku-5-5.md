@@ -1,6 +1,6 @@
 ---
 name: claude-haiku-5-5
-description: "Executor subagent on Claude Haiku 5.5. The caller passes a named effort on every Agent call: low, medium, high, xhigh or max, chosen with fleet:selecting-subagent-model; never lower or higher. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-10-08, provisional, by effort (Index, $ per task, output tokens/s): low 29, $0.02, 175.2; medium 34, $0.05, 151.1; high 38, $0.08, 156.6; xhigh 41, $0.12, 185.2; max 43, $0.21, 240.4. Follows the prompt literally; does not invent scope."
+description: "Executor subagent on Claude Haiku 5.5. The caller passes a named effort on every Agent call: low, medium, high, xhigh or max, chosen with fleet:selecting-subagent-model; never lower or higher. Benchmark Artificial Analysis Intelligence Index v5.0.1, 2026-11-18, provisional, by effort (Index, $ per task, output tokens/s): low 19, $0.044, 215; medium 25, $0.092, 225; high 30, $0.16, 227; xhigh 35, $0.25, 237; max 36, $0.41, 255. Follows the prompt literally; does not invent scope."
 model: claude-haiku-5-5
 ---
 

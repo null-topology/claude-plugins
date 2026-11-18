@@ -1,6 +1,6 @@
 ---
 name: gpt-6-luna
-description: "Executor subagent on GPT-6 Luna. The caller passes a named effort on every Agent call: low, medium, high, xhigh or max, chosen with fleet:selecting-subagent-model; never lower or higher. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-10-08, by effort (Index, $ per task, output tokens/s): low 22, $0.0045, 124; medium 30, $0.02, not published; high 33, $0.03, 112; xhigh 35, $0.04, 115; max 38, $0.07, 127. Follows the prompt literally; does not invent scope."
+description: "Executor subagent on GPT-6 Luna. The caller passes a named effort on every Agent call: low, medium, high, xhigh or max, chosen with fleet:selecting-subagent-model; never lower or higher. Benchmark Artificial Analysis Intelligence Index v5.0.1, 2026-11-18, by effort (Index, $ per task, output tokens/s): low 10, $0.0051, 88; medium 18, $0.042, 95; high 21, $0.073, 94; xhigh 23, $0.10, 100; max 28, $0.15, 103. Follows the prompt literally; does not invent scope."
 model: gpt-6-luna
 ---
 

@@ -1,6 +1,6 @@
 ---
 name: claude-sonnet-5-5
-description: "Executor subagent on Claude Sonnet 5.5. The caller passes a named effort on every Agent call: low, medium, high, xhigh or max, chosen with fleet:selecting-subagent-model; never lower or higher. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-10-08, provisional, by effort (Index, $ per task, output tokens/s): low 36, $0.35, 101; medium 41, $0.48, 102; high 47, $0.88, 104; xhigh 52, $2.01, 107; max 56, $5.46, 136. Follows the prompt literally; does not invent scope."
+description: "Executor subagent on Claude Sonnet 5.5. The caller passes a named effort on every Agent call: low, medium, high, xhigh or max, chosen with fleet:selecting-subagent-model; never lower or higher. Benchmark Artificial Analysis Intelligence Index v5.0.1, 2026-11-18, provisional, by effort (Index, $ per task, output tokens/s): low 26, $0.51, 135; medium 31, $0.78, 137; high 42, $1.64, 139; xhigh 50, $4.09, 144; max 55, $10.02, 148. Follows the prompt literally; does not invent scope."
 model: claude-sonnet-5-5
 ---
 

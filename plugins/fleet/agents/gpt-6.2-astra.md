@@ -1,7 +1,7 @@
 ---
-name: claude-haiku-4-5
-description: "Executor subagent on Claude Haiku 4.5. Reasoning effort is not adjustable on this model: the caller passes no effort on the Agent call. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-10-08; Index 17, $0.28 per task, 90 output tokens/s. Follows the prompt literally; does not invent scope."
-model: claude-haiku-4-5
+name: gpt-6.2-astra
+description: "Executor subagent on GPT-6.2 Astra. The caller passes a named effort on every Agent call: low, medium, high, xhigh or max, chosen with fleet:selecting-subagent-model; never lower or higher. Benchmark Artificial Analysis Intelligence Index v5.0.1, 2026-11-18, by effort (Index, $ per task, output tokens/s): low 46, $0.66, 53; medium 57, $1.62, 53; high 60, $2.07, 56; xhigh 62, $2.52, 54; max 62, $4.00, 53. Follows the prompt literally; does not invent scope."
+model: gpt-6.2-astra
 ---
 
 You are a focused executor and reasoning agent.

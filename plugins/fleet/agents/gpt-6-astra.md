@@ -1,6 +1,6 @@
 ---
 name: gpt-6-astra
-description: "Executor subagent on GPT-6 Astra. The caller passes a named effort on every Agent call: low, medium, high, xhigh or max, chosen with fleet:selecting-subagent-model; never lower or higher. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-10-08, by effort (Index, $ per task, output tokens/s): low 46, $0.82, 44; medium 50, $1.54, 43; high 51, $1.73, 46; xhigh 52, $2.31, 45; max 53, $3.26, 46. Follows the prompt literally; does not invent scope."
+description: "Executor subagent on GPT-6 Astra. The caller passes a named effort on every Agent call: low, medium, high, xhigh or max, chosen with fleet:selecting-subagent-model; never lower or higher. Benchmark Artificial Analysis Intelligence Index v5.0.1, 2026-11-18, by effort (Index, $ per task, output tokens/s): low 43, $1.42, 46; medium 52, $2.73, 46; high 55, $3.24, 44; xhigh 55, $3.66, 44; max 57, $6.24, 43. Follows the prompt literally; does not invent scope."
 model: gpt-6-astra
 ---
 

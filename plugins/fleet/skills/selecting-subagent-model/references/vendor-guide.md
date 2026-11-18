@@ -13,7 +13,7 @@ Read the **Evidence** column before leaning on a row: *measured* rows rest on pu
 | Trait | Anthropic (Fable, Opus, Sonnet, Haiku) | OpenAI (Astra, Sol, Terra, Luna) | Evidence |
 |---|---|---|---|
 | Turns and output | Many turns and output tokens per task. Helps: long tasks carried to a working end state. Costs: allowance. | Few turns, close to the minimum the task needs. Helps: parallel fan-out. Costs: may omit a required item. | Measured, high. AA Coding Agent Index v1.5 turns per task: Sonnet 5.5 max 265.9, Astra max 39.4. AA attributes GPT-6 regressions on GDPval-AA to deliverables that omit rubric elements. |
-| Time per task | Longer at max on the Coding Agent Index. | Shorter at max on the same index. | Measured, medium, one harness per vendor. AA Coding Agent Index v1.5, max effort, minutes per task: Sonnet 5.5 90, Opus 5.5 66, Fable 5.1 34.8, Astra 29.4, GPT-6.1 Sol 24.4, Luna 21.4. Fewer turns or tokens do not imply less wall-clock time in another harness; turns, tokens and time are separate measurements, and only time measured in your own harness predicts your wait. |
+| Time per task | Longer at max on the Coding Agent Index. | Shorter at max on the same index. | Measured, medium, one harness per vendor. AA Coding Agent Index v2.1 (retrieved 2026-11-18), max effort, time per task: Fable 5.2 2.2 h, Sonnet 5.5 1.4 h, Opus 5.5 1.1 h, Fable 5.1 36.3 min, GPT-6.2 Astra 25.1 min, Luna 23.5 min, GPT-6.1 Sol 21.9 min, GPT-6.2 Sol 17.5 min. In the max runs of Fable 5.2, Sonnet 5.5, Opus 5.5 and Fable 5.1, more than 10% of the attempts on at least one component benchmark were served by older models, and these times include those attempts. Fewer turns or tokens do not imply less wall-clock time in another harness; turns, tokens and time are separate measurements, and only time measured in your own harness predicts your wait. |
 | When the brief is silent | Fills the gap and may widen the scope. Follows explicit instructions literally. | More often returns an incomplete result, or stops to ask. Reads a general rule literally and may let it win over an exception the brief states less prominently. | Observed, low. No independent instruction-following measurement for this generation. |
 | Refusals and fallback | A request its classifiers flag is refused, or re-run on an older model when fallback is on. | A flagged request is refused explicitly and fails. | Vendor documentation; Vals Terminal-Bench 4.0 (mini-swe-agent): 22 of 198 Opus 5.5 and Fable 5.1 attempts and 4 of 198 Sonnet 5.5 attempts were served by older models. See below. |
 | Direction of error (comparable effort, outside security) | Does more than asked: an extra change, an extra finding. | Does less than asked: a missed item, an early finish. | Generalization of the rows above, low. |
@@ -31,17 +31,18 @@ model is checked for that notice or entry.
 ## 2. Choose the pair, not the vendor first
 
 Effort moves a model's result as much as the choice of vendor does. MacroscopeBench score, Opus 5.5
-against GPT-6 Sol (GPT-6.1 Sol not yet measured there):
+against GPT-6.1 Sol (retrieved 2026-11-18):
 
-| Effort | Opus 5.5 | GPT-6 Sol |
+| Effort | Opus 5.5 | GPT-6.1 Sol |
 |---|---|---|
-| low | 61.4 | 61.8 |
-| medium | 70.1 | 69.2 |
-| high | 73.1 | 74.3 |
-| max | 82.3 | 80.3 |
+| low | 61.4 | 70.6 |
+| medium | 70.1 | 73.5 |
+| high | 73.1 | 76.7 |
+| xhigh | 78.9 | 77.2 |
+| max | 83.9 | 78.5 |
 
-Low to max moves each model by about 20 points; at the same effort the two differ by 1–2. Compare
-model-and-effort pairs, not a vendor and then an effort.
+Low to max moves Opus 5.5 by more than 20 points and GPT-6.1 Sol by less than 10; the vendor that
+leads depends on the effort. Compare model-and-effort pairs, not a vendor and then an effort.
 
 ## 3. Choosing a vendor when either would do
 
@@ -86,6 +87,6 @@ For every vendor:
 
 - Tendencies are vendor-level and hold across the models named above only where the evidence says
   so; one model can deviate.
-- The Macroscope figures in section 2 are GPT-6 Sol's; GPT-6.1 Sol has not been measured by that
+- The Macroscope figures in section 2 are GPT-6.1 Sol's; GPT-6.2 Sol has not been measured by that
   source. The observed rows have no measurement.
 - Refresh this guide with the benchmark; until then treat its figures as dated.

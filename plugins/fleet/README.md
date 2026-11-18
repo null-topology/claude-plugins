@@ -7,8 +7,8 @@ policy written in one place.
 ## What it ships
 
 - `agents/<model>.md` — the fleet, generated from the shipped rules (`fleet.default.json`): one
-  file per model those rules mention, named by the model's id (`claude-opus-5-5`, `gpt-6.1-sol`,
-  `claude-haiku-4-5`, ...). Each file fixes a model in its frontmatter and carries no effort: the
+  file per model those rules mention, named by the model's id (`claude-opus-5-5`, `gpt-6.2-sol`,
+  `claude-haiku-5-5`, ...). Each file fixes a model in its frontmatter and carries no effort: the
   caller passes a named `effort` on every Agent call, except to a model without effort control,
   which takes none, and the guard checks it. No hooks, no rules
   — those live elsewhere. The repository ships every agent of the shipped rules; an installed
@@ -136,8 +136,9 @@ an agent shipped by a plugin is ignored (the loader says so at startup). The plu
 `hooks.json` hooks do run inside subagents, and the payload there names the agent type, which is
 all the guard needs.
 
-A model with no effort control (Haiku 4.5) is listed in the rules with `["default"]` alone. A call
-to it passes no `effort`.
+A model with no effort control (Claude Haiku 4.5, which a user's rules may still carry; the shipped
+rules no longer do) is listed in the rules with `["default"]` alone. A call to it passes no
+`effort`.
 
 ### Adding a model
 

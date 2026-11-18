@@ -1,6 +1,6 @@
 ---
 name: claude-opus-5-5
-description: "Executor subagent on Claude Opus 5.5. The caller passes a named effort on every Agent call: low, medium, high, xhigh or max, chosen with fleet:selecting-subagent-model; never lower or higher. Benchmark Artificial Analysis Intelligence Index v4.3.2, 2026-10-08, by effort (Index, $ per task, output tokens/s): low 42, $0.55, 79; medium 51, $1.34, 76; high 54, $1.82, 76; xhigh 56, $3.46, 80; max 58, $5.98, 96. Follows the prompt literally; does not invent scope."
+description: "Executor subagent on Claude Opus 5.5. The caller passes a named effort on every Agent call: low, medium, high, xhigh or max, chosen with fleet:selecting-subagent-model; never lower or higher. Benchmark Artificial Analysis Intelligence Index v5.0.1, 2026-11-18, by effort (Index, $ per task, output tokens/s): low 35, $0.98, 105; medium 48, $2.45, 106; high 52, $3.46, 108; xhigh 57, $6.05, 109; max 59, $10.04, 117. Follows the prompt literally; does not invent scope."
 model: claude-opus-5-5
 ---
 

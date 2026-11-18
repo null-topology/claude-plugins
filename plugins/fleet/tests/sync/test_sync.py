@@ -1219,7 +1219,8 @@ def main():
         generate(root, narrow_rules)
         gone = sorted(set(fleet_of(shipped_rules_doc)) - kept(root))
         check("guard/the narrow sync removed the unreachable files",
-              gone == ["claude-haiku-4-5", "claude-haiku-5-5", "gpt-5.6-terra"], gone)
+              gone == ["claude-fable-5-2", "claude-haiku-5-5", "gpt-6.1-terra", "gpt-6.2-astra",
+                       "gpt-6.2-sol"], gone)
         # A definition a session loaded before a later sync removed it: claude-opus-5-5 has a row in the
         # narrow rules, so its calls are checked against that row with the file gone.
         (root / "agents" / "claude-opus-5-5.md").unlink()
@@ -1233,6 +1234,12 @@ def main():
             return code == 0, (code, err)
 
         shipped_rules = source / "fleet.default.json"
+        # The shipped rules carry no model without effort control; these checks add one to
+        # gpt-6-luna's row of the shipped rules: claude-haiku-4-5, given "default" only.
+        no_effort_doc = json.loads(shipped_rules.read_text())
+        no_effort_doc["rules"]["gpt-6-luna"]["claude-haiku-4-5"] = ["default"]
+        no_effort_rules = base / "no-effort-rules.json"
+        no_effort_rules.write_text(json.dumps(no_effort_doc))
         luna_less = base / "luna-less.json"
         luna_less.write_text(json.dumps({"main": {"fleet": {"gpt-6.1-sol": ["high"]}}}))
         # gpt-6.1-sol has the levels low (main) and high (luna's row); the main session may pass low only.
@@ -1240,7 +1247,7 @@ def main():
         pair_rules.write_text(json.dumps({"main": {"fleet": {"gpt-6.1-sol": ["low"]}},
                                           "rules": {"gpt-6-luna": {"gpt-6.1-sol": ["high"]}}}))
         # The narrow rules mention claude-sonnet-5-5 only in main.fleet: it is a fleet model with a
-        # definition, but has no row. gpt-5.6-terra is described in models.json and has a shipped
+        # definition, but has no row. gpt-6.1-terra is described in models.json and has a shipped
         # definition, but the narrow rules do not mention it, so it is not a fleet model under them.
         cases = [
             ("removed caller whose model the rules mention is governed by its model, not passed as built-in",
@@ -1250,7 +1257,7 @@ def main():
              refused(nested_call("claude-opus-5-5", subagent_type="fleet:claude-fable-5-1", effort="low"),
                      "not available from a claude-opus-5-5 agent")),
             ("removed caller whose model the rules do not mention: refused as a fleet agent they do not place",
-             refused(nested_call("fleet:gpt-5.6-terra", subagent_type="fleet:gpt-6-luna", effort="low"),
+             refused(nested_call("fleet:gpt-6.1-terra", subagent_type="fleet:gpt-6-luna", effort="low"),
                      "the fleet rules in force do not mention its model")),
             ("removed caller's row allows what it lists",
              passed(nested_call("fleet:claude-opus-5-5", subagent_type="fleet:gpt-6-luna", effort="max"))),
@@ -1264,7 +1271,7 @@ def main():
              refused(nested_call("fleet:gpt-6.1-sol", subagent_type="fleet:claude-opus-5-5", effort="high"),
                      "not available from a gpt-6.1-sol agent")),
             ("removed target whose model the rules do not mention is not defined in this fleet",
-             refused(nested_call("fleet:gpt-6.1-sol", subagent_type="fleet:gpt-5.6-terra", effort="high"),
+             refused(nested_call("fleet:gpt-6.1-sol", subagent_type="fleet:gpt-6.1-terra", effort="high"),
                      "not defined in this fleet")),
             ("removed target: its effort is checked against the levels the rules give it",
              refused(nested_call("fleet:claude-fable-5-1", subagent_type="fleet:claude-opus-5-5"),
@@ -1286,7 +1293,7 @@ def main():
             ("a per-effort name is not a fleet agent any more",
              refused(nested_call("fleet:claude-opus-5-5-high", "Bash", command="ls"), "no definition under agents/")),
             ("main: removed agent whose model the rules do not mention refused as not defined",
-             refused(main_call("fleet:gpt-5.6-terra", effort="high"), "not defined in this fleet")),
+             refused(main_call("fleet:gpt-6.1-terra", effort="high"), "not defined in this fleet")),
             ("main: a kept definition whose model the rules do not mention is refused",
              refused(main_call("fleet:gpt-6-luna", effort="low"), "do not mention, so it is not a fleet model",
                      luna_less)),
@@ -1320,7 +1327,7 @@ def main():
              refused(main_call("fleet:gpt-6-astra", effort=["low"]), "is not a level of 'gpt-6-astra'")),
             ("main: a model the rules give only default refuses an effort, its definition gone",
              refused(main_call("fleet:claude-haiku-4-5", effort="low"), "has no adjustable reasoning effort",
-                     shipped_rules)),
+                     no_effort_rules)),
             # In the shipped rules gpt-6-astra is only a caller: no levels, so any named level, and
             # only where the section allows every pair.
             ("main, empty main.fleet: the effort of a caller-only model is still checked",
@@ -1335,10 +1342,10 @@ def main():
              refused(nested_call("fleet:gpt-6-luna", subagent_type="fleet:gpt-6-astra", effort="high"),
                      "is not available from a gpt-6-luna agent at any effort", shipped_rules)),
             ("main, empty main.fleet: a model without effort control passes without one",
-             passed(main_call("fleet:claude-haiku-4-5"), shipped_rules)),
+             passed(main_call("fleet:claude-haiku-4-5"), no_effort_rules)),
             ("main, empty main.fleet: a model without effort control refuses one",
              refused(main_call("fleet:claude-haiku-4-5", effort="high"), "has no adjustable reasoning effort",
-                     shipped_rules)),
+                     no_effort_rules)),
             ("nested: a missing effort refused",
              refused(nested_call("fleet:gpt-6-luna", subagent_type="fleet:gpt-6-luna"), "needs a named effort")),
             ("nested: a relative effort refused",
@@ -1351,9 +1358,9 @@ def main():
              passed(nested_call("fleet:gpt-6-luna", subagent_type="fleet:gpt-6-luna", effort="xhigh"))),
             ("nested: a model without effort control refuses an effort",
              refused(nested_call("fleet:gpt-6-luna", subagent_type="fleet:claude-haiku-4-5", effort="low",),
-                     "has no adjustable reasoning effort", shipped_rules)),
+                     "has no adjustable reasoning effort", no_effort_rules)),
             ("nested: a model without effort control passes without one where its row lists default",
-             passed(nested_call("fleet:gpt-6-luna", subagent_type="fleet:claude-haiku-4-5"), shipped_rules)),
+             passed(nested_call("fleet:gpt-6-luna", subagent_type="fleet:claude-haiku-4-5"), no_effort_rules)),
             ("nested: a pair the row does not list refused",
              refused(nested_call("fleet:gpt-6-luna", subagent_type="fleet:gpt-6.1-sol", effort="low"),
                      "not available from a gpt-6-luna agent", shipped_rules)),
@@ -1365,12 +1372,12 @@ def main():
              passed({"hook_event_name": "PreToolUse", "tool_name": "Bash", "agent_id": "",
                      "agent_type": "fleet:no-such-model", "tool_input": {"command": "sudo ls"}})),
             ("built-in caller passes, as before",
-             passed(nested_call("general-purpose", subagent_type="fleet:gpt-5.6-terra", effort="high"))),
+             passed(nested_call("general-purpose", subagent_type="fleet:gpt-6.1-terra", effort="high"))),
         ]
         for name, (ok, detail) in cases:
             check("guard/" + name, ok, detail)
 
-        for agent_type in ("fleet:gpt-5.6-terra", "fleet:no-such-model"):
+        for agent_type in ("fleet:gpt-6.1-terra", "fleet:no-such-model"):
             code, out, err = guard(root, {"hook_event_name": "SubagentStart", "agent_type": agent_type,
                                           "agent_id": "agent-1"}, narrow_rules)
             context = json.loads(out)["hookSpecificOutput"]["additionalContext"] if code == 0 and out else ""
@@ -1394,7 +1401,7 @@ def main():
             bad = base / "guard-bad-rules.json"
             bad.write_text(content)
             for what, payload in (
-                    ("main-session target", main_call("fleet:gpt-5.6-terra", effort="high")),
+                    ("main-session target", main_call("fleet:gpt-6.1-terra", effort="high")),
                     ("skill", nested_call("fleet:claude-opus-5-5", "Skill", skill="code-review")),
                     ("command", nested_call("fleet:claude-opus-5-5", "Bash", command="sudo ls")),
                     ("SubagentStart", {"hook_event_name": "SubagentStart", "agent_type": "fleet:claude-opus-5-5",

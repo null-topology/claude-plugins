@@ -12,11 +12,12 @@ user wants their fleet used differs between users and is kept as their overrides
 
 The fleet is the set of models the fleet rules file in force mentions (the user's `fleet.json`),
 and each model's levels are the efforts that file lists for it; `models.json` only supplies the
-benchmark figures. The shipped rules mention: Anthropic — Claude Fable 5.1, Claude Opus 5.5,
-Claude Sonnet 5.5, Claude Haiku 5.5, Claude Haiku 4.5 (retirement not before 2026-10-15); OpenAI —
-GPT-6 Astra, GPT-6.1 Sol, GPT-5.6 Terra, GPT-6 Luna. A user's rules may name fewer or other
-models. Each model is one agent type, `fleet:<model id>` (`fleet:claude-opus-5-5`,
-`fleet:gpt-6.1-sol`, ...); the effort is a parameter of each call, not part of the type. Use the
+benchmark figures. The shipped rules mention: Anthropic — Claude Fable 5.2, Claude Fable 5.1,
+Claude Opus 5.5, Claude Sonnet 5.5, Claude Haiku 5.5; OpenAI — GPT-6.2 Astra, GPT-6 Astra,
+GPT-6.2 Sol, GPT-6.1 Sol, GPT-6.1 Terra, GPT-6 Luna. A user's rules may name fewer or other
+models. Each
+model is one agent type, `fleet:<model id>` (`fleet:claude-opus-5-5`, `fleet:gpt-6.2-sol`, ...);
+the effort is a parameter of each call, not part of the type. Use the
 agent types the session actually lists: each one's description names the levels its call may
 pass. The guard's rules decide which model and effort pairs a caller may spawn.
 
@@ -25,8 +26,10 @@ pass. The guard's rules decide which model and effort pairs a caller may spawn.
 1. **User overrides.** Apply every stored override that names the model, the effort or the kind of
    work (next section). They come before everything below.
 2. **The task's own requirements.** A model, an effort or a minimum the task states explicitly.
-3. **The routing table.** Map the work to a class and a column in `references/task-routing.md`;
-   the cell names a family. For security work, read the account rule below first.
+3. **The routing table.** In `references/task-routing.md`, take the table for the vendors you can
+   call (Anthropic + OpenAI, or Anthropic only), then map the work to a class and a column. The
+   cell is a replacement chain: take the first family your rules allow and that is available now.
+   For security work, read the account rule below first.
 4. **The effort.** Set it from the task: interacting parts, real decision points, easy-to-miss
    details and the cost of a mistake raise it (the levels are described under
    [Effort levels](#effort-levels)). The table names families only; the effort at which a model
@@ -36,9 +39,12 @@ pass. The guard's rules decide which model and effort pairs a caller may spawn.
    ladder and the substitutions; the agent descriptions carry the same figures for the fleet the
    session lists. Compare a higher effort on one model with another model at a lower effort; the
    choice is the pair.
-6. **The vendor and the brief.** When the cell's vendor is unavailable, take the Fallback column.
-   `references/vendor-guide.md` covers what each vendor's tendencies cost a task and how to brief
-   each.
+6. **Availability and the brief.** When a family is unavailable (its quota is spent, the service
+   is down) or your rules refuse it, take the next family in the same cell's chain. When the whole
+   chain is out, use the column to its left, then the General row; when nothing there is
+   available either, compare pairs in `references/benchmark.md` among the families you can call
+   and say the table offered none. `references/vendor-guide.md` covers what each vendor's
+   tendencies cost a task and how to brief each.
 7. **State the choice**: `subagent_type: fleet:<model id>`, `effort: <named level>` and a
    one-line reason, in the orchestration's existing format. Name material uncertainty: a thin or
    starred cell, a conflict with an override. Then make the call as
@@ -59,8 +65,8 @@ This skill explicitly instructs you to set the Agent tool's `effort` parameter. 
   it is refused for good. An effort refusal that asks you to correct the call lists the levels
   available to you; pick from those.
 - A model without effort control (its description says the caller passes no effort, and its
-  effort is `n/a` in `references/benchmark.md`; Claude Haiku 4.5 in the shipped rules) takes no
-  `effort`: leave the parameter out. The guard refuses one.
+  effort is `n/a` in `references/benchmark.md`; none in the shipped rules) takes no `effort`:
+  leave the parameter out. The guard refuses one.
 - Never pass `model`: each fleet type carries its own.
 
 ## Effort levels
@@ -100,9 +106,9 @@ and its fallback setting (`references/vendor-guide.md`, section 1). For security
 vulnerability research and exploit-related work:
 
 - **The account has that access:** route by the table.
-- **It does not, or it is unknown:** prefer the OpenAI family in the row (the cell itself or the
-  Fallback column). Ask the user once whether the account has the access and persist the answer as
-  an override.
+- **It does not, or it is unknown:** use the Anthropic + OpenAI table and take the first OpenAI
+  family in the cell's chain. Ask the user once whether the account has the access and persist the
+  answer as an override.
 - OpenAI models refuse security work too. Vals CyberBench counts GPT-6.1 Sol's provider refusals,
   60 of 116 tasks, as failures ([Vals](https://www.vals.ai/models/openai_gpt-6.1-sol)). Check a
   security result for refusals before reading a gap in it as an absence of findings.
@@ -156,10 +162,11 @@ theirs to say, as an override.
 
 | Situation | Selection |
 |---|---|
-| Summarise how a module handles retries | Codebase Q&A, Normal: `claude-fable-5-1`; Simple for a narrow lookup: `gpt-6-luna` |
-| A security review of a diff on an account without Anthropic's security access | The OpenAI family in the Security row: Astra; for a narrow, easily checked pass, Luna at xhigh or above (starred cell) |
-| The Hard cell's vendor is down | The Fallback column of the same row, at an effort set by the task |
-| The table says Astra; the user said earlier "no Astra for reviews" | The override wins: take the next family by the table's evidence and mention the conflict |
+| Summarise how a module handles retries, both vendors available | Codebase Q&A, Normal: `gpt-6.1-sol`; Simple for a narrow lookup: `gpt-6.2-sol` |
+| The same with OpenAI unavailable | The Anthropic only table, Codebase Q&A, Normal: `claude-fable-5-2` |
+| A security review of a diff on an account without Anthropic's security access | The Security row of the Anthropic + OpenAI table: `gpt-6.2-astra`; for a narrow, easily checked pass, Luna at xhigh or above (starred cell) |
+| Fable's quota is spent, Implementation Hard | The next family in the chain: `gpt-6.2-sol` with both vendors, `claude-opus-5-5` with Anthropic only, at an effort set by the task |
+| The chain says Astra; the user said earlier "no Astra for reviews" | The override wins: take the next family in the chain and mention the conflict |
 | Writing tests | Not in the table: the General row, compared by pair in `benchmark.md` |
 | A cell rests on one source (see the evidence table) | Take it as a starting point, compare pairs in `benchmark.md`, say the evidence is thin |
 | A result failed because an input file was absent | Obtain the input; do not raise the effort to guess its contents |
@@ -168,11 +175,12 @@ theirs to say, as an override.
 
 ## Compact selection instructions
 
-Read the stored user overrides and apply them first. Apply the task's explicit requirements. Map
-the work to a class and a column in `references/task-routing.md`; for security work, check the
-account's access first. Set the effort from the task. When the cell is thin or the class is
-General, compare pairs in `references/benchmark.md`. Use the Fallback column when a vendor is
-unavailable and brief each vendor per `references/vendor-guide.md`. Persist every new preference
+Read the stored user overrides and apply them first. Apply the task's explicit requirements. In
+`references/task-routing.md`, take the table for the vendors you can call, then map the work to a
+class and a column; for security work, check the account's access first. Take the first family in
+the cell's chain that your rules allow and that is available; when it is not, take the next. Set
+the effort from the task. When the cell is thin or the class is General, compare pairs in
+`references/benchmark.md`. Brief each vendor per `references/vendor-guide.md`. Persist every new preference
 the user states. State the choice in the existing orchestration format, then call the Agent tool
 with `subagent_type: fleet:<model id>` and `effort: <the named level>`; never a relative effort,
 never a `model`, and no effort for a model without effort control.
