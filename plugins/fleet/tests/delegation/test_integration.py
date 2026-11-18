@@ -26,6 +26,13 @@ MCP_BULLET = (
     "the top of your brief (`allow:` and `deny:` between two `---` lines); the global lists, when there are "
     "any, are summarized in the fleet MCP tool rules you were given when you started (at most four rules "
     "of each list), and the rules file named there holds all of them.\n")
+HANDBACK_BULLET = (
+    "- Deliver your final report, including one that stops on a blocker or a refusal, through the "
+    "SubagentHandback tool whenever that tool exists; if it is listed among deferred tools, load it with "
+    "ToolSearch first. When the tool exists, plain final text is discarded and your caller receives "
+    "nothing, so an instruction to return findings directly as your final assistant message is carried "
+    "out by calling SubagentHandback with the complete report. If there is no such tool, give the report "
+    "as your final message.\n")
 
 
 def main():
@@ -699,6 +706,12 @@ def main():
                                        for p in shipped),
               ", ".join(p.name for p in shipped
                         if BRIEF_PROTECTION not in p.read_text() or MCP_BULLET not in p.read_text()))
+        # The report-delivery bullet, for agents of every vendor.
+        check("template/the agent template carries the report-delivery bullet", HANDBACK_BULLET in template,
+              template)
+        check("agents/every shipped agent carries the report-delivery bullet",
+              len(shipped) > 0 and all(HANDBACK_BULLET in p.read_text() for p in shipped),
+              ", ".join(p.name for p in shipped if HANDBACK_BULLET not in p.read_text()))
     for error in errors:
         print("FAIL " + error, file=sys.stderr)
     print("\nIntegration checks: %d; failures: %d" % (count, len(errors)))

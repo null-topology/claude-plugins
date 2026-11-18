@@ -131,6 +131,17 @@ benchmark figures `models.json` has for them, so the agent list shows what each 
 model `models.json` does not describe gets a plain description: `Executor subagent on <id>.`,
 the effort instruction with its levels, and no figures.
 
+The shared body also says how the final report reaches the caller. A background subagent of an
+interactive session hands its report over through the built-in `SubagentHandback` tool, and its
+plain final text is discarded, while Claude Code's own subagent prompt says to return findings
+directly as the final assistant message. GPT-6.2 Sol at effort low was observed to follow that
+line and decline the tool, 2 runs of 2, even with the tool named in its brief. The body therefore
+tells every fleet agent, of either vendor, to deliver the final report, blockers included, through
+`SubagentHandback` whenever that tool exists, loading it with ToolSearch when it is deferred, and
+reads the built-in line as carried out by that call; without the tool, the report is the final
+message. Whether the body line changes the outcome at low effort is not yet measured. Built-in
+agents do not get this line.
+
 The guard is not in the agent files either, and not by choice: `hooks:` in the frontmatter of
 an agent shipped by a plugin is ignored (the loader says so at startup). The plugin's own
 `hooks.json` hooks do run inside subagents, and the payload there names the agent type, which is

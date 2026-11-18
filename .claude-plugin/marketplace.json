@@ -21,7 +21,7 @@
     {
       "name": "fleet",
       "description": "A fleet of executor subagents, one per model with the reasoning effort named on each call (none for a model without effort control), governed by a single rules file: which model may spawn which model at which effort, which skills and commands a subagent may not use, which MCP tools a fleet subagent may call (global allow and deny lists, plus per-spawn lists in a block at the top of a fleet agent's brief). The main session's own tools stay unrestricted, but its Agent calls are checked too: a fleet agent it starts must be one the rules allow it, at an effort the rules give that model. A task handed to a fleet agent must arrive as a structured brief. While a global MCP list is set, the start contexts of a session and of a fleet agent carry a summary of the MCP tool rules in force.",
-      "version": "0.12.0",
+      "version": "0.12.1",
       "author": {
         "name": "null-topology"
       },
